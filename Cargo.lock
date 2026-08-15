@@ -1074,6 +1074,7 @@ dependencies = [
  "ciborium",
  "mdns-sd",
  "pmg-anim",
+ "pmg-audio",
  "pmg-cas",
  "pmg-color",
  "pmg-layout",

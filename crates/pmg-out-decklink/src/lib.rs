@@ -73,6 +73,11 @@ pub struct Config {
     pub mode: String,
     pub key_mode: KeyMode,
     pub preroll: i32,
+    /// Embedded audio channels: 2, 8 or 16, or 0 for none.
+    ///
+    /// 0 is the right setting for a lower-third key feed, which has nothing to
+    /// say, and is not a degraded configuration.
+    pub audio_channels: i32,
 }
 
 impl Sender {
@@ -110,8 +115,14 @@ impl Sender {
             );
         }
 
-        let fill = decklink_sys::Output::open(&dev, mode, cfg.key_mode, cfg.preroll)
-            .context("opening the fill output")?;
+        let fill = decklink_sys::Output::open_with_audio(
+            &dev,
+            mode,
+            cfg.key_mode,
+            cfg.preroll,
+            cfg.audio_channels,
+        )
+        .context("opening the fill output")?;
 
         let key = match cfg.key_device_index {
             Some(i) => {
@@ -145,6 +156,21 @@ impl Sender {
     /// Unpremultiplies here, at the boundary, and splits into fill and key when
     /// a pair is open.
     pub fn send_rgba_premultiplied(&self, rgba: &[u8]) -> Result<()> {
+        self.send_rgba_premultiplied_with_audio(rgba, &[])
+    }
+
+    /// As above, plus the audio that belongs to **this** frame.
+    ///
+    /// `audio` is interleaved 32-bit signed at 48 kHz, and its length must be
+    /// this frame's sample count from `pmg_audio::AudioClock` — not a round
+    /// number. The card takes it without complaint either way and drifts out of
+    /// lip sync over a service if it is wrong (see INTEGRATION-NOTES).
+    ///
+    /// Audio goes to the FILL port only. The key half of a pair carries a
+    /// monotone alpha signal and has no business carrying sound; embedding it
+    /// twice would put the same audio on two SDI feeds that a plant may well
+    /// sum.
+    pub fn send_rgba_premultiplied_with_audio(&self, rgba: &[u8], audio: &[i32]) -> Result<()> {
         let n = (self.width * self.height) as usize;
         if rgba.len() < n * 4 {
             bail!("frame is {} bytes, expected {}", rgba.len(), n * 4);
@@ -226,7 +252,7 @@ impl Sender {
             (250_000.0 / (self.fps_num as f64 / self.fps_den as f64)) as u64,
         );
         for attempt in 0.. {
-            match self.fill.schedule_bgra(&fill) {
+            match self.fill.schedule_bgra_with_audio(&fill, audio) {
                 Ok(()) => break,
                 Err(e) => {
                     if attempt >= MAX_BACKOFFS {

@@ -27,6 +27,7 @@ pmg-layout = { path = "../pmg-layout" }
 pmg-text = { path = "../pmg-text" }
 pmg-render = { path = "../pmg-render" }
 pmg-media = { path = "../pmg-media" }
+pmg-audio = { path = "../pmg-audio" }
 pmg-out-ndi = { path = "../pmg-out-ndi" }
 pmg-out-decklink = { path = "../pmg-out-decklink" }
 pmg-preview = { path = "../pmg-preview" }

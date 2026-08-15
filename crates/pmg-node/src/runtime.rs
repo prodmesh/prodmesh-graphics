@@ -138,6 +138,12 @@ pub struct OutputSpec {
     /// unrelated references do not, and pretending otherwise would produce a
     /// thread pacing itself against a clock half its outputs do not follow.
     pub group: String,
+    /// Embedded audio channels on this output: 2, 8 or 16, or 0 for none.
+    ///
+    /// Per OUTPUT rather than per template, because the same graphic played to a
+    /// lower-third key and to a wall feed needs its audio in different places or
+    /// nowhere (`docs/specs/output-config.md` §7).
+    pub audio_channels: i32,
 }
 
 pub struct Options {
@@ -578,6 +584,8 @@ fn advance_clips(
     renderer: &pmg_render::SceneRenderer,
     set: &Arc<std::sync::Mutex<engine::PlayerSet>>,
     out_frame: u64,
+    audio_samples: usize,
+    audio_out: &mut [i32],
 ) {
     // A poisoned lock here means a render thread panicked mid-frame. Skipping
     // the clip beats propagating the panic and taking the whole output down.
@@ -608,6 +616,19 @@ fn advance_clips(
             let _ = renderer.update_image(&gpu.queue, slot, w, h, &frame.rgba);
         }
     }
+
+    // Audio for the SAME frame number, taken with the count the output's clock
+    // asked for. Summed across this layer's clips, which is almost always one —
+    // and mixed into whatever earlier layers already put there, so two layers
+    // with sound do not silence each other.
+    if audio_samples > 0 && !set.audio.is_empty() {
+        for dec in &mut set.audio {
+            let pcm = dec.take(audio_samples);
+            for (dst, src) in audio_out.iter_mut().zip(pcm.iter()) {
+                *dst = dst.saturating_add(*src);
+            }
+        }
+    }
 }
 
 /// One output group: its own GPU device, its own backends, its own clock.
@@ -632,6 +653,11 @@ fn render_group(
         renderers: crate::render::RendererCache,
         preview: Option<pmg_preview::Preview>,
         frame: u64,
+        /// This frame's interleaved audio. Reused across frames so a service
+        /// does not allocate a buffer per frame.
+        audio: Vec<i32>,
+        /// `None` when this output carries no audio.
+        aclock: Option<pmg_audio::AudioClock>,
     }
 
     let mut outputs = Vec::new();
@@ -661,6 +687,19 @@ fn render_group(
             target,
             backend,
             renderers: crate::render::RendererCache::default(),
+            audio: Vec::new(),
+            aclock: match spec.audio_channels {
+                0 => None,
+                _ => match pmg_audio::AudioClock::new(spec.fps, pmg_audio::SAMPLE_RATE) {
+                    Ok(c) => Some(c),
+                    Err(e) => {
+                        // Refused loudly rather than played at the wrong rate:
+                        // audio at 44.1 on a 48 kHz plant is a pitch shift.
+                        tracing::error!(output = %spec.id, error = %e, "audio disabled");
+                        None
+                    }
+                },
+            },
             preview,
             frame: 0,
         });
@@ -697,6 +736,17 @@ fn render_group(
             };
 
             // --- draw, with the lock released -----------------------------
+            // This frame's audio buffer, sized by the OUTPUT's clock. Cleared
+            // and refilled rather than reallocated — a service must not
+            // allocate a buffer a frame.
+            let asamples = out
+                .aclock
+                .map(|c| c.samples_for(out.frame) as usize)
+                .unwrap_or(0);
+            out.audio.clear();
+            out.audio
+                .resize(asamples * out.spec.audio_channels.max(0) as usize, 0);
+
             let mut live = std::collections::HashSet::new();
             for (i, p) in plan.iter().enumerate() {
                 live.insert(p.layer.clone());
@@ -705,7 +755,7 @@ fn render_group(
                 // late, and the texture write must be queued before the pass
                 // that samples it.
                 if let Some(set) = &p.players {
-                    advance_clips(&gpu, renderer, set, out.frame);
+                    advance_clips(&gpu, renderer, set, out.frame, asamples, &mut out.audio);
                 }
                 let load = if i == 0 {
                     pmg_render::Load::Clear
@@ -747,7 +797,7 @@ fn render_group(
                 // DeckLink schedules against its own clock and blocks when the
                 // queue is full — the same pacing, against a clock that can be
                 // genlocked.
-                Backend::DeckLink(d) => d.send_rgba_premultiplied(&rgba)?,
+                Backend::DeckLink(d) => d.send_rgba_premultiplied_with_audio(&rgba, &out.audio)?,
                 Backend::Headless => std::thread::sleep(Duration::from_millis(budget_ms as u64)),
             }
 
@@ -802,6 +852,7 @@ fn open_backend(spec: &OutputSpec) -> Result<Backend> {
                 key_device_index: spec.decklink_key_device,
                 mode: spec.decklink_mode.clone(),
                 key_mode: pmg_out_decklink::KeyMode::FillOnly,
+                audio_channels: spec.audio_channels,
                 preroll: 3,
             })?;
             let (w, h) = s.size();

@@ -104,6 +104,9 @@ fn parse_output(
         // clock when they do not would pace one against a reference it does not
         // follow (ADR 0011).
         group: format!("g{index}"),
+        // Silent unless asked. A lower-third key feed carrying audio would put
+        // the same sound on a second SDI feed a plant may well sum.
+        audio_channels: 0,
     };
 
     for pair in spec.split(',') {
@@ -256,6 +259,9 @@ fn main() -> Result<()> {
                 .unwrap_or(0),
             decklink_key_device: arg(&args, "--decklink-key").and_then(|s| s.parse().ok()),
             decklink_mode: arg(&args, "--decklink-mode").unwrap_or_else(|| "1080p59.94".into()),
+            audio_channels: arg(&args, "--audio-channels")
+                .and_then(|s| s.parse().ok())
+                .unwrap_or(0),
             preview_port: arg(&args, "--preview-port")
                 .and_then(|s| s.parse().ok())
                 .unwrap_or(pmg_preview::PREVIEW_PORT),

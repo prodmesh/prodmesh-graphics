@@ -43,6 +43,12 @@ pub struct PlayerSet {
     /// One player per [`pmg_render::scene::VideoSlot`], with the image slot it
     /// feeds.
     pub players: Vec<(usize, pmg_media::video::VideoPlayer)>,
+    /// Audio for the same clips, when they have any.
+    ///
+    /// Separate from `players` because a clip having sound is independent of it
+    /// having pictures: a silent background loop is normal, and so is a stinger
+    /// whose whole point is the sound.
+    pub audio: Vec<pmg_media::audio::AudioDecoder>,
     /// The output frame the clip's frame 0 was shown on.
     ///
     /// Deliberately **not** the frame of the take. ffmpeg needs ~120 ms to
@@ -534,9 +540,37 @@ impl LayerEngine {
                     }
                 })
                 .collect();
+            // Audio decoders for the same clips. Opened only where ffprobe
+            // says there is an audio stream — spawning an ffmpeg to decode
+            // silence would be one process per clip for nothing.
+            let audio: Vec<pmg_media::audio::AudioDecoder> = instance
+                .videos
+                .iter()
+                .filter_map(|slot| {
+                    let (path, _) = lib.video(&slot.asset_key)?;
+                    match pmg_media::audio::probe_audio(&path) {
+                        Ok(Some(_)) => {
+                            match pmg_media::audio::AudioDecoder::open(&path, fps, 0, slot.looping)
+                            {
+                                Ok(d) => Some(d),
+                                Err(e) => {
+                                    // Survivable: the clip plays silent rather
+                                    // than not at all, and the reason is named.
+                                    tracing::warn!(key = %slot.asset_key, error = %e,
+                                                   "clip audio would not start; it will play silent");
+                                    None
+                                }
+                            }
+                        }
+                        _ => None,
+                    }
+                })
+                .collect();
+
             (!set.is_empty()).then(|| {
                 std::sync::Arc::new(std::sync::Mutex::new(PlayerSet {
                     players: set,
+                    audio,
                     start_frame: None,
                 }))
             })
