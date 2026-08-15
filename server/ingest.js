@@ -154,7 +154,9 @@ export function get(id) {
 }
 
 export function list() {
-  return [...jobs.values()].map(({ proc, ...j }) => j)
+  // The job objects are already plain; listing them is a copy so a caller
+  // cannot mutate live state.
+  return [...jobs.values()].map((j) => ({ ...j }))
 }
 
 /**
