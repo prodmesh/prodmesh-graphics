@@ -132,6 +132,12 @@ async function dispatch(body, ctx) {
     case 'deduped':
       return { http: 200, payload: { result: ack.result, fired_at_frame: ack.fired_at_frame ?? null,
                                      at_utc: ack.at_utc ?? entry.at_utc, seq: entry.seq } }
+    case 'unknown_node':
+      // Distinct from offline on purpose. "It is offline, everything is fine"
+      // is a reassuring sentence, and saying it about a node that does not
+      // exist would send an operator looking at the wrong machine.
+      return { http: 404, payload: { error: 'no_such_node',
+        label: `There is no node called “${body.node}”. Check the name in Configure.` } }
     case 'offline':
       return { http: 503, payload: { error: 'node_offline',
         label: `${body.node} is offline. Anything already on air is still on air.` } }

@@ -52,6 +52,15 @@ serde_json = "1"
 # --- Everything else. Available to non-pure crates only.
 anyhow = "1"
 tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+# Blocking, deliberately. The node is thread-per-output-group by design
+# (ADR 0011) because that is how the plant is wired, and dropping an async
+# runtime next to a hard frame loop buys nothing while adding a scheduler
+# between a cue and the graphic. No TLS: a closed booth network, no
+# certificates to manage, and PMG Link is plain ws:// by the same reasoning
+# that gives the control server no HTTPS.
+tungstenite = { version = "0.28", default-features = false, features = ["handshake"] }
+ureq = { version = "3", default-features = false, features = ["gzip"] }
 
 [profile.release]
 # A late frame is a visible glitch. Optimise for consistent frame time rather

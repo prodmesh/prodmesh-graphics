@@ -245,14 +245,41 @@ test('a node that never answers gives 503 cue_not_acked, not a silent success', 
   await n.close()
 })
 
-test('an offline node is named, and says what is still on air', async () => {
+test('a node that never existed is not called offline', async () => {
   seedItem()
   const r = await post('/api/cue', {
     cue_id: 'c-3', node: 'never-connected', output: 'out-0', layer: 'L', op: 'take', item: 'item-1',
   })
+  // "It is offline, everything is fine" is a reassuring sentence, and saying it
+  // about a node that does not exist sends an operator to the wrong machine.
+  assert.equal(r.status, 404)
+  assert.equal(r.json.error, 'no_such_node')
+})
+
+test('a node that has gone away IS offline, and says what is still on air', async () => {
+  seedItem()
+  const n = await fakeNode({ nodeId: 'went-away' })
+  await n.close()
+  await new Promise((r) => setTimeout(r, 30))
+
+  const r = await post('/api/cue', {
+    cue_id: 'c-3b', node: 'went-away', output: 'out-0', layer: 'L', op: 'take', item: 'item-1',
+  })
   assert.equal(r.status, 503)
   assert.equal(r.json.error, 'node_offline')
   assert.match(r.json.label, /still on air/)
+})
+
+test('a node can be addressed by its display name', async () => {
+  seedItem()
+  // Ids are the identity, but a human types a name and a Companion button is
+  // configured with one.
+  const n = await fakeNode({ nodeId: 'id-only' })
+  const r = await post('/api/cue', {
+    cue_id: 'c-3c', node: 'id-only', output: 'out-0', layer: 'L', op: 'take', item: 'item-1',
+  })
+  assert.equal(r.status, 200)
+  await n.close()
 })
 
 test('a rejected cue explains itself in words', async () => {

@@ -6,6 +6,10 @@ rust-version.workspace = true
 license.workspace = true
 publish.workspace = true
 
+[lib]
+name = "pmg_node"
+path = "src/lib.rs"
+
 [[bin]]
 name = "pmg-node"
 path = "src/main.rs"
@@ -13,8 +17,23 @@ path = "src/main.rs"
 [dependencies]
 anyhow = { workspace = true }
 tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
 pmg-scene = { path = "../pmg-scene" }
 pmg-anim = { path = "../pmg-anim" }
 pmg-color = { path = "../pmg-color" }
 pmg-cas = { path = "../pmg-cas" }
 pmg-proto = { path = "../pmg-proto" }
+pmg-layout = { path = "../pmg-layout" }
+pmg-text = { path = "../pmg-text" }
+pmg-render = { path = "../pmg-render" }
+pmg-out-ndi = { path = "../pmg-out-ndi" }
+serde = { workspace = true }
+ciborium = { workspace = true }
+blake3 = { workspace = true }
+wgpu = { workspace = true }
+pollster = "0.4"
+tungstenite = { workspace = true }
+ureq = { workspace = true }
+
+[dev-dependencies]
+pmg-scene = { path = "../pmg-scene" }

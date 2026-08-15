@@ -24,6 +24,20 @@
  * frames at 59.94 is longer than the universe has existed). If a genuinely
  * large integer is ever added to the protocol, this assumption is where it
  * breaks, so it is stated here rather than left implicit.
+ *
+ * # And the same hazard in the other direction, which is worse
+ *
+ * On ENCODE, cbor-x writes an integral JS number above 2^32 as a **float64**.
+ * `Date.now()` is above 2^32, so `Ping { t_ms }` and `Welcome.time_ref` went
+ * out as CBOR floats — and serde refuses a float where a `u64` is declared. The
+ * node logged "invalid type: floating point, expected integer" once a second
+ * and never decoded a `Welcome` at all, so it never learned the server's epoch
+ * while otherwise appearing to work perfectly.
+ *
+ * It is the mirror of the decode hazard and it is nastier, because the failure
+ * is on the far side of the wire in another language. cbor-x emits a CBOR
+ * integer for a **BigInt**, so `intify` converts integral numbers to BigInt on
+ * the way out. Floats stay floats: a `f32` field would break the other way.
  */
 
 import { Encoder } from 'cbor-x'
@@ -36,7 +50,27 @@ const codec = new Encoder({
   useRecords: false,
 })
 
-export const encode = (msg) => codec.encode(msg)
+/**
+ * Integral numbers → BigInt, so cbor-x emits CBOR integers rather than floats.
+ *
+ * Applied to every outbound frame. The alternative — remembering to write `n`
+ * on each timestamp literal — is a rule that holds until the first person who
+ * has not read this comment adds a field.
+ */
+function intify(v) {
+  if (typeof v === 'number') {
+    return Number.isInteger(v) ? BigInt(v) : v
+  }
+  if (Array.isArray(v)) return v.map(intify)
+  if (v && typeof v === 'object') {
+    const out = {}
+    for (const [k, x] of Object.entries(v)) out[k] = intify(x)
+    return out
+  }
+  return v
+}
+
+export const encode = (msg) => codec.encode(intify(msg))
 export const decode = (buf) => codec.decode(buf)
 
 /** The single-key tag of an externally-tagged enum, with its payload. */

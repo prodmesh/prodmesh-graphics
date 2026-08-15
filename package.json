@@ -18,7 +18,8 @@
     "test:server": "node --test --test-timeout=20000 server/",
     "test:web": "vitest run",
     "lint": "oxlint server src",
-    "selftest": "cargo run -q -p pmg-cli -- --selftest"
+    "selftest": "cargo run -q -p pmg-cli -- --selftest",
+    "wire:fixtures": "node tools/write-wire-fixtures.mjs"
   },
   "dependencies": {
     "better-sqlite3": "^12.4.1",

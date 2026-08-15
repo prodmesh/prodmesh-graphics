@@ -499,3 +499,64 @@ perfectly when every number is wrong by the same factor of 2048.
 **A suite that only compares values to each other cannot catch a units error.**
 `pmg-text` now asserts absolute plausibility bounds (an ascent at 46 px is
 between 20 and 60 px) alongside the relationships.
+
+---
+
+## CBOR across Rust and JavaScript breaks at 2³², in both directions
+
+**Measured 2026-08-15, ciborium 0.2 + cbor-x, building the node link client.**
+
+JavaScript has one number type and CBOR has several. cbor-x picks one by
+magnitude, and it picks differently on each side of the boundary. Both failures
+below shipped through a full test suite before a real node hit them.
+
+**Decode (Rust → JS).** ciborium writes a Rust `u64` as a 64-bit CBOR integer.
+cbor-x decodes that to a **BigInt** by default. A BigInt is not `===` any
+Number, throws when mixed into arithmetic, and dies in `JSON.stringify` — so
+`at_utc` looked fine in every unit test and would have failed on the first real
+`CueAck`. Fixed with `int64AsNumber: true`.
+
+**Encode (JS → Rust), which is worse.** cbor-x writes an integral JS number
+**above 2³²** as a **float64**. `Date.now()` is above 2³², so `Ping { t_ms }`
+and `Welcome.time_ref` went out as CBOR floats, and serde refuses a float where
+a `u64` is declared:
+
+```
+WARN undecodable frame error=decode: Semantic(None,
+     "invalid type: floating point `1786780546347.0`, expected integer")
+```
+
+The node logged that once a second, **never decoded a single `Welcome`**, and
+therefore never learned the server's epoch — while otherwise appearing to work:
+it linked, staged assets, took graphics on air. Fixed by converting integral
+numbers to BigInt on the way out (`server/wire.js::intify`), which makes cbor-x
+emit a CBOR integer.
+
+**And the correction that fix required.** With integers going out as integers, a
+JSON `3` destined for `DataValue::Number(f64)` arrived as a CBOR integer and
+serde refused it the other way — *"invalid type: integer `3`, expected float"*.
+So: **every float on this wire is lenient and accepts an integer** (`lenient::f64`
+in `pmg-proto`), because JavaScript cannot express the distinction. Every
+**integer** stays strict: a `u64` arriving as a float means something upstream
+lost precision and should be loud.
+
+**The process lesson, which is the durable one.** The Rust→JS fixtures could not
+catch the encode bug, because they only tested one direction. **A wire contract
+needs a checked-in fixture each way** — `testdata/proto/*.cbor` from Rust and
+`js-*.cbor` from `npm run wire:fixtures`. The JS→Rust test found the third bug
+above within seconds of being written.
+
+## An unattended process that cannot log cannot be diagnosed
+
+**2026-08-15.** `pmg-node`'s `tracing_subscriber_init` was a stub that flushed
+stderr and installed nothing, so every `tracing::warn!` in the crate went
+nowhere. When the node appeared to die on server loss there was **no output at
+all** to reason from.
+
+The apparent death turned out to be the test harness — `lsof -ti:8599` matches
+processes with a socket *to or from* the port, which includes the node's own
+client connection, so `kill -9` on that list killed the node. `-sTCP:LISTEN`
+selects only the listener. But that was invisible until logging worked.
+
+For a process whose whole job is to run unattended in a booth, a real subscriber
+is not a nicety.

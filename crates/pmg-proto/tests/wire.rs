@@ -211,3 +211,77 @@ fn write_wire_fixture() {
     .unwrap();
     eprintln!("wrote wire fixtures to {}", dir.display());
 }
+
+// ---------------------------------------------------------------------------
+// The other direction, which is where the nastier bug lived.
+// ---------------------------------------------------------------------------
+
+fn js_fixture(name: &str) -> Vec<u8> {
+    let p = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../testdata/proto")
+        .join(name);
+    std::fs::read(&p)
+        .unwrap_or_else(|e| panic!("{}: {e} — run `npm run wire:fixtures`", p.display()))
+}
+
+/// Decode frames the **JavaScript server** encoded.
+///
+/// This test exists because of a specific failure. cbor-x writes an integral JS
+/// number above 2^32 as a **float64**, and serde refuses a float where a `u64`
+/// is declared — so `Ping { t_ms }` and `Welcome.time_ref.utc_ms`, both built
+/// from `Date.now()`, were undecodable. The node logged
+/// "invalid type: floating point, expected integer" once a second, never
+/// decoded a single `Welcome`, and therefore never learned the server's epoch —
+/// while otherwise appearing to run perfectly.
+///
+/// The Rust→JS fixtures could not catch it: they only ever tested one
+/// direction. **A wire contract needs a fixture each way.**
+#[test]
+fn frames_from_the_javascript_server_decode() {
+    match decode::<ToNode>(&js_fixture("js-ping.cbor")).expect("ping") {
+        ToNode::Ping { t_ms } => assert_eq!(t_ms, 1_786_487_930_986),
+        other => panic!("expected Ping, got {other:?}"),
+    }
+
+    match decode::<ToNode>(&js_fixture("js-welcome.cbor")).expect("welcome") {
+        ToNode::Welcome(w) => {
+            assert_eq!(w.epoch, 19);
+            assert_eq!(w.resume_from_seq, Some(8813));
+            // Both above 2^32, which is precisely where the encoder switched to
+            // a float and the decode failed.
+            assert_eq!(w.time_ref.utc_ms, 1_786_487_930_986);
+            assert_eq!(w.time_ref.monotonic_ns, 123_456_789_012_345);
+        }
+        other => panic!("expected Welcome, got {other:?}"),
+    }
+
+    match decode::<ToNode>(&js_fixture("js-cue.cbor")).expect("cue") {
+        ToNode::Cue(c) => {
+            assert_eq!(c.seq, 8813);
+            assert_eq!(c.at, None, "reserved, and always null in v1");
+            assert_eq!(
+                c.op,
+                CueOp::Take {
+                    item: "01JB".into(),
+                    output: "out-0".into(),
+                    layer: "Lower Third".into()
+                }
+            );
+        }
+        other => panic!("expected Cue, got {other:?}"),
+    }
+
+    match decode::<ToNode>(&js_fixture("js-assignment.cbor")).expect("assignment") {
+        ToNode::Assignment(a) => {
+            assert_eq!(a.gen, 42);
+            assert_eq!(a.outputs[0].layers, vec!["Lower Third".to_string()]);
+            assert_eq!(a.templates[0].min_reader, 1);
+            let data = &a.items[0].data;
+            assert_eq!(data["name"], DataValue::Text("Pastor Dan Whitfield".into()));
+            // An integral JSON number must survive as a Number, not become a
+            // string or an int the f64 field cannot hold.
+            assert_eq!(data["score"].as_binding_str(), "3");
+        }
+        other => panic!("expected Assignment, got {other:?}"),
+    }
+}

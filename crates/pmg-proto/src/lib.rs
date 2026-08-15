@@ -30,6 +30,46 @@
 
 use serde::{Deserialize, Serialize};
 
+/// Deserializers that accept an integer where a float is declared.
+///
+/// **JavaScript has one number type.** A field the schema calls `f64` arrives
+/// as a CBOR integer whenever its value happens to be whole — a score of `3`, a
+/// frame rate of exactly `60` — and serde refuses that by default with
+/// "invalid type: integer `3`, expected float". The refusal is correct for a
+/// Rust-to-Rust format and wrong for a wire shared with a language that cannot
+/// express the distinction.
+///
+/// So every float on this wire is lenient, and every **integer** stays strict:
+/// a `u64` that arrived as a float would mean something upstream lost precision
+/// and should be loud (see `server/wire.js`, which had exactly that bug).
+mod lenient {
+    use serde::{Deserialize, Deserializer};
+
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum NumberOrInt {
+        Float(f64),
+        Signed(i64),
+        Unsigned(u64),
+    }
+
+    fn any(v: NumberOrInt) -> f64 {
+        match v {
+            NumberOrInt::Float(f) => f,
+            NumberOrInt::Signed(i) => i as f64,
+            NumberOrInt::Unsigned(u) => u as f64,
+        }
+    }
+
+    pub fn f64<'de, D: Deserializer<'de>>(d: D) -> Result<f64, D::Error> {
+        NumberOrInt::deserialize(d).map(any)
+    }
+
+    pub fn f32<'de, D: Deserializer<'de>>(d: D) -> Result<f32, D::Error> {
+        NumberOrInt::deserialize(d).map(|v| any(v) as f32)
+    }
+}
+
 /// Protocol version, negotiated at handshake.
 pub const PROTO_VER: u32 = 1;
 
@@ -237,7 +277,7 @@ pub struct ItemRef {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub enum DataValue {
     Text(String),
-    Number(f64),
+    Number(#[serde(deserialize_with = "lenient::f64")] f64),
     Bool(bool),
     /// A content address for an image or video.
     Asset(String),
@@ -439,6 +479,7 @@ pub struct StateReport {
 pub struct OutputState {
     pub id: String,
     pub layers: Vec<LayerState>,
+    #[serde(deserialize_with = "lenient::f32")]
     pub fps: f32,
     pub late_frames: u64,
 }
@@ -452,6 +493,10 @@ pub struct LayerState {
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
 pub struct Occupant {
     pub item_id: String,
+    /// The words the operator recognises. Carried on the wire rather than
+    /// looked up server-side, because the node is the authority on what is on
+    /// air and a server that just restarted has no other way to caption it.
+    pub item_label: String,
     pub template_rev: String,
     /// `in` | `hold` | `out`
     pub phase: String,

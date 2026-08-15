@@ -25,6 +25,7 @@ import { WebSocketServer } from 'ws'
 import { randomUUID } from 'node:crypto'
 import { publish, registerTopic } from './streamHub.js'
 import * as wire from './wire.js'
+import { build as buildAssignment } from './assignment.js'
 
 /** New every server start. Cue idempotency keys are scoped to it. */
 const EPOCH = Math.floor(Date.now() / 1000)
@@ -68,6 +69,29 @@ function session(nodeId) {
 }
 
 const isOnline = (s) => Boolean(s.ws && s.ws.readyState === 1)
+
+/**
+ * Find a session by node id or by display name.
+ *
+ * **Never creates one.** `session()` is the create-on-miss accessor and it is
+ * only correct on the handshake path, where a node is introducing itself. Using
+ * it to look up a cue target turns a wrong node reference into a brand-new
+ * offline session — so a typo reports "booth-1 is offline. Anything already on
+ * air is still on air.", which is a confident, reassuring, completely wrong
+ * sentence. That is worse than an error.
+ *
+ * Names are accepted because that is what a human types and what a Companion
+ * button is configured with. Ids stay the identity; the name is an alias.
+ */
+function find(ref) {
+  if (!ref) return null
+  const byId = sessions.get(ref)
+  if (byId) return byId
+  const named = [...sessions.values()].filter((s) => s.name === ref)
+  // An ambiguous name is not resolvable, and picking one would be a coin flip
+  // deciding what goes on air.
+  return named.length === 1 ? named[0] : null
+}
 
 function send(s, msg) {
   if (!isOnline(s)) return false
@@ -158,8 +182,16 @@ function onHello(ws, hello) {
     },
   })
 
-  if (s.assignment) {
-    send(s, { AssignmentOffer: { gen: s.gen, digest: s.assignment.digest } })
+  // Offer the current content on every connect. The node answers
+  // AssignmentNeed or AssignmentOk, so an already-current node costs one
+  // round trip and no transfer — which is the whole reason the offer carries a
+  // digest instead of the body.
+  try {
+    offerAssignment(hello.node_id, buildAssignment())
+  } catch (e) {
+    // A node that cannot be given content is still a node that may be holding
+    // graphics on air. Log and carry on rather than dropping the link.
+    console.error('link: could not build an assignment', e)
   }
   republish(s)
   return s
@@ -288,7 +320,8 @@ export function attach(server) {
 }
 
 export function offerAssignment(nodeId, assignment) {
-  const s = session(nodeId)
+  const s = find(nodeId)
+  if (!s) return null
   s.gen += 1
   s.assignment = { ...assignment, gen: s.gen }
   s.ackedGen = null
@@ -307,7 +340,10 @@ export function offerAssignment(nodeId, assignment) {
  * `applied` | `deduped` | `rejected` | `not_acked` | `offline`.
  */
 export function cue(nodeId, { cue_id, op, deadline_ms, at = null }) {
-  const s = session(nodeId)
+  const s = find(nodeId)
+  if (!s) {
+    return Promise.resolve({ result: 'unknown_node', reason: 'no_such_node' })
+  }
   if (!isOnline(s)) {
     return Promise.resolve({ result: 'offline', reason: 'node_offline' })
   }
@@ -357,8 +393,8 @@ export function list() {
 }
 
 export function get(nodeId) {
-  const s = sessions.get(nodeId)
-  return s ? list().find((n) => n.node_id === nodeId) : null
+  const s = find(nodeId)
+  return s ? list().find((n) => n.node_id === s.nodeId) : null
 }
 
 export const epoch = () => EPOCH

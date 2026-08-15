@@ -260,7 +260,7 @@ pub fn main(args: &[String]) -> Result<()> {
     let ndi = if frames_only {
         None
     } else {
-        Some(crate::ndi::Sender::open(
+        Some(pmg_out_ndi::Sender::open(
             &arg(args, "--name").unwrap_or_else(|| "ProdMesh Graphics".into()),
             w,
             h,
