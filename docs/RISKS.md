@@ -75,8 +75,19 @@ is an M6-or-later conversation.
 
 ## R3 — Rust text quality is the thing most likely to look amateur
 
-**Status:** **structurally addressed** (2026-08-14), quality unmeasured ·
-**Spike:** [S2](spikes/S2-text-typography.md)
+**Status:** **partly refuted, partly confirmed** (2026-08-15) ·
+**Spike:** [S2](spikes/S2-text-typography.md) — **run, and it failed on shudder**
+
+> **S2 changed what this risk is about.** Fringing, tabular figures, and glyph
+> cache cost all measure clean. But there IS a shudder — **0.33 px for text,
+> 0.21 px for a plain box** — and the control proves it is **not a text problem
+> at all**: an antialiased box with no texture sampling stutters the same way.
+>
+> R3 frames shudder as text-specific and solved by sub-pixel glyph caching. The
+> measurement says sub-pixel caching governs *within-run glyph placement*, while
+> *motion smoothness* is a property of the coverage function and the sampler —
+> two different mechanisms. **Root cause is open**; smoothstep-vs-linear coverage
+> was tested and disproved. Whether 0.2 px is visible still needs eyes.
 
 `pmg-text` is built on **swash** — shaping *and* rasterization, with explicit
 subpixel-offset control, which is the reason to pick it. `parley` is deferred to

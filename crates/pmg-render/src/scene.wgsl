@@ -90,9 +90,19 @@ fn fs_box(in : VsOut) -> @location(0) vec4<f32> {
     let r = min(u.radius, min(half.x, half.y));
     let d = sd_rounded_box(in.local, half, r);
 
-    // Analytic coverage across one pixel. smoothstep is a defined cubic, so it
-    // is reproducible; the band comes from the uniform, never a derivative.
-    let coverage = 1.0 - smoothstep(-0.5, 0.5, d);
+    // Analytic coverage across one pixel: a LINEAR ramp, not smoothstep.
+    //
+    // The fraction of a pixel covered by a straight edge at signed distance d is
+    // linear in d. smoothstep is a cubic — a pleasant soft-edge *look*, but not
+    // a coverage function.
+    //
+    // HONEST NOTE, so nobody re-derives this: spike S2 measured a ~0.21 px
+    // stutter in a sliding box and this was the first hypothesis. Switching to
+    // the linear ramp improved it only marginally (0.214 -> 0.205 px), so
+    // smoothstep was NOT the cause. The change is kept because it is the correct
+    // coverage function, not because it fixed the stutter. The stutter's root
+    // cause is still open — see docs/spikes/S2-text-typography.md.
+    let coverage = clamp(0.5 - d, 0.0, 1.0);
 
     let a = clamp(coverage, 0.0, 1.0) * u.color.a * u.opacity;
     return vec4<f32>(u.color.rgb * a, a);   // premultiplied

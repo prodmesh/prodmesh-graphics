@@ -11,6 +11,7 @@ mod decklink;
 mod golden;
 mod ndi;
 mod scene;
+mod spike_s2;
 mod take;
 mod text;
 
@@ -34,6 +35,7 @@ USAGE:
     pmgctl scene compile|fmt|inspect|fixture   The SceneDoc compiler
     pmgctl text metrics|shape|phases          Shaping and rasterization
     pmgctl take <template> --font <ttf>       M1: render an Item on air
+    pmgctl spike s2 --font <ttf>              Spike S2: text typography
 
     pmgctl render-golden <dir>     Spike S1: render the parity corpus natively
     pmgctl golden-diff <a> <b>     Spike S1: compare native against browser
@@ -105,6 +107,13 @@ fn main() -> Result<()> {
         Some("scene") => scene::main(&args[1..]),
         Some("text") => text::main(&args[1..]),
         Some("take") => take::main(&args[1..]),
+        Some("spike") => match args.get(1).map(String::as_str) {
+            Some("s2") => spike_s2::main(&args[2..]),
+            _ => {
+                print!("{}", spike_s2::USAGE);
+                Ok(())
+            }
+        },
         Some("render-golden") => {
             let dir = args
                 .get(1)

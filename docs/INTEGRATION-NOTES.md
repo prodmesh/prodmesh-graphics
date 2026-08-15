@@ -451,3 +451,51 @@ edge-dependent.
 `/v1/playlist/active` can answer all-null on 21.1, and uuid-based playlist
 resolution no longer works there — index paths only. Same lesson applies to
 anything we integrate: the building is not the laptop.
+
+---
+
+## Sub-pixel motion stutters ~0.2 px, and it is not a text problem
+
+**Measured 2026-08-15, MacBook Pro M3 Max / macOS 26.3 / wgpu 30, `pmgctl spike s2`.**
+
+Sliding an element by a known sub-pixel amount does not move its ink by that
+amount. The centroid follows a staircase with a 1.0 px period: it lags for half
+a pixel, jumps ~0.44 px as the edge crosses a pixel centre, then tracks. Worst
+deviation from linear is **0.33 px for text** and **0.21 px for a plain
+antialiased box**. Whole-pixel motion is exact (255.500 → 257.500 over 2.0 px).
+
+**Do not assume this is glyph-atlas sampling.** The box control uses an analytic
+SDF and samples no texture at all, and it stutters too. The fault is in the
+geometry/coverage path and affects **every** animated element — which matters
+because ADR 0005 makes "animate transforms, not layout" the fast path for
+everything.
+
+**Two hypotheses already spent, so nobody spends them again:**
+
+- *`smoothstep` coverage.* Point-sampling a cubic where true coverage is linear
+  in signed distance. Switched `scene.wgsl` to `clamp(0.5 - d, 0, 1)`:
+  **0.214 → 0.205 px.** Not the cause. The linear ramp is kept anyway because it
+  is the correct coverage function.
+- *Atlas bilinear filtering.* Ruled out by the box control above.
+
+Still open, in the order worth trying: 8-bit alpha quantisation of a one-pixel AA
+band; an AA band too narrow to carry sub-pixel information across a pixel centre;
+and the centroid metric itself saturating when an edge column clamps at 0 or 255.
+
+**Whether 0.2 px is actually visible is not yet known** — that needs eyes on a
+real output at a real reveal speed. What exists now is a number, so any fix can
+be shown to have helped. See `docs/spikes/S2-text-typography.md`.
+
+## Text metrics that pass every relative assertion can still be wrong
+
+**2026-08-15.** swash's `linear_scale()` returns **raw design units**; `scale(ppem)`
+divides by `units_per_em` first. Using the former gave an ascent of 85,284 "px"
+at a 46 px size.
+
+Every test passed. They compared metrics **to each other** — ascent > 0,
+descent < 0, line height ≥ ascent − descent — and all of those relationships hold
+perfectly when every number is wrong by the same factor of 2048.
+
+**A suite that only compares values to each other cannot catch a units error.**
+`pmg-text` now asserts absolute plausibility bounds (an ascent at 46 px is
+between 20 and 60 px) alongside the relationships.
