@@ -224,3 +224,57 @@ fn the_manifest_carries_what_the_server_validates() {
     // The font's bytes are an asset, so a node knows to fetch them.
     assert!(manifest.assets.iter().any(|a| a.starts_with("blake3:")));
 }
+
+// ---------------------------------------------------------------------------
+// Defaults
+// ---------------------------------------------------------------------------
+
+#[test]
+fn a_default_style_is_fully_opaque() {
+    // `#[serde(default = "one")]` fills a MISSING FIELD during deserialization.
+    // `Default::default()` uses f32::default() = 0.0. Deriving Default here
+    // made every node built as `Style { fill: .., ..Default::default() }`
+    // invisible, and the renderer drew a frame of nothing — which looks exactly
+    // like a broken shader.
+    assert_eq!(Style::default().opacity, 1.0);
+    assert_eq!(
+        Style {
+            fill: Some(Rgba {
+                rgba: [1.0, 1.0, 1.0, 1.0]
+            }),
+            ..Default::default()
+        }
+        .opacity,
+        1.0
+    );
+}
+
+#[test]
+fn a_default_transform_is_the_identity() {
+    // Same trap: scale must default to 1, not 0. A scale of zero collapses the
+    // node to a point.
+    let t = Transform2D::default();
+    assert_eq!(t.scale, [1.0, 1.0]);
+    assert_eq!(t.translate, [0.0, 0.0]);
+    assert_eq!(t.rotate, 0.0);
+}
+
+#[test]
+fn every_node_in_the_fixture_is_visible_by_default() {
+    // The end-to-end version of the two above: nothing in the reference
+    // template should be accidentally transparent or collapsed.
+    let doc = fixture::lower_third();
+    doc.root.walk(&mut |n| {
+        assert!(
+            n.style.opacity > 0.0,
+            "node {:?} has opacity {}",
+            n.id,
+            n.style.opacity
+        );
+        assert!(
+            n.transform.scale[0] != 0.0 && n.transform.scale[1] != 0.0,
+            "node {:?} has a zero scale",
+            n.id
+        );
+    });
+}

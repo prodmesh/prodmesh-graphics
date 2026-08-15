@@ -328,6 +328,27 @@ Browser-side timings, which also serve spike S6: **221.6 ms** for the first
 figure (including adapter and device acquisition), then **5.1 ms** and **5.7 ms**.
 The wasm bundle is **244 KB** — before any text stack.
 
+### The GPU scene path renders a lower third in 13.9 ms against a 16.68 ms budget
+*2026-08-14 · MacBook Pro M3 Max, macOS 26.3 · wgpu 30 · 1920×1080p59.94*
+
+`pmgctl take` on the reference lower third — four nodes, 31 cached glyphs, a
+1024×64 coverage atlas:
+
+```
+armed in         0.3–2.1 ms   (layout, binding, shaping, rasterization, atlas)
+worst frame     13.89 ms      (budget 16.68 ms)
+frames             103        In 800 ms → hold → Out 420 ms
+```
+
+Read that against the **17.55 ms** a CPU-generated 1080p frame took over the NDI
+path (entry below). The difference is entirely the arm/take split: layout,
+shaping, and rasterization happen **once**, and each frame only evaluates
+timelines and applies transforms.
+
+The worst-frame figure still includes a **blocking readback** — map, wait, copy —
+which is the obvious thing to make asynchronous when a real output loop needs the
+headroom. It is comfortably inside budget as it stands.
+
 ### The NDI runtime exports flat C symbols, not just the v5_load table
 *2026-08-14 · MacBook Pro arm64, macOS 26.3 · NDI **6.3.2.0** (SDK APPLE, Apr 13 2026)*
 

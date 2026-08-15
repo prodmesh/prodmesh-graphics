@@ -1,0 +1,412 @@
+//! `SceneInstance` — a document, its data, and its layout, flattened for the GPU.
+//!
+//! This is the boundary ADR 0001 names: `pmg-render` takes a `SceneInstance`, a
+//! `wgpu::Device`, and a target texture, and nothing else.
+//!
+//! # What "armed" means, and why the split matters
+//!
+//! Building a `SceneInstance` is the **expensive** half: solve layout, evaluate
+//! bindings, shape text, rasterize glyphs, pack an atlas. It happens once, at
+//! arm, off air.
+//!
+//! Rendering a frame is the **cheap** half: evaluate timelines, apply
+//! transforms, draw. Nothing per frame touches layout or shaping.
+//!
+//! That is the same `layout.*` vs `transform.*` split the scene format makes
+//! structurally visible (`docs/specs/scene-format.md` §3.2), carried through to
+//! where it actually pays: a lower third sized itself once when data bound, and
+//! the reveal is a transform over a cached result.
+
+use pmg_layout::{Rect, Solved};
+use pmg_scene::doc::{Content, Node, Rgba, SceneDoc, Transform2D};
+use std::collections::BTreeMap;
+
+/// A coverage atlas, packed and ready to upload as a single `R8Unorm` texture.
+///
+/// **Coverage only** — one byte per pixel, never premultiplied colour. The same
+/// rule `pmg-text` enforces at rasterization, carried unchanged to the GPU
+/// (ADR 0012).
+#[derive(Debug, Clone, Default)]
+pub struct CoverageAtlas {
+    pub width: u32,
+    pub height: u32,
+    pub bytes: Vec<u8>,
+}
+
+impl CoverageAtlas {
+    pub fn is_empty(&self) -> bool {
+        self.width == 0 || self.height == 0
+    }
+}
+
+/// One glyph, placed in design space and pointing into the atlas.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct PlacedGlyph {
+    /// Top-left in design space, absolute.
+    pub x: f32,
+    pub y: f32,
+    pub w: f32,
+    pub h: f32,
+    /// Texel rectangle in the atlas.
+    pub u: u32,
+    pub v: u32,
+    pub uw: u32,
+    pub uh: u32,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum RenderContent {
+    /// A filled box. Rounded corners are antialiased analytically.
+    Box,
+    Text(Vec<PlacedGlyph>),
+    /// A node kind this reader does not understand.
+    ///
+    /// Drawn as a magenta placeholder and marked [`SceneInstance::degraded`].
+    /// **Rendering nothing and looking fine is the dangerous behaviour**
+    /// (`docs/specs/scene-format.md` §3.4).
+    Unknown,
+}
+
+/// One drawable node, flattened out of the tree in paint order.
+#[derive(Debug, Clone, PartialEq)]
+pub struct RenderNode {
+    pub id: String,
+    /// Index of this node's parent in [`SceneInstance::nodes`], if any.
+    ///
+    /// Transforms COMPOSE down the tree: animating a band must carry its text
+    /// with it. Without this the band slides and the text stays, which looks
+    /// like a clipping bug and is actually a missing matrix multiply.
+    pub parent: Option<usize>,
+    /// Resolved by the layout solver, **once**, at arm.
+    pub rect: Rect,
+    /// The document's authored transform. Timelines modify a *copy* of this per
+    /// frame; the base is never mutated, so an animation is always relative to
+    /// the design rather than to wherever the last frame left it.
+    pub base_transform: Transform2D,
+    pub fill: Option<Rgba>,
+    pub radius: f32,
+    pub opacity: f32,
+    pub clip: bool,
+    pub content: RenderContent,
+}
+
+/// Everything needed to draw one Item, with nothing left to resolve.
+#[derive(Debug, Clone, Default)]
+pub struct SceneInstance {
+    pub canvas_w: u32,
+    pub canvas_h: u32,
+    /// Paint order, back to front.
+    pub nodes: Vec<RenderNode>,
+    pub atlas: CoverageAtlas,
+    /// Set when the document contained something this reader could not draw.
+    /// Surfaced to the operator rather than swallowed.
+    pub degraded: bool,
+}
+
+/// Supplies glyphs for a text node. Implemented by `pmg-text`.
+///
+/// A trait so `pmg-render` never depends on a particular text stack — spike S2
+/// may yet move it, and the renderer must not notice (ADR 0016's reasoning,
+/// applied one layer up).
+pub trait GlyphSource {
+    /// Shape and rasterize a run, returning glyphs placed relative to the run
+    /// origin (baseline-left), plus the ascent used to position that baseline.
+    fn run(&mut self, text: &str, font: &pmg_scene::doc::FontSpec) -> Option<(Vec<RunGlyph>, f32)>;
+}
+
+/// A glyph from [`GlyphSource`], before atlas packing.
+#[derive(Debug, Clone)]
+pub struct RunGlyph {
+    /// Offset from the run origin, in pixels. Fractional — that is the point.
+    pub x: f32,
+    /// Placement of the coverage bitmap relative to the pen, from rasterization.
+    pub left: i32,
+    pub top: i32,
+    pub width: u32,
+    pub height: u32,
+    /// Alpha coverage, `width * height` bytes.
+    pub coverage: Vec<u8>,
+}
+
+impl SceneInstance {
+    /// Build from a document, its solved layout, and a glyph source.
+    ///
+    /// The expensive half. Called at arm, never per frame.
+    pub fn build(doc: &SceneDoc, solved: &Solved, glyphs: &mut dyn GlyphSource) -> Self {
+        let mut inst = SceneInstance {
+            canvas_w: doc.canvas.width,
+            canvas_h: doc.canvas.height,
+            ..Default::default()
+        };
+
+        // Collect glyph bitmaps first so the atlas can be packed in one pass —
+        // packing incrementally would mean resizing the texture mid-build.
+        let mut pending: Vec<(usize, Vec<RunGlyph>, f32)> = Vec::new();
+
+        flatten(&doc.root, None, solved, glyphs, &mut inst, &mut pending);
+        pack_atlas(&mut inst, pending);
+        inst
+    }
+}
+
+fn flatten(
+    node: &Node,
+    parent: Option<usize>,
+    solved: &Solved,
+    glyphs: &mut dyn GlyphSource,
+    inst: &mut SceneInstance,
+    pending: &mut Vec<(usize, Vec<RunGlyph>, f32)>,
+) {
+    // A node the solver omitted was removed by `visible_if`. It is not drawn,
+    // and neither are its children — it never existed for this Item.
+    let Some(rect) = solved.rect(&node.id) else {
+        return;
+    };
+
+    let content = match (&node.kind.is_renderable(), &node.content) {
+        (false, _) => {
+            inst.degraded = true;
+            RenderContent::Unknown
+        }
+        (true, Some(Content::Text { font, .. })) => {
+            // The solver already evaluated the binding; re-evaluating here would
+            // invite the two answers to differ.
+            let text = solved.text.get(&node.id).cloned().unwrap_or_default();
+            match glyphs.run(&text, font) {
+                Some((run, ascent)) if !run.is_empty() => {
+                    pending.push((inst.nodes.len(), run, ascent));
+                    RenderContent::Text(Vec::new()) // filled in by pack_atlas
+                }
+                _ => RenderContent::Text(Vec::new()),
+            }
+        }
+        _ => RenderContent::Box,
+    };
+
+    let me = inst.nodes.len();
+    inst.nodes.push(RenderNode {
+        id: node.id.clone(),
+        parent,
+        rect,
+        base_transform: node.transform,
+        fill: node.style.fill,
+        radius: node.style.radius,
+        opacity: node.style.opacity,
+        clip: node.clip,
+        content,
+    });
+
+    for c in &node.children {
+        flatten(c, Some(me), solved, glyphs, inst, pending);
+    }
+}
+
+/// Shelf-pack every glyph into one texture.
+///
+/// Deliberately simple: sort by height, fill rows left to right. A real atlas
+/// would use a skyline or MaxRects packer, and would need to when M5 brings a
+/// full template library — but for a lower third this wastes a few kilobytes and
+/// is obviously correct, which is the better trade today.
+fn pack_atlas(inst: &mut SceneInstance, pending: Vec<(usize, Vec<RunGlyph>, f32)>) {
+    if pending.is_empty() {
+        return;
+    }
+
+    // Index every glyph so placement can be written back afterwards.
+    let mut all: Vec<(usize, usize)> = Vec::new();
+    for (pi, (_, run, _)) in pending.iter().enumerate() {
+        for (gi, g) in run.iter().enumerate() {
+            // Whitespace rasterizes to nothing; packing a zero-area glyph would
+            // put a degenerate rect in the atlas.
+            if g.width > 0 && g.height > 0 {
+                all.push((pi, gi));
+            }
+        }
+    }
+    if all.is_empty() {
+        return;
+    }
+
+    // Tallest first, so shelves stay tightly packed.
+    all.sort_by_key(|(pi, gi)| std::cmp::Reverse(pending[*pi].1[*gi].height));
+
+    const PAD: u32 = 1; // keep bilinear sampling from bleeding between glyphs
+    let atlas_w: u32 = 1024;
+    let mut placements: BTreeMap<(usize, usize), (u32, u32)> = BTreeMap::new();
+    let (mut pen_x, mut pen_y, mut shelf_h) = (PAD, PAD, 0u32);
+
+    for (pi, gi) in &all {
+        let g = &pending[*pi].1[*gi];
+        if pen_x + g.width + PAD > atlas_w {
+            pen_x = PAD;
+            pen_y += shelf_h + PAD;
+            shelf_h = 0;
+        }
+        placements.insert((*pi, *gi), (pen_x, pen_y));
+        pen_x += g.width + PAD;
+        shelf_h = shelf_h.max(g.height);
+    }
+    let atlas_h = (pen_y + shelf_h + PAD).next_power_of_two();
+
+    let mut bytes = vec![0u8; (atlas_w * atlas_h) as usize];
+    for ((pi, gi), (x, y)) in &placements {
+        let g = &pending[*pi].1[*gi];
+        for row in 0..g.height {
+            let src = (row * g.width) as usize;
+            let dst = ((y + row) * atlas_w + x) as usize;
+            bytes[dst..dst + g.width as usize]
+                .copy_from_slice(&g.coverage[src..src + g.width as usize]);
+        }
+    }
+
+    // Write placements back onto the nodes.
+    for (pi, (node_idx, run, ascent)) in pending.iter().enumerate() {
+        let origin = inst.nodes[*node_idx].rect;
+        let placed: Vec<PlacedGlyph> = run
+            .iter()
+            .enumerate()
+            .filter_map(|(gi, g)| {
+                let (u, v) = *placements.get(&(pi, gi))?;
+                Some(PlacedGlyph {
+                    // The pen sits at the run origin; `left`/`top` place the
+                    // bitmap relative to it, and the baseline sits `ascent`
+                    // below the box top.
+                    x: origin.x + g.x + g.left as f32,
+                    y: origin.y + ascent - g.top as f32,
+                    w: g.width as f32,
+                    h: g.height as f32,
+                    u,
+                    v,
+                    uw: g.width,
+                    uh: g.height,
+                })
+            })
+            .collect();
+        inst.nodes[*node_idx].content = RenderContent::Text(placed);
+    }
+
+    inst.atlas = CoverageAtlas {
+        width: atlas_w,
+        height: atlas_h,
+        bytes,
+    };
+}
+
+/// Apply a timeline's evaluated values to a copy of the base transforms.
+///
+/// **Only `transform.*` and `style.opacity` are animatable in v1.** A track
+/// targeting `layout.*` is dropped here rather than honoured, because honouring
+/// it would mean relayout on the frame path — the thing the whole split exists
+/// to prevent. The compiler already warns about such a track at publish
+/// (`docs/specs/scene-format.md` §3.2).
+pub fn apply_tracks(inst: &SceneInstance, values: &BTreeMap<String, f32>) -> Vec<FrameNode> {
+    inst.nodes
+        .iter()
+        .map(|n| {
+            let mut t = n.base_transform;
+            let mut opacity = n.opacity;
+            let get = |prop: &str| values.get(&format!("{}/{}", n.id, prop)).copied();
+
+            if let Some(v) = get("transform.translate.x") {
+                t.translate[0] = v;
+            }
+            if let Some(v) = get("transform.translate.y") {
+                t.translate[1] = v;
+            }
+            if let Some(v) = get("transform.rotate") {
+                t.rotate = v;
+            }
+            if let Some(v) = get("transform.scale.x") {
+                t.scale[0] = v;
+            }
+            if let Some(v) = get("transform.scale.y") {
+                t.scale[1] = v;
+            }
+            if let Some(v) = get("style.opacity") {
+                opacity = v;
+            }
+            FrameNode {
+                transform: t,
+                opacity,
+            }
+        })
+        .collect()
+}
+
+/// Per-frame state for one node: the only thing that changes between frames.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct FrameNode {
+    pub transform: Transform2D,
+    pub opacity: f32,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn tracks_apply_to_a_copy_not_to_the_base() {
+        // An animation must always be relative to the DESIGN, not to wherever
+        // the previous frame left things. Otherwise replaying In twice would
+        // compound.
+        let inst = SceneInstance {
+            nodes: vec![RenderNode {
+                id: "band".into(),
+                parent: None,
+                rect: Rect {
+                    x: 0.0,
+                    y: 0.0,
+                    w: 10.0,
+                    h: 10.0,
+                },
+                base_transform: Transform2D::default(),
+                fill: None,
+                radius: 0.0,
+                opacity: 1.0,
+                clip: false,
+                content: RenderContent::Box,
+            }],
+            ..Default::default()
+        };
+
+        let mut v = BTreeMap::new();
+        v.insert("band/transform.translate.x".to_string(), -900.0);
+        let f1 = apply_tracks(&inst, &v);
+        let f2 = apply_tracks(&inst, &v);
+
+        assert_eq!(f1[0].transform.translate[0], -900.0);
+        assert_eq!(f1, f2, "applying twice must give the same answer");
+        assert_eq!(
+            inst.nodes[0].base_transform.translate[0], 0.0,
+            "the base transform was mutated"
+        );
+    }
+
+    #[test]
+    fn a_layout_track_is_ignored_rather_than_honoured() {
+        // Honouring it would mean relayout on the frame path.
+        let inst = SceneInstance {
+            nodes: vec![RenderNode {
+                id: "band".into(),
+                parent: None,
+                rect: Rect {
+                    x: 0.0,
+                    y: 0.0,
+                    w: 10.0,
+                    h: 10.0,
+                },
+                base_transform: Transform2D::default(),
+                fill: None,
+                radius: 0.0,
+                opacity: 1.0,
+                clip: false,
+                content: RenderContent::Box,
+            }],
+            ..Default::default()
+        };
+        let mut v = BTreeMap::new();
+        v.insert("band/layout.width".to_string(), 999.0);
+        let f = apply_tracks(&inst, &v);
+        assert_eq!(f[0].transform, Transform2D::default());
+    }
+}

@@ -888,6 +888,9 @@ dependencies = [
 name = "pmg-render"
 version = "0.1.0"
 dependencies = [
+ "pmg-anim",
+ "pmg-layout",
+ "pmg-scene",
  "serde",
  "thiserror",
  "wgpu",

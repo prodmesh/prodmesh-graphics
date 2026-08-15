@@ -149,6 +149,11 @@ fn render_one(
     Ok(data)
 }
 
+/// Write RGBA8 as a PNG. Shared with `pmgctl take`.
+pub fn write_png_rgba(path: &Path, rgba: &[u8], w: u32, h: u32) -> Result<()> {
+    write_png(path, rgba, w, h)
+}
+
 fn write_png(path: &Path, rgba: &[u8], w: u32, h: u32) -> Result<()> {
     let file = std::fs::File::create(path)?;
     let mut enc = png::Encoder::new(std::io::BufWriter::new(file), w, h);

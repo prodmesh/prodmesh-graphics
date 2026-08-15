@@ -11,6 +11,7 @@ mod decklink;
 mod golden;
 mod ndi;
 mod scene;
+mod take;
 mod text;
 
 use anyhow::{bail, Result};
@@ -32,6 +33,7 @@ USAGE:
 
     pmgctl scene compile|fmt|inspect|fixture   The SceneDoc compiler
     pmgctl text metrics|shape|phases          Shaping and rasterization
+    pmgctl take <template> --font <ttf>       M1: render an Item on air
 
     pmgctl render-golden <dir>     Spike S1: render the parity corpus natively
     pmgctl golden-diff <a> <b>     Spike S1: compare native against browser
@@ -102,6 +104,7 @@ fn main() -> Result<()> {
         Some("decklink") => decklink::main(&args[1..]),
         Some("scene") => scene::main(&args[1..]),
         Some("text") => text::main(&args[1..]),
+        Some("take") => take::main(&args[1..]),
         Some("render-golden") => {
             let dir = args
                 .get(1)

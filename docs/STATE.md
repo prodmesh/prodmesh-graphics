@@ -5,7 +5,7 @@ change that makes something real — not afterwards.
 
 `docs/ROADMAP.md` is where we are going. This is where we are.
 
-**Last updated: 2026-08-14 · M0 complete · M1a/b/c (format, layout, text) landed.**
+**Last updated: 2026-08-14 · M0 complete · M1a–M1d landed. A lower third goes on air.**
 
 ---
 
@@ -27,10 +27,14 @@ a lower third compiles to canonical CBOR with a stable `template_rev`, and lays
 out with the band growing and shrinking against the name and collapsing when the
 title is empty — all verified as numbers, before any pixels.
 
-**Still no scene rendering, no server beyond health, and no browser UI.** The
-text stack (M1c) is in: fonts load from bytes, shaping is deterministic, and
-glyphs rasterize at ⅛-px subpixel phases. Next is M1d — the renderer's scene
-path and NDI output, which is where the demo starts existing.
+**The vertical slice renders.** `pmgctl take` compiles a template, binds an
+Item's data, solves layout, shapes and rasterizes text, and plays In → hold →
+Out over NDI with key and fill. Armed in **0.3–2 ms**; worst frame **13.9 ms
+against a 16.68 ms budget**, because per frame it only evaluates timelines and
+applies transforms.
+
+**Still no server beyond health and no browser UI** — that is M1e, and it is
+what turns a CLI demo into something an operator can use.
 
 `docs/INTEGRATION-NOTES.md` is no longer empty; seven entries came out of one
 afternoon, and three were version-skew failures that each presented as something
@@ -49,7 +53,8 @@ other than what they were.
 | `sys/ndi-sys` | 🟢 runtime loading, find, receive, send — **frames verified in both directions**. ABI asserted statically and at runtime |
 | `pmg-color::patterns` | 🟢 ramp, bars, soft-edge, alpha staircase, moving line — the diagnostic instruments from `output-config.md` §8 |
 | `pmgctl ndi` / `pmgctl decklink` | 🟢 info, probe, send / list, modes, ref |
-| Control server | 🟡 boots; health, version, and the topic stream. 10 tests |
+| `pmgctl take` | 🟢 **the M1 vertical slice** — template to NDI, In/hold/Out |
+| Control server | 🟡 boots; health, version, and the topic stream. 10 tests — **M1e, next** |
 | SQLite schema | ⬜ sketched in `server/db.js`, not created |
 | `streamHub` | ✅ ported from ProdMesh-Control — refcounted topics, conflation, snapshot-on-join |
 | `cueLog` | ✅ the log-tail bridge from ADR 0008, with gap recovery. 6 tests |
@@ -59,7 +64,7 @@ other than what they were.
 | `pmg-scene` | 🟢 **full document model**, canonical CBOR + JSON mirror, `template_rev`, validation, manifest, total binding evaluation. 25 tests |
 | `pmg-layout` | 🟢 **flexbox solver** over `TextMeasure` (taffy, ADR 0016). Shrink-and-grow and `visible_if` removal verified as numbers. 12 tests |
 | `pmg-text` | 🟢 fonts **from bytes**, swash shaping, subpixel glyph atlas at ⅛ px, real `TextMeasure`. 18 tests. R3's three hazards structurally answered; quality still needs S2 |
-| `pmg-render` | 🟡 the S1 parity corpus only — 3 figures on wgpu 30, native **and** wasm32. No scene rendering yet |
+| `pmg-render` | 🟢 **scene rendering** — boxes with analytic-AA rounded corners, text from the coverage atlas, composed transforms, timeline animation. Plus the S1 parity corpus |
 | `pmg-wasm` | 🟡 the parity harness — renders the corpus in-browser and posts raw RGBA back. 244 KB |
 | `pmg-out-ndi` / `pmg-out-decklink` | ⬜ not started — `pmgctl` drives `sys/` directly for now |
 | Design canvas | ⬜ not started |

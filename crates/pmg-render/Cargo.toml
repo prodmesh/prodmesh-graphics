@@ -9,6 +9,9 @@ publish.workspace = true
 [dependencies]
 serde = { workspace = true }
 thiserror = { workspace = true }
+pmg-scene = { path = "../pmg-scene" }
+pmg-layout = { path = "../pmg-layout" }
+pmg-anim = { path = "../pmg-anim" }
 wgpu = { workspace = true }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]

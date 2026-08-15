@@ -394,7 +394,7 @@ pub struct Rgba {
     pub rgba: [f32; 4],
 }
 
-#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Style {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub fill: Option<Rgba>,
@@ -404,6 +404,28 @@ pub struct Style {
     pub radius: f32,
     #[serde(default = "one")]
     pub opacity: f32,
+}
+
+/// Hand-written, NOT derived.
+///
+/// `#[serde(default = "one")]` and `#[derive(Default)]` are different
+/// mechanisms: the serde attribute fills a *missing field during
+/// deserialization*, while `Default::default()` uses `f32::default()` — which
+/// is **0.0**.
+///
+/// Deriving here made every `Style { fill: .., ..Default::default() }` fully
+/// transparent, and the renderer dutifully drew a whole frame of nothing. Any
+/// field whose serde default is non-zero needs a hand-written `Default` beside
+/// it.
+impl Default for Style {
+    fn default() -> Self {
+        Self {
+            fill: None,
+            stroke: None,
+            radius: 0.0,
+            opacity: 1.0,
+        }
+    }
 }
 
 fn one() -> f32 {

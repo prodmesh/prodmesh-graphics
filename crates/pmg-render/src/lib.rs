@@ -21,7 +21,16 @@
 
 #![forbid(unsafe_code)]
 
+pub mod draw;
 pub mod parity;
+pub mod scene;
+pub mod timeline;
+
+pub use draw::SceneRenderer;
+pub use scene::{
+    CoverageAtlas, FrameNode, GlyphSource, PlacedGlyph, RenderContent, RenderNode, RunGlyph,
+    SceneInstance,
+};
 
 /// Set on a rendered instance when the document contained something this
 /// reader did not understand.

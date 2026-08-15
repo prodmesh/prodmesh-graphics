@@ -345,3 +345,130 @@ fn send(args: &[String]) -> Result<()> {
     }
     Ok(())
 }
+
+// ---------------------------------------------------------------------------
+// A reusable sender, for `pmgctl take`.
+// ---------------------------------------------------------------------------
+
+/// An open NDI output.
+///
+/// Holds the runtime alive for as long as the sender exists — dropping the
+/// `Ndi` while a send instance is live would unload the library out from under
+/// it.
+pub struct Sender {
+    ndi: Ndi,
+    inst: send_instance_t,
+    w: u32,
+    h: u32,
+    fps_n: i32,
+    fps_d: i32,
+    /// Reused between frames so a 4-second take does not allocate 240 buffers.
+    scratch: std::cell::RefCell<Vec<u8>>,
+    _name: CString,
+}
+
+impl Sender {
+    pub fn open(name: &str, w: u32, h: u32, fps_n: i32, fps_d: i32) -> Result<Self> {
+        let ndi = load()?;
+        let c_name = CString::new(name)?;
+        // SAFETY: types transcribed from include/pmg_ndi.h and asserted in
+        // ndi-sys's `abi` tests. The instance is destroyed in Drop.
+        let inst = unsafe {
+            let sc = NDIlib_send_create_t {
+                p_ndi_name: c_name.as_ptr(),
+                p_groups: std::ptr::null(),
+                // Let the SDK pace us to frame_rate, so a take free-runs at the
+                // right rate without a timer of our own.
+                clock_video: true,
+                clock_audio: false,
+            };
+            (ndi.send_create)(&sc)
+        };
+        if inst.is_null() {
+            bail!("NDIlib_send_create returned null");
+        }
+        println!("NDI out: \"{name}\" {w}x{h} {fps_n}/{fps_d}");
+        Ok(Self {
+            ndi,
+            inst,
+            w,
+            h,
+            fps_n,
+            fps_d,
+            scratch: std::cell::RefCell::new(vec![0u8; (w * h * 4) as usize]),
+            _name: c_name,
+        })
+    }
+
+    /// Send one frame of **premultiplied** RGBA — what the renderer produces.
+    ///
+    /// NDI wants **straight** alpha, so this unpremultiplies at the boundary.
+    /// Getting the direction wrong produces fringing that is invisible over one
+    /// background and obvious over the other
+    /// (`docs/specs/color-and-key.md` §5).
+    pub fn send_rgba_premultiplied(&self, rgba: &[u8]) -> Result<()> {
+        let n = (self.w * self.h) as usize;
+        if rgba.len() < n * 4 {
+            bail!("frame is {} bytes, expected {}", rgba.len(), n * 4);
+        }
+        let mut bgra = self.scratch.borrow_mut();
+
+        for i in 0..n {
+            let a = rgba[i * 4 + 3];
+            let (r, g, b) = if a == 0 {
+                // Fully transparent unpremultiplies to black rather than to
+                // infinity — and leaving stale colour here would show up as a
+                // halo the moment a keyer softened the edge.
+                (0, 0, 0)
+            } else if a == 255 {
+                (rgba[i * 4], rgba[i * 4 + 1], rgba[i * 4 + 2])
+            } else {
+                let inv = 255.0 / a as f32;
+                (
+                    (rgba[i * 4] as f32 * inv).min(255.0) as u8,
+                    (rgba[i * 4 + 1] as f32 * inv).min(255.0) as u8,
+                    (rgba[i * 4 + 2] as f32 * inv).min(255.0) as u8,
+                )
+            };
+            bgra[i * 4] = b;
+            bgra[i * 4 + 1] = g;
+            bgra[i * 4 + 2] = r;
+            // Alpha is coverage: linear, never transfer-encoded.
+            bgra[i * 4 + 3] = a;
+        }
+
+        // SAFETY: send_video_v2 is synchronous — it copies before returning —
+        // so `bgra` does not need to outlive the call. The async variants would
+        // require the opposite and are deliberately not used here.
+        unsafe {
+            let video = NDIlib_video_frame_v2_t {
+                xres: self.w as i32,
+                yres: self.h as i32,
+                FourCC: FOURCC_BGRA,
+                frame_rate_N: self.fps_n,
+                frame_rate_D: self.fps_d,
+                frame_format_type: FRAME_FORMAT_PROGRESSIVE,
+                p_data: bgra.as_ptr() as *mut u8,
+                line_stride_in_bytes: (self.w * 4) as i32,
+                ..Default::default()
+            };
+            (self.ndi.send_send_video_v2)(self.inst, &video);
+        }
+        Ok(())
+    }
+
+    /// How many receivers are attached. Unused by `take` today; the Show view
+    /// will want it in M1e to say "nobody is watching this output".
+    #[allow(dead_code)]
+    pub fn receivers(&self) -> i32 {
+        // SAFETY: instance is valid for the lifetime of self.
+        unsafe { (self.ndi.send_get_no_connections)(self.inst, 0) }
+    }
+}
+
+impl Drop for Sender {
+    fn drop(&mut self) {
+        // SAFETY: paired with send_create; called exactly once.
+        unsafe { (self.ndi.send_destroy)(self.inst) }
+    }
+}
