@@ -26,6 +26,85 @@ pub enum Range {
 
 /// Neutral chroma in 10-bit. Not a colour — the absence of one.
 pub const NEUTRAL_CHROMA_10: u16 = 512;
+/// Neutral chroma in 8-bit.
+pub const NEUTRAL_CHROMA_8: u8 = 128;
+
+/// The luma coefficients that define an RGB→YCbCr conversion.
+///
+/// **Never assume 709.** A 601-tagged SD clip pushed through a 709 matrix has
+/// visibly wrong greens and reds, and it is the kind of thing that gets blamed
+/// on the camera for a month (`docs/specs/color-and-key.md` §6).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Matrix {
+    /// Rec. 601 — SD.
+    Bt601,
+    /// Rec. 709 — HD. The default because that is what 1080 plants are.
+    #[default]
+    Bt709,
+    /// Rec. 2020 — UHD.
+    Bt2020,
+}
+
+impl Matrix {
+    /// `(Kr, Kb)`. Kg is `1 - Kr - Kb` and is never stored, so the three can
+    /// never drift out of sum.
+    pub const fn coefficients(self) -> (f32, f32) {
+        match self {
+            Matrix::Bt601 => (0.299, 0.114),
+            Matrix::Bt709 => (0.2126, 0.0722),
+            Matrix::Bt2020 => (0.2627, 0.0593),
+        }
+    }
+}
+
+/// Convert **non-linear** R'G'B' in 0..1 to YCbCr code values, 8-bit.
+///
+/// Takes gamma-encoded values, not linear light: YCbCr is defined on R'G'B'.
+/// Handing this linear values produces a picture that is too dark in the
+/// midtones and it will look almost right, which is worse than looking wrong.
+///
+/// **This is the FILL path and only the fill path.** The key never comes
+/// through here — see [`encode_key_8bit`].
+pub fn rgb_to_ycbcr_8bit(rgb: [f32; 3], matrix: Matrix, range: Range) -> (u8, u8, u8) {
+    let (kr, kb) = matrix.coefficients();
+    let kg = 1.0 - kr - kb;
+    let [r, g, b] = [
+        rgb[0].clamp(0.0, 1.0),
+        rgb[1].clamp(0.0, 1.0),
+        rgb[2].clamp(0.0, 1.0),
+    ];
+
+    let y = kr * r + kg * g + kb * b;
+    // The standard scalings, so Cb and Cr land in -0.5..0.5.
+    let cb = (b - y) / (2.0 * (1.0 - kb));
+    let cr = (r - y) / (2.0 * (1.0 - kr));
+
+    let (y8, c_lo, c_span) = match range {
+        // Luma 16..235, chroma 16..240 — DIFFERENT spans, which is the detail
+        // most hand-rolled conversions get wrong.
+        Range::Narrow => (16.0 + y * (235.0 - 16.0), 128.0, 224.0),
+        Range::Full => (y * 255.0, 128.0, 255.0),
+    };
+    (
+        y8.round().clamp(0.0, 255.0) as u8,
+        (c_lo + cb * c_span).round().clamp(0.0, 255.0) as u8,
+        (c_lo + cr * c_span).round().clamp(0.0, 255.0) as u8,
+    )
+}
+
+/// Encode the key plane, 8-bit. The 8-bit twin of [`encode_key_10bit`].
+///
+/// **No matrix, no transfer, no primaries.** Alpha is coverage, mapped linearly
+/// to the code-value range, with neutral chroma at every step.
+pub fn encode_key_8bit(alpha_linear: f32, range: Range) -> (u8, u8, u8) {
+    let a = alpha_linear.clamp(0.0, 1.0);
+    let y = match range {
+        Range::Narrow => 16.0 + a * (235.0 - 16.0),
+        Range::Full => a * 255.0,
+    };
+    (y.round() as u8, NEUTRAL_CHROMA_8, NEUTRAL_CHROMA_8)
+}
 
 /// Encode the key plane, 10-bit.
 ///

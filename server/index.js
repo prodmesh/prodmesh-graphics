@@ -124,12 +124,31 @@ export function createApp() {
         label: 'Two layers on the same output can’t share a name.',
       })
     }
+    const MATRICES = new Set(['bt601', 'bt709', 'bt2020'])
+    const RANGES = new Set(['narrow', 'full'])
+    const KEY_MODES = new Set(['fill', 'key', 'fill_key', 'embedded'])
+    const c = req.body?.color ?? {}
+    const matrix = c.matrix ?? 'bt709'
+    const range = c.range ?? 'narrow'
+    const keyRange = c.key_range ?? 'narrow'
+    const keyMode = c.key_mode ?? 'fill'
+    // Refused by name rather than silently coerced to a default: a typo that
+    // quietly becomes 709 narrow is a colour bug nobody can find later.
+    if (!MATRICES.has(matrix) || !RANGES.has(range) || !RANGES.has(keyRange) || !KEY_MODES.has(keyMode)) {
+      return res.status(422).json({
+        error: 'validation_failed',
+        label: 'That is not a colour setting this server knows.',
+      })
+    }
+
     openDb()
       .prepare(
-        `INSERT INTO outputs (node_id, output_id, mode, layers, updated_at)
-         VALUES (?, ?, ?, ?, ?)
+        `INSERT INTO outputs (node_id, output_id, mode, layers, updated_at, matrix, range, key_range, key_mode)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
          ON CONFLICT(node_id, output_id) DO UPDATE SET
-           mode = excluded.mode, layers = excluded.layers, updated_at = excluded.updated_at`,
+           mode = excluded.mode, layers = excluded.layers, updated_at = excluded.updated_at,
+           matrix = excluded.matrix, range = excluded.range,
+           key_range = excluded.key_range, key_mode = excluded.key_mode`,
       )
       .run(
         req.params.id,
@@ -137,12 +156,45 @@ export function createApp() {
         String(req.body?.mode ?? '1920x1080'),
         JSON.stringify(layers),
         Date.now(),
+        matrix,
+        range,
+        keyRange,
+        keyMode,
       )
     // Push it immediately. A layer stack the operator just set must be live
     // before they try to take to it, not after the next reconnect.
     nodeLink.offerAssignment(req.params.id, buildAssignment({ nodeId: req.params.id }))
     res.json({ node: req.params.id, output: req.params.out, layers })
   })
+
+  /**
+   * Put a test pattern up, or clear it with `{ pattern: null }`.
+   *
+   * A configuration you cannot PROVE is one you are trusting. These are the
+   * instruments (`docs/specs/color-and-key.md` §7), and they sit above the
+   * layer stack so they can be used without clearing the show off air.
+   */
+  app.post('/api/nodes/:id/outputs/:out/test-pattern',
+    requirePermission('graphics.nodes.configure'),
+    async (req, res) => {
+      const r = await nodeLink.cue(req.params.id, {
+        cue_id: req.body?.cue_id ?? `pattern-${Date.now()}`,
+        op: { TestPattern: { output: req.params.out, pattern: req.body?.pattern ?? null } },
+      })
+      if (r.result === 'applied' || r.result === 'deduped') return res.json(r)
+      if (r.result === 'unknown_node') {
+        return res.status(404).json({ error: 'no_such_node', label: 'No node with that id has connected.' })
+      }
+      if (r.result === 'offline') {
+        return res.status(503).json({ error: 'node_offline', label: `${req.params.id} is offline.` })
+      }
+      res.status(409).json({
+        error: r.reason ?? 'rejected',
+        label: r.reason === 'Unsupported'
+          ? 'That node does not have a test pattern by that name.'
+          : 'The node refused that.',
+      })
+    })
   app.get('/api/nodes/:id', (req, res) => {
     const n = nodeLink.get(req.params.id)
     if (!n) return res.status(404).json({ error: 'not_found', label: 'No node with that id has connected.' })

@@ -103,6 +103,9 @@ other than what they were.
 | S8 chaos harness | 🟢 **gating.** `npm run chaos` — 1000+ takes through five injections, zero fired twice |
 | `pmg-node` | 🟢 **the playout binary.** Link client, staging, durable assignment, layer engine, NDI out. Survives server loss; 10 cue-rule tests |
 | `pmg-cas` | 🟢 atomic writes, streaming put, verify. Agrees with `server/cas.js` |
+| Colour model | 🟢 601/709/2020 RGB→YCbCr with correct narrow spans, and a key path that provably bypasses the matrix. 6 tests |
+| Colour config | 🟡 **plumbed, not applied.** Per-output matrix/range/key_range/key_mode reach the node; the backends still let the card convert. See INTEGRATION-NOTES |
+| Test patterns | 🟢 on demand, above the layer stack, so a configuration can be proved without clearing the show off air |
 | `pmg-media` | 🟡 **stills only (M3a).** PNG and JPEG to premultiplied RGBA, format sniffed by magic bytes. Video, frame cache and A/V clock are M3d |
 | Images on air | 🟢 `kind: "image"` with `fit: cover \| contain \| stretch`, decoded once at assignment, soft alpha composites correctly over a key |
 | `pmg-preview` | 🟢 **MJPEG preview.** 480x270 over a checkerboard on port 8521, two viewers, **zero late frames** on the output |

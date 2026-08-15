@@ -17,7 +17,7 @@ import Database from 'better-sqlite3'
 import fs from 'node:fs'
 import path from 'node:path'
 
-export const SCHEMA_VERSION = 5
+export const SCHEMA_VERSION = 6
 
 let db = null
 
@@ -260,6 +260,20 @@ const MIGRATIONS = [
         detail     TEXT
       );
       CREATE INDEX audit_log_recent ON audit_log(at_utc DESC);
+    `)
+  },
+
+  // 6 — per-output colour.
+  //
+  // `key_range` is its own column rather than folded into `range`: a plant with
+  // a narrow-range fill and a full-range key is a real configuration, and one
+  // column would make it unrepresentable (color-and-key.md §4).
+  (d) => {
+    d.exec(`
+      ALTER TABLE outputs ADD COLUMN matrix    TEXT NOT NULL DEFAULT 'bt709';
+      ALTER TABLE outputs ADD COLUMN range     TEXT NOT NULL DEFAULT 'narrow';
+      ALTER TABLE outputs ADD COLUMN key_range TEXT NOT NULL DEFAULT 'narrow';
+      ALTER TABLE outputs ADD COLUMN key_mode  TEXT NOT NULL DEFAULT 'fill';
     `)
   },
 ]

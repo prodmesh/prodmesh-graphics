@@ -27,6 +27,22 @@ import { keys } from '../../lib/keys'
 import { ApiError, post, put } from '../../lib/api'
 import type { NodeSummary } from '../show/types'
 
+type ColorConfig = {
+  matrix: string
+  range: string
+  key_range: string
+  key_mode: string
+}
+
+/** What each pattern proves (`docs/specs/color-and-key.md` §7). */
+const PATTERNS: { id: string; label: string; proves: string }[] = [
+  { id: 'ramp', label: 'Marked ramp', proves: 'range — the marks land at 16 and 235 narrow, 0 and 255 full' },
+  { id: 'bars', label: '75% colour bars', proves: 'matrix and primaries — vectorscope boxes' },
+  { id: 'softedge', label: 'Soft-edged white', proves: 'premultiplication — key it over bright AND dark; any fringe is a bug' },
+  { id: 'alpha', label: 'Alpha staircase', proves: 'key range and linearity' },
+  { id: 'line', label: 'Moving 1px line', proves: 'frame timing — tearing or stutter is a late frame' },
+]
+
 type Capabilities = {
   outputs?: { device: string; kind: string; supports_key_fill: boolean; has_genlock: boolean }[]
   gpu?: { adapter: string; backend: string } | null
@@ -104,9 +120,9 @@ function Stranger({ node }: { node: FullNode }) {
 }
 
 function NodeCard({ node }: { node: FullNode }) {
-  const { data } = useQuery<{ outputs: { output_id: string; mode: string; layers: string[] }[] }>(
-    `${keys.node(node.node_id)}/outputs`,
-  )
+  const { data } = useQuery<{
+    outputs: { output_id: string; mode: string; layers: string[]; color?: ColorConfig }[]
+  }>(`${keys.node(node.node_id)}/outputs`)
   const caps = node.capabilities
   const outputs = data?.outputs ?? []
   const liveOutputs = node.state?.outputs ?? []
@@ -132,12 +148,16 @@ function NodeCard({ node }: { node: FullNode }) {
         <div><dt><Layers size={13} aria-hidden /> Max layers</dt><dd>{caps?.max_layers ?? '?'}</dd></div>
       </dl>
 
-      {(outputs.length ? outputs : liveOutputs.map((o) => ({ output_id: o.id, mode: '', layers: [] }))).map((o) => (
+      {(outputs.length
+        ? outputs
+        : liveOutputs.map((o) => ({ output_id: o.id, mode: '', layers: [], color: undefined }))
+      ).map((o) => (
         <OutputEditor
           key={o.output_id}
           nodeId={node.node_id}
           outputId={o.output_id}
           mode={o.mode}
+          color={o.color}
           layers={o.layers.length ? o.layers : (liveOutputs.find((l) => l.id === o.output_id)?.layers ?? []).map((l) => l.name)}
         />
       ))}
@@ -158,13 +178,19 @@ function OutputEditor({
   outputId,
   mode,
   layers,
+  color,
 }: {
   nodeId: string
   outputId: string
   mode: string
   layers: string[]
+  color?: ColorConfig
 }) {
   const [draft, setDraft] = useState<string[]>(layers)
+  const [col, setCol] = useState<ColorConfig>(
+    color ?? { matrix: 'bt709', range: 'narrow', key_range: 'narrow', key_mode: 'fill' },
+  )
+  const [pattern, setPattern] = useState<string | null>(null)
   const [adding, setAdding] = useState('')
   const [problem, setProblem] = useState<string | null>(null)
   const [saved, setSaved] = useState(false)
@@ -173,7 +199,11 @@ function OutputEditor({
     async (next: string[]) => {
       setProblem(null)
       try {
-        await put(`${keys.node(nodeId)}/outputs/${outputId}`, { layers: next, mode: mode || '1920x1080' })
+        await put(`${keys.node(nodeId)}/outputs/${outputId}`, {
+          layers: next,
+          mode: mode || '1920x1080',
+          color: col,
+        })
         setDraft(next)
         setSaved(true)
         invalidate(`${keys.node(nodeId)}/outputs`)
@@ -183,7 +213,7 @@ function OutputEditor({
         setProblem(e instanceof ApiError ? e.message : String(e))
       }
     },
-    [nodeId, outputId, mode],
+    [nodeId, outputId, mode, col],
   )
 
   const move = (i: number, delta: number) => {
@@ -221,6 +251,64 @@ function OutputEditor({
           </li>
         ))}
       </ol>
+
+      <fieldset className="cfg__color">
+        <legend>Colour</legend>
+        {([
+          ['matrix', 'Matrix', ['bt709', 'bt601', 'bt2020']],
+          ['range', 'Fill range', ['narrow', 'full']],
+          // Separate from the fill range on purpose: a narrow fill with a full
+          // key is a real plant configuration.
+          ['key_range', 'Key range', ['narrow', 'full']],
+          ['key_mode', 'Key mode', ['fill', 'key', 'fill_key', 'embedded']],
+        ] as const).map(([field, label, options]) => (
+          <label className="field" key={field}>
+            <span>{label}</span>
+            <select
+              value={col[field]}
+              onChange={(e) => {
+                const next = { ...col, [field]: e.target.value }
+                setCol(next)
+                void save(draft)
+              }}
+            >
+              {options.map((o) => (
+                <option key={o} value={o}>{o}</option>
+              ))}
+            </select>
+          </label>
+        ))}
+      </fieldset>
+
+      <fieldset className="cfg__color">
+        <legend>Test patterns</legend>
+        <p className="show__dim">
+          These sit above the layer stack, so you can prove a configuration
+          without clearing the show off air.
+        </p>
+        <div className="running__add">
+          {PATTERNS.map((p) => (
+            <button
+              key={p.id}
+              type="button"
+              className={pattern === p.id ? 'btn btn--take btn--small' : 'btn btn--ghost btn--small'}
+              title={`Proves ${p.proves}`}
+              onClick={async () => {
+                const next = pattern === p.id ? null : p.id
+                setPattern(next)
+                await post(`${keys.node(nodeId)}/outputs/${outputId}/test-pattern`, { pattern: next })
+              }}
+            >
+              {p.label}
+            </button>
+          ))}
+        </div>
+        {pattern ? (
+          <p className="show__dim">
+            {PATTERNS.find((p) => p.id === pattern)?.proves}
+          </p>
+        ) : null}
+      </fieldset>
 
       <form
         className="cfg__add"

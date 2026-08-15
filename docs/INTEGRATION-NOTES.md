@@ -844,3 +844,51 @@ test was measuring interpolation and calling it a renderer bug.
 Fixtures for sampling tests need quadrants **large enough that a sample sits far
 from any edge**. The rewritten test uses 32×32 blocks. The same trap is waiting
 for anyone testing video scaling later.
+
+---
+
+## The fill+key pair wants PREMULTIPLIED fill, and M2e sent straight
+
+**2026-08-15, found by reading the spec while building M3b.**
+`docs/specs/color-and-key.md` §5 states the conventions:
+
+| Backend | Wants |
+|---|---|
+| NDI (`UYVA`/`RGBA`) | Straight |
+| DeckLink 8-bit BGRA embedded alpha | Straight |
+| **DeckLink separate fill + key** | **Fill premultiplied over black**, key is the alpha plane |
+
+`pmg-out-decklink` shipped in M2e unpremultiplying in **both** cases. That is
+right for embedded alpha and wrong for a pair: a downstream keyer computing
+`bg*(1-key) + fill` expects the fill already multiplied by coverage, so straight
+fill **brightens every soft edge** — the bright-fringe half of the failure §5
+describes.
+
+It survived review because nothing in the code said which convention it was
+implementing; it just unpremultiplied because that is what the NDI backend does.
+Both branches now name their convention in a comment beside the arithmetic.
+
+Premultiplied-over-black is also *free*: it is exactly what the renderer already
+produces, so the pair path now copies rather than dividing.
+
+**Still unverified on a scope** — this is a reasoned correction from the spec,
+not a measurement. The soft-edge test pattern over a bright and a dark
+background is what settles it, and that needs the Evertz box.
+
+## Colour config is plumbed; the matrix is not yet applied at the boundary
+
+**2026-08-15, M3b.** Per-output `matrix`, `range`, `key_range` and `key_mode`
+are stored server-side, travel in the assignment, and land on the node's
+`Output`. `pmg-color` implements RGB→YCbCr for 601/709/2020 with correct narrow
+spans (luma 16..235, chroma 16..240 — *different*, which is the detail
+hand-rolled conversions usually miss) and the key path that bypasses all of it.
+
+**What is NOT yet true: the output backends do not consult it.** Both NDI and
+DeckLink are handed 8-bit RGBA/BGRA and the card or the SDK does the YCbCr
+conversion with its own assumptions. Applying our matrix means emitting YCbCr
+ourselves — a `v210`/`UYVY` path in the shim — which is real work and not done.
+
+So the model is right and tested, the configuration is real and end-to-end, and
+the last inch is missing. Recorded here rather than implied complete, because
+"the matrix setting exists" and "the matrix setting does anything" are very
+different claims to make to someone about to trust a colour pipeline.

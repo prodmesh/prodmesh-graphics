@@ -261,6 +261,36 @@ fn linear_to_srgb(v: f32) -> f32 {
     }
 }
 
+/// A pattern as **premultiplied, transfer-encoded** RGBA8.
+///
+/// This is what the node hands to an output backend in place of a rendered
+/// frame, so it must match a rendered frame's convention exactly: premultiplied
+/// (ADR 0012) and transfer-encoded once (`docs/specs/color-and-key.md` §1).
+///
+/// **No range mapping here.** `to_bgra8_straight` applies range because it goes
+/// straight at a card; this one goes to the same boundary encoder every other
+/// frame uses, and applying range twice is precisely the fault the marked ramp
+/// pattern exists to reveal.
+pub fn to_rgba8_premultiplied(f: &Frame) -> Vec<u8> {
+    let n = (f.width as usize) * (f.height as usize);
+    let mut out = vec![0u8; n * 4];
+    for i in 0..n {
+        let a = f.rgba[i * 4 + 3].clamp(0.0, 1.0);
+        // Encode the STRAIGHT value and re-premultiply: a transfer function
+        // applied to an already-premultiplied value is not the same curve, and
+        // the error shows up exactly on the soft edges these patterns test.
+        let straight =
+            crate::unpremultiply([f.rgba[i * 4], f.rgba[i * 4 + 1], f.rgba[i * 4 + 2]], a);
+        for c in 0..3 {
+            let e = linear_to_srgb(straight[c].clamp(0.0, 1.0));
+            out[i * 4 + c] = (e * a * 255.0).round().clamp(0.0, 255.0) as u8;
+        }
+        // Alpha is coverage. Linear, full-range, never transfer-encoded.
+        out[i * 4 + 3] = (a * 255.0).round() as u8;
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

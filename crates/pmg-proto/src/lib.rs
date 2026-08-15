@@ -243,9 +243,43 @@ pub struct Assignment {
 pub struct OutputAssignment {
     pub id: String,
     pub mode: String,
+    /// Colour handling for this output. Defaults are 709 narrow, which is what
+    /// an HD plant is — but a default is not an assumption anyone should have
+    /// to guess at, so it travels explicitly.
+    #[serde(default)]
+    pub color: ColorConfig,
     /// **Addressed by name, never by index.** An index silently re-points at a
     /// different graphic when someone reorders the stack.
     pub layers: Vec<String>,
+}
+
+/// Per-output colour, range, and key handling.
+///
+/// **`key_range` is separate from `range` on purpose.** A plant with a
+/// narrow-range fill and a full-range key is a real configuration, and folding
+/// them into one setting makes it unrepresentable
+/// (`docs/specs/color-and-key.md` §4).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct ColorConfig {
+    /// `bt601` | `bt709` | `bt2020`
+    pub matrix: String,
+    /// `narrow` | `full`
+    pub range: String,
+    /// `narrow` | `full`
+    pub key_range: String,
+    /// `fill` | `key` | `fill_key` | `embedded`
+    pub key_mode: String,
+}
+
+impl Default for ColorConfig {
+    fn default() -> Self {
+        Self {
+            matrix: "bt709".into(),
+            range: "narrow".into(),
+            key_range: "narrow".into(),
+            key_mode: "fill".into(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
@@ -401,6 +435,15 @@ pub enum CueOp {
     Preload {
         item: String,
     },
+    /// Show a test pattern on an output, or clear it with `None`.
+    ///
+    /// A configuration you cannot PROVE is a configuration you are trusting,
+    /// and these are the instruments that prove it
+    /// (`docs/specs/color-and-key.md` §7).
+    TestPattern {
+        output: String,
+        pattern: Option<String>,
+    },
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
@@ -420,7 +463,8 @@ impl CueOp {
             | CueOp::Update { output, .. }
             | CueOp::ClearLayer { output, .. }
             | CueOp::ClearAll { output }
-            | CueOp::Timeline { output, .. } => Some(output),
+            | CueOp::Timeline { output, .. }
+            | CueOp::TestPattern { output, .. } => Some(output),
             CueOp::Preload { .. } => None,
         }
     }

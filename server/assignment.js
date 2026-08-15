@@ -32,6 +32,20 @@ import { handle } from './db.js'
  */
 export const DEFAULT_LAYERS = ['Fullscreen', 'Lower Third', 'Bug']
 
+/**
+ * Colour for an output row, with the defaults filled in.
+ *
+ * 709 narrow is what an HD plant is — but "what it is" and "what nobody stated"
+ * must not look the same on the wire, so the defaults travel explicitly rather
+ * than being left for a node to assume.
+ */
+const colorOf = (o) => ({
+  matrix: o.matrix ?? 'bt709',
+  range: o.range ?? 'narrow',
+  key_range: o.key_range ?? 'narrow',
+  key_mode: o.key_mode ?? 'fill',
+})
+
 /** Field values → the protocol's closed DataValue set. */
 function toWireData(data) {
   const out = {}
@@ -70,8 +84,16 @@ export function build({ nodeId = null, outputId = 'out-0', mode = '1920x1080', l
     ? db.prepare('SELECT * FROM outputs WHERE node_id = ? ORDER BY output_id').all(nodeId)
     : []
   const outputs = configured.length
-    ? configured.map((o) => ({ id: o.output_id, mode: o.mode, layers: JSON.parse(o.layers) }))
-    : [{ id: outputId, mode, layers }]
+    ? configured.map((o) => ({
+        id: o.output_id,
+        mode: o.mode,
+        layers: JSON.parse(o.layers),
+        color: colorOf(o),
+      }))
+    // Defaults travel EXPLICITLY rather than being left for the node to assume.
+    // 709 narrow is what an HD plant is, but "what it is" and "what nobody
+    // stated" should not look the same on the wire.
+    : [{ id: outputId, mode, layers, color: colorOf({}) }]
 
   const items = db
     .prepare(

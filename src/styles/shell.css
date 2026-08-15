@@ -352,3 +352,12 @@
   display: block; width: 100%; height: auto;
   border-bottom: 1px solid var(--border-subtle); background: var(--bg);
 }
+
+.cfg__color {
+  border: 1px solid var(--border-subtle); border-radius: var(--radius);
+  padding: 0.6rem 0.8rem; margin: 0.6rem 0; display: grid; gap: 0.5rem;
+}
+.cfg__color legend { font-size: 0.78rem; text-transform: uppercase; letter-spacing: 0.06em; color: var(--text-dim); }
+.cfg__color p { margin: 0; }
+.cfg__color .field { grid-template-columns: 7rem 1fr; display: grid; align-items: center; }
+.cfg__color .field > span { margin: 0; }

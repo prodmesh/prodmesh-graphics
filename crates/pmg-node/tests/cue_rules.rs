@@ -34,6 +34,7 @@ fn engine() -> LayerEngine {
         &[OutputAssignment {
             id: "out-0".into(),
             mode: "1920x1080".into(),
+            color: Default::default(),
             layers: vec!["Lower Third".into(), "Bug".into()],
         }],
         (60000, 1001),
@@ -189,6 +190,7 @@ fn reconfiguring_takes_the_assignments_layer_order() {
         &[OutputAssignment {
             id: "out-0".into(),
             mode: "1920x1080".into(),
+            color: Default::default(),
             layers: vec!["Fullscreen".into(), "Lower Third".into(), "Bug".into()],
         }],
         (60000, 1001),
@@ -213,6 +215,7 @@ fn reconfiguring_does_not_evict_what_is_on_air() {
         &[OutputAssignment {
             id: "out-0".into(),
             mode: "1920x1080".into(),
+            color: Default::default(),
             layers: vec!["Ticker".into(), "Lower Third".into()],
         }],
         (60000, 1001),

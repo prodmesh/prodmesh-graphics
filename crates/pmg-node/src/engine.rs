@@ -76,6 +76,14 @@ pub struct Layer {
 pub struct Output {
     pub id: String,
     pub layers: Vec<Layer>,
+    /// Colour handling, from the assignment.
+    pub color: pmg_proto::ColorConfig,
+    /// A test pattern overriding everything on this output, if one is up.
+    ///
+    /// It sits ABOVE the layer stack on purpose: an instrument you have to
+    /// clear the show off air to see is an instrument nobody uses during a
+    /// service.
+    pub test_pattern: Option<String>,
     pub fps_num: u32,
     pub fps_den: u32,
     pub frame: u64,
@@ -158,6 +166,7 @@ impl LayerEngine {
         for oa in outputs {
             match self.outputs.iter_mut().find(|o| o.id == oa.id) {
                 Some(existing) => {
+                    existing.color = oa.color.clone();
                     // Rebuild in the assignment's order, carrying occupants
                     // across by NAME. A layer that disappears from the stack
                     // takes its occupant with it, which is the honest reading
@@ -178,6 +187,8 @@ impl LayerEngine {
                 }
                 None => self.outputs.push(Output {
                     id: oa.id.clone(),
+                    color: oa.color.clone(),
+                    test_pattern: None,
                     layers: oa
                         .layers
                         .iter()
@@ -350,6 +361,21 @@ impl LayerEngine {
             CueOp::Preload { item } => {
                 self.arm(item, lib)?;
                 Ok(None)
+            }
+
+            CueOp::TestPattern { output, pattern } => {
+                let out = self.output_mut(output).ok_or(RejectReason::NoSuchLayer)?;
+                let frame = out.frame;
+                // Validated here rather than drawn as a magenta placeholder: a
+                // test pattern nobody recognises is worse than an error,
+                // because the whole point is to trust what you are looking at.
+                if let Some(p) = pattern {
+                    if pmg_color::patterns::Pattern::parse(p).is_none() {
+                        return Err(RejectReason::Unsupported);
+                    }
+                }
+                out.test_pattern = pattern.clone();
+                Ok(Some(frame))
             }
         }
     }

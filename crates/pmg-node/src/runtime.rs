@@ -138,6 +138,7 @@ impl Runtime {
             &[pmg_proto::OutputAssignment {
                 id: opts.output_id.clone(),
                 mode: format!("{}x{}", opts.width, opts.height),
+                color: Default::default(),
                 layers: opts.layers.clone(),
             }],
             opts.fps,
@@ -380,6 +381,7 @@ impl Runtime {
             }
         };
         let mut last_state = Instant::now();
+        let mut frame_counter: u64 = 0;
         let mut worst_ms = 0.0f64;
         let budget_ms = 1000.0 / (self.opts.fps.0 as f64 / self.opts.fps.1 as f64);
         let output_id = self.opts.output_id.clone();
@@ -469,11 +471,39 @@ impl Runtime {
             if drawn == 0 {
                 target.clear(&gpu);
             }
+
+            // A test pattern replaces the whole output, above the stack. It is
+            // generated on the CPU and uploaded rather than rendered as a
+            // scene: these are instruments, and they must be exactly the values
+            // the spec names rather than whatever the render path does to them.
+            let pattern = self
+                .engine
+                .outputs
+                .iter()
+                .find(|o| o.id == output_id)
+                .and_then(|o| o.test_pattern.clone());
             // A cleared layer must not hold its atlas for the rest of the
             // service.
             renderers.retain(&live);
 
-            let rgba = target.read(&gpu)?;
+            let mut rgba = target.read(&gpu)?;
+            if let Some(name) = &pattern {
+                if let Some(p) = pmg_color::patterns::Pattern::parse(name) {
+                    let f = pmg_color::patterns::render(
+                        p,
+                        self.opts.width,
+                        self.opts.height,
+                        frame_counter,
+                    );
+                    // The pattern generator produces STRAIGHT values, which is
+                    // what the alpha-staircase pattern needs to mean anything;
+                    // the output boundary expects premultiplied like everything
+                    // else, so it is converted here rather than special-cased
+                    // downstream.
+                    rgba = pmg_color::patterns::to_rgba8_premultiplied(&f);
+                }
+            }
+            frame_counter += 1;
             let ms = t0.elapsed().as_secs_f64() * 1000.0;
             if ms > worst_ms {
                 worst_ms = ms;
