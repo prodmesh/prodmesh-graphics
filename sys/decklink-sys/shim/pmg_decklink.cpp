@@ -34,6 +34,7 @@
 #include "DeckLinkAPI_v10_11.h"
 #include "DeckLinkAPIVideoOutput_v15_3_1.h"
 #include "DeckLinkAPIVideoOutput_v14_2_1.h"
+#include "DeckLinkAPIVideoFrame_v14_2_1.h"
 #include "DeckLinkAPIVideoOutput_v11_4.h"
 #include "DeckLinkAPIVideoOutput_v10_11.h"
 
@@ -378,24 +379,332 @@ pmg_dl_result pmg_dl_reference_status(pmg_dl_device *dev, pmg_dl_reference *out)
     return PMG_DL_OK;
 }
 
-/* ---- Output: spike S3 ---------------------------------------------------
- *
- * Deliberately unimplemented. Scheduled playback is where the real risk lives
- * (rule 1: the completion callback must not allocate, block, or lock), and it
- * gets built with the ten-minute zero-late-frame soak in
- * docs/spikes/S3-decklink-output.md rather than in passing.
- */
+/* ---- Output: scheduled playback ----------------------------------------- */
 
-pmg_dl_result pmg_dl_output_open(pmg_dl_device *, const pmg_dl_output_config *, pmg_dl_output **out) {
-    if (out) *out = nullptr;
-    return PMG_DL_ERR_INTERNAL;
+} /* extern "C" */
+
+namespace {
+
+/*
+ * A ring of completed-frame tokens.
+ *
+ * The completion callback runs on DeckLink's thread and MUST NOT allocate,
+ * block, or take a lock (header rule 1). So it does exactly two things: bump
+ * an atomic counter, and store an index. Single producer (DeckLink's thread),
+ * single consumer (whoever calls pmg_dl_output_schedule).
+ */
+constexpr int kPoolSize = 8;
+
+struct Output;
+
+class Callback : public IDeckLinkVideoOutputCallback {
+public:
+    explicit Callback(Output *o) : m_out(o) {}
+
+    /* IUnknown. This object is owned by Output, not by refcount — DeckLink is
+     * given one reference and we outlive it deliberately, because destroying a
+     * callback DeckLink might still be invoking is a race we do not want. */
+    HRESULT QueryInterface(REFIID, void **) override { return E_NOINTERFACE; }
+    ULONG AddRef() override { return ++m_refs; }
+    ULONG Release() override { return --m_refs; }
+
+    HRESULT ScheduledFrameCompleted(IDeckLinkVideoFrame *frame,
+                                    BMDOutputFrameCompletionResult result) override;
+    HRESULT ScheduledPlaybackHasStopped() override { return S_OK; }
+
+private:
+    Output          *m_out;
+    std::atomic<ULONG> m_refs{1};
+};
+
+struct Output {
+    IDeckLink       *dl      = nullptr;   /* borrowed from Device, not owned   */
+    IDeckLinkOutput *out     = nullptr;
+    Callback        *cb      = nullptr;
+
+    IDeckLinkMutableVideoFrame *pool[kPoolSize] = {nullptr};
+    /* Indices of frames DeckLink has handed back. Written only by the callback
+     * thread, read only by the scheduling thread. */
+    std::atomic<int>  free_ring[kPoolSize];
+    std::atomic<uint64_t> free_head{0};   /* producer: callback thread         */
+    std::atomic<uint64_t> free_tail{0};   /* consumer: scheduling thread       */
+
+    int      width = 0, height = 0, row_bytes = 0;
+    int64_t  frame_duration = 0, time_scale = 0;
+    uint64_t next_display_time = 0;
+    int      preroll = 0;
+    bool     started = false;
+
+    /* Counters. Written on the callback thread, read anywhere — relaxed is
+     * fine, these are diagnostics, not control flow. */
+    std::atomic<uint64_t> n_scheduled{0}, n_completed{0}, n_late{0}, n_dropped{0}, n_flushed{0};
+
+    ~Output() {
+        if (out) {
+            out->StopScheduledPlayback(0, nullptr, 0);
+            out->SetScheduledFrameCompletionCallback(nullptr);
+            out->DisableVideoOutput();
+        }
+        for (auto *&f : pool)
+            if (f) { f->Release(); f = nullptr; }
+        delete cb;
+        if (out) out->Release();
+    }
+};
+
+HRESULT Callback::ScheduledFrameCompleted(IDeckLinkVideoFrame *frame,
+                                          BMDOutputFrameCompletionResult result) {
+    /* ON DECKLINK'S THREAD. No allocation. No locks. No I/O. Nothing that can
+     * block. Header rule 1 — one violation here is a late frame, and a late
+     * frame is a visible glitch. */
+    Output *o = m_out;
+
+    switch (result) {
+        case bmdOutputFrameCompleted:     o->n_completed.fetch_add(1, std::memory_order_relaxed); break;
+        case bmdOutputFrameDisplayedLate: o->n_late.fetch_add(1, std::memory_order_relaxed);      break;
+        case bmdOutputFrameDropped:       o->n_dropped.fetch_add(1, std::memory_order_relaxed);   break;
+        case bmdOutputFrameFlushed:       o->n_flushed.fetch_add(1, std::memory_order_relaxed);   break;
+        default: break;
+    }
+
+    /* Find which pool slot this was and publish it as free. Linear over 8
+     * pointers — no allocation, no lock, and cheaper than a map lookup. */
+    for (int i = 0; i < kPoolSize; i++) {
+        if (o->pool[i] == frame) {
+            uint64_t h = o->free_head.load(std::memory_order_relaxed);
+            o->free_ring[h % kPoolSize].store(i, std::memory_order_relaxed);
+            o->free_head.store(h + 1, std::memory_order_release);
+            break;
+        }
+    }
+    return S_OK;
 }
-void          pmg_dl_output_release(pmg_dl_output *) {}
-pmg_dl_result pmg_dl_output_set_callback(pmg_dl_output *, pmg_dl_frame_completed_cb, void *) { return PMG_DL_ERR_INTERNAL; }
-pmg_dl_result pmg_dl_output_schedule(pmg_dl_output *, const void *, int32_t, const void *, int32_t,
-                                     const void *, int32_t, int64_t, int64_t, uint64_t) { return PMG_DL_ERR_INTERNAL; }
-pmg_dl_result pmg_dl_output_start(pmg_dl_output *) { return PMG_DL_ERR_INTERNAL; }
-pmg_dl_result pmg_dl_output_stop(pmg_dl_output *) { return PMG_DL_ERR_INTERNAL; }
-pmg_dl_result pmg_dl_output_stats(pmg_dl_output *, pmg_dl_stats *) { return PMG_DL_ERR_INTERNAL; }
+
+/* Pop a free pool slot, or -1 if DeckLink has not returned one yet. */
+int take_free_slot(Output *o) {
+    uint64_t t = o->free_tail.load(std::memory_order_relaxed);
+    if (t == o->free_head.load(std::memory_order_acquire)) return -1;
+    int idx = o->free_ring[t % kPoolSize].load(std::memory_order_relaxed);
+    o->free_tail.store(t + 1, std::memory_order_relaxed);
+    return idx;
+}
+
+/* Resolve a BMDDisplayMode from the config's width/height/rational rate.
+ * Matching on the enumerated modes rather than hard-coding a FourCC keeps this
+ * honest about what the device actually reports. */
+bool find_display_mode(IDeckLinkOutput *out, const pmg_dl_mode &want,
+                       BMDDisplayMode *mode, int64_t *dur, int64_t *scale) {
+    IDeckLinkDisplayModeIterator *it = nullptr;
+    if (out->GetDisplayModeIterator(&it) != S_OK) return false;
+
+    bool found = false;
+    IDeckLinkDisplayMode *m = nullptr;
+    while (it->Next(&m) == S_OK) {
+        BMDTimeValue d = 0; BMDTimeScale s = 0;
+        m->GetFrameRate(&d, &s);
+        bool interlaced = (m->GetFieldDominance() == bmdLowerFieldFirst ||
+                           m->GetFieldDominance() == bmdUpperFieldFirst);
+        if (!found &&
+            (int32_t)m->GetWidth()  == want.width &&
+            (int32_t)m->GetHeight() == want.height &&
+            (int32_t)s == want.fps_num && (int32_t)d == want.fps_den &&
+            interlaced == (want.interlaced != 0)) {
+            *mode = m->GetDisplayMode();
+            *dur = d; *scale = s;
+            found = true;
+        }
+        m->Release();
+    }
+    it->Release();
+    return found;
+}
+
+} /* namespace */
+
+extern "C" {
+
+pmg_dl_result pmg_dl_output_open(pmg_dl_device *dev, const pmg_dl_output_config *cfg,
+                                 pmg_dl_output **out_handle) {
+    if (!out_handle || !cfg) return PMG_DL_ERR_INTERNAL;
+    *out_handle = nullptr;
+
+    Device *d = reinterpret_cast<Device *>(dev);
+    if (!d || !d->dl) return PMG_DL_ERR_NO_DEVICE;
+
+    /* External keying is PROBED. Refusing here, at open, beats discovering it
+     * when a graphic fails to key on a Sunday. */
+    if (cfg->key_mode == PMG_DL_KEY_FILL_KEY_PAIR &&
+        !attr_flag(d->dl, BMDDeckLinkSupportsExternalKeying, false))
+        return PMG_DL_ERR_NO_KEY_FILL;
+
+    IDeckLinkOutput *o = open_output(d->dl);
+    if (!o) return PMG_DL_ERR_NO_DEVICE;
+
+    BMDDisplayMode mode = 0;
+    int64_t dur = 0, scale = 0;
+    if (!find_display_mode(o, cfg->mode, &mode, &dur, &scale)) {
+        o->Release();
+        return PMG_DL_ERR_BAD_MODE;
+    }
+
+    Output *op = new Output();
+    op->dl = d->dl;
+    op->out = o;
+    op->width = cfg->mode.width;
+    op->height = cfg->mode.height;
+    op->row_bytes = cfg->mode.width * 4;      /* 8-bit BGRA */
+    op->frame_duration = dur;
+    op->time_scale = scale;
+    op->preroll = cfg->preroll_frames > 0 ? cfg->preroll_frames : 3;
+    if (op->preroll > kPoolSize - 1) op->preroll = kPoolSize - 1;
+
+    if (o->EnableVideoOutput(mode, bmdVideoOutputFlagDefault) != S_OK) {
+        delete op;
+        return PMG_DL_ERR_BUSY;
+    }
+
+    /* Pre-create the whole pool. Allocating a frame mid-playback would be a
+     * malloc on the critical path. */
+    for (int i = 0; i < kPoolSize; i++) {
+        if (o->CreateVideoFrame(op->width, op->height, op->row_bytes,
+                                bmdFormat8BitBGRA, bmdFrameFlagDefault,
+                                &op->pool[i]) != S_OK) {
+            delete op;
+            return PMG_DL_ERR_INTERNAL;
+        }
+        /* Every slot starts free. */
+        op->free_ring[i].store(i, std::memory_order_relaxed);
+    }
+    op->free_head.store(kPoolSize, std::memory_order_release);
+    op->free_tail.store(0, std::memory_order_relaxed);
+
+    op->cb = new Callback(op);
+    o->SetScheduledFrameCompletionCallback(op->cb);
+
+    *out_handle = reinterpret_cast<pmg_dl_output *>(op);
+    return PMG_DL_OK;
+}
+
+void pmg_dl_output_release(pmg_dl_output *out) {
+    delete reinterpret_cast<Output *>(out);
+}
+
+pmg_dl_result pmg_dl_output_set_callback(pmg_dl_output *, pmg_dl_frame_completed_cb, void *) {
+    /* The shim owns completion handling: counters plus the free ring. Exposing
+     * DeckLink's thread to Rust would make rule 1 Rust's problem to honour on
+     * every call site, which is exactly what this boundary exists to prevent. */
+    return PMG_DL_OK;
+}
+
+pmg_dl_result pmg_dl_output_schedule(pmg_dl_output *out,
+                                     const void *fill, int32_t fill_stride,
+                                     const void *key, int32_t /*key_stride*/,
+                                     const void * /*audio*/, int32_t /*audio_samples*/,
+                                     int64_t /*display_time*/, int64_t /*time_scale*/,
+                                     uint64_t /*token*/) {
+    Output *o = reinterpret_cast<Output *>(out);
+    if (!o || !o->out || !fill) return PMG_DL_ERR_INTERNAL;
+    if (key) return PMG_DL_ERR_NO_KEY_FILL;  /* fill+key pair is a later step */
+
+    int slot = take_free_slot(o);
+    if (slot < 0) return PMG_DL_ERR_BUSY;    /* caller should back off a frame */
+
+    IDeckLinkMutableVideoFrame *f = o->pool[slot];
+
+    /* Buffer access moved between SDK generations: 16.0 puts it on
+     * IDeckLinkVideoBuffer (with StartAccess/EndAccess bracketing), older ones
+     * had GetBytes directly on the frame.
+     *
+     * QUERY for whichever exists — never cast. A QueryInterface returns a
+     * pointer genuinely valid for that interface; a cast across versions is
+     * only valid inside a common vtable prefix, and frame interfaces do not
+     * share one. This is the safe version of the fallback in open_attrs().  */
+    void *dst = nullptr;
+    IDeckLinkVideoBuffer *buf = nullptr;
+    IDeckLinkVideoFrame_v14_2_1 *old = nullptr;
+
+    if (f->QueryInterface(IID_IDeckLinkVideoBuffer, (void **)&buf) == S_OK && buf) {
+        if (buf->StartAccess(bmdBufferAccessWrite) != S_OK || buf->GetBytes(&dst) != S_OK) {
+            buf->Release();
+            return PMG_DL_ERR_INTERNAL;
+        }
+    } else if (f->QueryInterface(IID_IDeckLinkVideoFrame_v14_2_1, (void **)&old) == S_OK && old) {
+        if (old->GetBytes(&dst) != S_OK) {
+            old->Release();
+            return PMG_DL_ERR_INTERNAL;
+        }
+    } else {
+        return PMG_DL_ERR_INTERNAL;
+    }
+    if (!dst) {
+        if (buf) { buf->EndAccess(bmdBufferAccessWrite); buf->Release(); }
+        if (old) old->Release();
+        return PMG_DL_ERR_INTERNAL;
+    }
+
+    const uint8_t *src = static_cast<const uint8_t *>(fill);
+    int32_t sstride = fill_stride > 0 ? fill_stride : o->row_bytes;
+    if (sstride == o->row_bytes) {
+        std::memcpy(dst, src, static_cast<size_t>(o->row_bytes) * o->height);
+    } else {
+        for (int y = 0; y < o->height; y++)
+            std::memcpy(static_cast<uint8_t *>(dst) + (size_t)y * o->row_bytes,
+                        src + (size_t)y * sstride, (size_t)o->row_bytes);
+    }
+
+    if (buf) { buf->EndAccess(bmdBufferAccessWrite); buf->Release(); }
+    if (old) old->Release();
+
+    /* Display times advance by exactly frame_duration in time_scale units —
+     * rational throughout, never a float. */
+    HRESULT hr = o->out->ScheduleVideoFrame(f,
+                                            (BMDTimeValue)o->next_display_time,
+                                            (BMDTimeValue)o->frame_duration,
+                                            (BMDTimeScale)o->time_scale);
+    if (hr != S_OK) return PMG_DL_ERR_INTERNAL;
+
+    o->next_display_time += (uint64_t)o->frame_duration;
+    o->n_scheduled.fetch_add(1, std::memory_order_relaxed);
+
+    /* Start only once enough frames are queued. Starting on frame 1 underruns
+     * immediately; preroll depth is what spike S3 measures. */
+    if (!o->started && o->n_scheduled.load(std::memory_order_relaxed) >= (uint64_t)o->preroll) {
+        if (o->out->StartScheduledPlayback(0, (BMDTimeScale)o->time_scale, 1.0) == S_OK)
+            o->started = true;
+    }
+    return PMG_DL_OK;
+}
+
+pmg_dl_result pmg_dl_output_start(pmg_dl_output *out) {
+    Output *o = reinterpret_cast<Output *>(out);
+    if (!o || !o->out) return PMG_DL_ERR_INTERNAL;
+    if (o->started) return PMG_DL_OK;
+    if (o->out->StartScheduledPlayback(0, (BMDTimeScale)o->time_scale, 1.0) != S_OK)
+        return PMG_DL_ERR_INTERNAL;
+    o->started = true;
+    return PMG_DL_OK;
+}
+
+pmg_dl_result pmg_dl_output_stop(pmg_dl_output *out) {
+    Output *o = reinterpret_cast<Output *>(out);
+    if (!o || !o->out) return PMG_DL_ERR_INTERNAL;
+    BMDTimeValue actual = 0;
+    o->out->StopScheduledPlayback(0, &actual, (BMDTimeScale)o->time_scale);
+    o->started = false;
+    return PMG_DL_OK;
+}
+
+pmg_dl_result pmg_dl_output_stats(pmg_dl_output *out, pmg_dl_stats *stats) {
+    Output *o = reinterpret_cast<Output *>(out);
+    if (!o || !stats) return PMG_DL_ERR_INTERNAL;
+    stats->scheduled      = o->n_scheduled.load(std::memory_order_relaxed);
+    stats->completed      = o->n_completed.load(std::memory_order_relaxed);
+    stats->displayed_late = o->n_late.load(std::memory_order_relaxed);
+    stats->dropped        = o->n_dropped.load(std::memory_order_relaxed);
+    uint32_t buffered = 0;
+    if (o->out) o->out->GetBufferedVideoFrameCount(&buffered);
+    stats->buffered = buffered;
+    return PMG_DL_OK;
+}
 
 } /* extern "C" */

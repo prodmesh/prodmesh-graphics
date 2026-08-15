@@ -9,8 +9,10 @@
 //! predict key+fill support (risk R4), which is why Configure will show what
 //! the device reported rather than what the box says.
 
-use anyhow::Result;
+use anyhow::{bail, Result};
 use decklink_sys as dl;
+use pmg_color::patterns::{self, Pattern};
+use pmg_color::Range;
 use std::collections::BTreeMap;
 
 pub const USAGE: &str = "\
@@ -19,10 +21,12 @@ pmgctl decklink — DeckLink enumeration and capability probe (M0)
     pmgctl decklink list             Devices and their probed capabilities
     pmgctl decklink modes [index]    Display modes a device reports
     pmgctl decklink ref [index]      Reference (genlock) status
+    pmgctl decklink out [flags]      Spike S3's soak: scheduled output
+        --device N --minutes N --preroll N --pattern P --mode WxHpNUM/DEN
 
-Output is NOT yet implemented — that is spike S3, and it gets built with the
-ten-minute zero-late-frame soak rather than in passing. See
-docs/spikes/S3-decklink-output.md.
+The soak's bar is ZERO late and ZERO dropped over ten minutes at 1080p59.94.
+One late frame in ten minutes is one visible glitch per ten minutes of service.
+See docs/spikes/S3-decklink-output.md.
 ";
 
 pub fn main(args: &[String]) -> Result<()> {
@@ -30,11 +34,19 @@ pub fn main(args: &[String]) -> Result<()> {
         Some("list") => list(),
         Some("modes") => modes(index_arg(args)),
         Some("ref") => reference(index_arg(args)),
+        Some("out") => out(args),
         _ => {
             print!("{USAGE}");
             Ok(())
         }
     }
+}
+
+fn arg(args: &[String], flag: &str) -> Option<String> {
+    args.iter()
+        .position(|a| a == flag)
+        .and_then(|i| args.get(i + 1))
+        .cloned()
 }
 
 fn index_arg(args: &[String]) -> i32 {
@@ -72,8 +84,23 @@ fn list() -> Result<()> {
     };
     println!("devices          {n}\n");
     if n == 0 {
-        println!("No DeckLink devices found. Check the Thunderbolt connection and that");
-        println!("Desktop Video Setup sees the device.");
+        println!("No DeckLink devices found.");
+        println!();
+        // Zero devices with a loaded framework is almost always a half-finished
+        // driver update, not absent hardware — and it presents identically to a
+        // cable falling out. Measured 2026-08-14; see docs/INTEGRATION-NOTES.md.
+        println!("If you just updated Desktop Video, this is probably the driver extension");
+        println!("rather than the hardware. Check:");
+        println!();
+        println!("    systemextensionsctl list | grep -i blackmagic");
+        println!();
+        println!("A line reading [activated waiting for user] means macOS is holding the new");
+        println!("extension pending approval, while the OLD one is still the live driver — so");
+        println!("a new framework is talking to an old dext and nothing enumerates.");
+        println!();
+        println!("Fix: System Settings > Privacy & Security, approve the Blackmagic Design");
+        println!("system software, then REBOOT. Otherwise check the Thunderbolt connection");
+        println!("and that Desktop Video Setup sees the device.");
         return Ok(());
     }
 
@@ -245,4 +272,165 @@ fn yn(b: bool) -> &'static str {
     } else {
         "no"
     }
+}
+
+/// `pmgctl decklink out` — spike S3's soak.
+///
+/// **Frames are pre-rendered into a pool and scheduled from it.** Generating per
+/// frame would put 17.55 ms of CPU work in the loop (measured over the NDI path,
+/// see `docs/INTEGRATION-NOTES.md`) and we would be measuring the pattern
+/// generator rather than DeckLink's scheduling — a useless soak.
+fn out(args: &[String]) -> Result<()> {
+    preamble();
+
+    let index: i32 = arg(args, "--device")
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(0);
+    let minutes: f64 = arg(args, "--minutes")
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(10.0);
+    let preroll: i32 = arg(args, "--preroll")
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(3);
+    let pattern_name = arg(args, "--pattern").unwrap_or_else(|| "line".into());
+    let Some(pattern) = Pattern::parse(&pattern_name) else {
+        bail!(
+            "unknown pattern {pattern_name:?}. One of: {}",
+            Pattern::ALL.join(", ")
+        );
+    };
+
+    let dev = match dl::Device::open(index) {
+        Ok(d) => d,
+        Err(e) => {
+            println!("\n{e}");
+            return Ok(());
+        }
+    };
+
+    // 1080p59.94 unless told otherwise — the format the success bar is written
+    // against, and the one with the tightest budget this card offers.
+    let want = arg(args, "--mode").unwrap_or_else(|| "1920x1080p60000/1001".into());
+    let modes = dev.modes();
+    let Some(mode) = modes.iter().find(|m| fmt_mode(m) == want).cloned() else {
+        println!("\nNo mode matching {want:?}. Available:");
+        for m in &modes {
+            println!("  {}", fmt_mode(m));
+        }
+        return Ok(());
+    };
+
+    let fps = mode.fps();
+    let budget_ms = 1000.0 / fps;
+    let total: u64 = (minutes * 60.0 * fps).round() as u64;
+
+    println!(
+        "\nsoak: {} for {minutes} min = {total} frames",
+        fmt_mode(&mode)
+    );
+    println!("  per-frame budget   {budget_ms:.3} ms");
+    println!("  preroll            {preroll} frames");
+    println!("  pattern            {pattern_name} (pre-rendered pool, not generated per frame)");
+
+    // Pre-render one cycle of the pattern. `line` sweeps across the width, so a
+    // full cycle is `width` frames — enough to see tearing without regenerating.
+    let pool_len = if pattern == Pattern::MovingLine {
+        mode.width as u64
+    } else {
+        1
+    };
+    println!("  pre-rendering      {pool_len} frame(s)…");
+    let t0 = std::time::Instant::now();
+    let pool: Vec<Vec<u8>> = (0..pool_len)
+        .map(|i| {
+            let f = patterns::render(pattern, mode.width as u32, mode.height as u32, i);
+            patterns::to_bgra8_straight(&f, Range::Narrow)
+        })
+        .collect();
+    println!("  pre-rendered in    {:.1}s\n", t0.elapsed().as_secs_f64());
+
+    let output = match dl::Output::open(&dev, &mode, dl::KeyMode::FillOnly, preroll) {
+        Ok(o) => o,
+        Err(e) => {
+            println!("could not open output: {e}");
+            println!();
+            println!("If this is an interface error, the installed Desktop Video driver is");
+            println!("older than the SDK. The enumeration path tolerates that with a fallback");
+            println!("chain; the OUTPUT path deliberately does not, because its methods sit");
+            println!("past the common vtable prefix. Update Desktop Video to match the SDK.");
+            return Ok(());
+        }
+    };
+
+    let start = std::time::Instant::now();
+    let mut scheduled = 0u64;
+    let mut backoffs = 0u64;
+
+    while scheduled < total {
+        let buf = &pool[(scheduled % pool_len) as usize];
+        match output.schedule_bgra(buf) {
+            Ok(()) => scheduled += 1,
+            Err(_) => {
+                // Pool exhausted: DeckLink has not returned a frame yet. Back
+                // off rather than spin — a busy-wait here would steal CPU from
+                // the very thread we are measuring.
+                backoffs += 1;
+                std::thread::sleep(std::time::Duration::from_micros(500));
+            }
+        }
+
+        if scheduled > 0 && scheduled.is_multiple_of(fps.round() as u64 * 30) {
+            let s = output.stats();
+            println!(
+                "  {:>6} sched · {:>6} done · late {} · dropped {} · buffered {} · {:.1}s",
+                s.scheduled,
+                s.completed,
+                s.displayed_late,
+                s.dropped,
+                s.buffered,
+                start.elapsed().as_secs_f64()
+            );
+        }
+    }
+
+    // Let the tail of the queue drain before reading final counters, or the
+    // last few frames show as scheduled-but-not-completed and look like a fault.
+    std::thread::sleep(std::time::Duration::from_millis(500));
+    let s = output.stats();
+    let elapsed = start.elapsed().as_secs_f64();
+
+    println!("\n--- result ---");
+    println!("  elapsed            {elapsed:.2}s");
+    println!("  scheduled          {}", s.scheduled);
+    println!("  completed          {}", s.completed);
+    println!("  DISPLAYED LATE     {}", s.displayed_late);
+    println!("  dropped            {}", s.dropped);
+    println!("  pool back-offs     {backoffs}");
+    println!(
+        "  effective rate     {:.3} fps (asked {fps:.3})",
+        s.completed as f64 / elapsed
+    );
+    println!();
+    if s.displayed_late == 0 && s.dropped == 0 {
+        println!("PASS — zero late, zero dropped. Spike S3's internal-clock leg is met.");
+        println!("Still outstanding, and both need the reference generator at church:");
+        println!("  - the same soak locked to blackburst or tri-level");
+        println!("  - scope confirmation that a fill+key pair really shares a clock");
+    } else {
+        println!("FAIL — the bar is zero. One late frame in ten minutes is one visible");
+        println!("glitch per ten minutes of service. Check readback and preroll depth");
+        println!("before concluding anything about the SDK.");
+    }
+    Ok(())
+}
+
+fn fmt_mode(m: &dl::Mode) -> String {
+    format!(
+        "{}x{}{}{}/{}",
+        m.width,
+        m.height,
+        if m.interlaced { "i" } else { "p" },
+        m.fps_num,
+        m.fps_den
+    )
 }

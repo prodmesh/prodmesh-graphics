@@ -67,6 +67,42 @@ in the building.
 This is the same lesson as ProPresenter 21.1 in the church versus 21.4 on the
 laptop: **the building is not the dev machine.**
 
+### Updating Desktop Video makes every DeckLink vanish until you approve the extension and reboot
+*2026-08-14 · MacBook Pro arm64, macOS 26.3 · Desktop Video 14.5 → 16.3 · DeckLink Quad 2 in an Echo Express SE-I TB3*
+
+A second instance of the same hazard as the entry above — userspace and driver
+at different versions — and this time it presents as **the hardware being gone**.
+
+After the update, `pmgctl decklink list` reported `driver loaded true` and
+`devices 0`. The Thunderbolt chassis was still connected and healthy. What had
+actually happened:
+
+```
+DeckLinkAPI.framework                      16.3   ← updated
+com.blackmagic-design.BlackmagicIO.DExt    14.5   [activated enabled]     ← still live
+com.blackmagic-design...Network.DExt       16.3   [activated waiting for user]
+```
+
+macOS holds a new DriverKit extension at **`activated waiting for user`** until
+someone approves it in System Settings → Privacy & Security. Until then the old
+extension stays live — so a 16.3 framework talks to a 14.5 dext and **nothing
+enumerates at all**.
+
+Indistinguishable, from the application's side, from a card that has been
+removed. Diagnose with:
+
+```
+systemextensionsctl list | grep -i blackmagic
+```
+
+**Fix: approve the extension, then reboot.** `pmgctl decklink list` now prints
+this whole diagnosis when it finds zero devices, because the failure looks like
+absent hardware and nobody would think to check.
+
+Operationally this is worth knowing before a Sunday: **updating Desktop Video is
+not a self-completing operation.** It leaves the machine in a state where video
+I/O is silently dead until a human clicks Allow and restarts.
+
 ### On a Quad 2, external keying is reported on only 2 of 8 connectors
 *2026-08-14 · same hardware as above*
 

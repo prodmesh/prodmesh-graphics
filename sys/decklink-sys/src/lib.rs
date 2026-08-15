@@ -20,6 +20,8 @@
 #![allow(non_camel_case_types)]
 
 use std::ffi::c_char;
+#[cfg(decklink_sdk_present)]
+use std::ffi::c_void;
 
 pub type pmg_dl_result = i32;
 
@@ -110,6 +112,46 @@ extern "C" {
         out: *mut pmg_dl_reference,
     ) -> pmg_dl_result;
     pub fn pmg_dl_output_stats(out: *mut pmg_dl_output, stats: *mut pmg_dl_stats) -> pmg_dl_result;
+    pub fn pmg_dl_output_open(
+        dev: *mut pmg_dl_device,
+        cfg: *const pmg_dl_output_config,
+        out: *mut *mut pmg_dl_output,
+    ) -> pmg_dl_result;
+    pub fn pmg_dl_output_release(out: *mut pmg_dl_output);
+    pub fn pmg_dl_output_schedule(
+        out: *mut pmg_dl_output,
+        fill: *const c_void,
+        fill_stride: i32,
+        key: *const c_void,
+        key_stride: i32,
+        audio: *const c_void,
+        audio_samples: i32,
+        display_time: i64,
+        time_scale: i64,
+        token: u64,
+    ) -> pmg_dl_result;
+    pub fn pmg_dl_output_stop(out: *mut pmg_dl_output) -> pmg_dl_result;
+}
+
+/// Key mode. See `docs/specs/output-config.md` §5.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(i32)]
+pub enum KeyMode {
+    FillOnly = 0,
+    KeyOnly = 1,
+    FillKeyPair = 2,
+    Embedded = 3,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct pmg_dl_output_config {
+    pub mode: pmg_dl_mode,
+    pub key_mode: i32,
+    pub paired_port: i32,
+    pub use_reference: i32,
+    pub preroll_frames: i32,
+    pub audio_channels: i32,
 }
 
 /// Whether this build has a real SDK behind it.
@@ -378,6 +420,151 @@ impl Device {
         }
         #[cfg(not(decklink_sdk_present))]
         None
+    }
+}
+
+/// Counters since playback started.
+///
+/// `displayed_late` is spike S3's pass/fail: the bar is **zero** over ten
+/// minutes at 1080p59.94.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct Stats {
+    pub scheduled: u64,
+    pub completed: u64,
+    pub displayed_late: u64,
+    pub dropped: u64,
+    pub buffered: u64,
+}
+
+/// An open output running scheduled playback.
+///
+/// Completion handling lives in the shim, not here: DeckLink's callback thread
+/// must not allocate, block, or take a lock, and exposing it to Rust would make
+/// that every call site's problem to remember (header rule 1).
+pub struct Output {
+    #[cfg(decklink_sdk_present)]
+    raw: *mut pmg_dl_output,
+    #[cfg(decklink_sdk_present)]
+    row_bytes: usize,
+    #[cfg(decklink_sdk_present)]
+    height: usize,
+}
+
+impl Output {
+    /// Open scheduled playback in `mode` with `preroll` frames queued before
+    /// playback starts.
+    ///
+    /// Preroll depth is one of the things spike S3 measures — starting on frame
+    /// one underruns immediately.
+    pub fn open(dev: &Device, mode: &Mode, key_mode: KeyMode, preroll: i32) -> Result<Self, Error> {
+        if !available() {
+            return Err(Error::NoSdk);
+        }
+        #[cfg(decklink_sdk_present)]
+        {
+            let cfg = pmg_dl_output_config {
+                mode: pmg_dl_mode {
+                    width: mode.width,
+                    height: mode.height,
+                    fps_num: mode.fps_num,
+                    fps_den: mode.fps_den,
+                    interlaced: mode.interlaced as i32,
+                    name: [0; 64],
+                },
+                key_mode: key_mode as i32,
+                paired_port: -1,
+                use_reference: 0,
+                preroll_frames: preroll,
+                audio_channels: 0,
+            };
+            let mut raw: *mut pmg_dl_output = std::ptr::null_mut();
+            // SAFETY: cfg is a local, out-pointer to a local; the shim writes
+            // null on every failure path.
+            let rc = unsafe { pmg_dl_output_open(dev.raw, &cfg, &mut raw) };
+            if rc != PMG_DL_OK || raw.is_null() {
+                return Err(Error::Failed(rc));
+            }
+            Ok(Output {
+                raw,
+                row_bytes: (mode.width as usize) * 4,
+                height: mode.height as usize,
+            })
+        }
+        #[cfg(not(decklink_sdk_present))]
+        {
+            let (_, _, _, _) = (dev, mode, key_mode, preroll);
+            Err(Error::NoSdk)
+        }
+    }
+
+    /// Schedule one 8-bit BGRA frame.
+    ///
+    /// Returns [`Error::Failed`] with [`PMG_DL_ERR_BUSY`] when DeckLink has not
+    /// yet returned a pool slot — the caller should back off one frame rather
+    /// than spin.
+    pub fn schedule_bgra(&self, fill: &[u8]) -> Result<(), Error> {
+        #[cfg(decklink_sdk_present)]
+        {
+            if fill.len() < self.row_bytes * self.height {
+                return Err(Error::Failed(PMG_DL_ERR_INTERNAL));
+            }
+            // SAFETY: length checked above; the shim copies out of this buffer
+            // synchronously into its own pooled frame before returning, so the
+            // slice does not need to outlive the call.
+            let rc = unsafe {
+                pmg_dl_output_schedule(
+                    self.raw,
+                    fill.as_ptr() as *const c_void,
+                    self.row_bytes as i32,
+                    std::ptr::null(),
+                    0,
+                    std::ptr::null(),
+                    0,
+                    0,
+                    0,
+                    0,
+                )
+            };
+            if rc != PMG_DL_OK {
+                return Err(Error::Failed(rc));
+            }
+            Ok(())
+        }
+        #[cfg(not(decklink_sdk_present))]
+        {
+            let _ = fill;
+            Err(Error::NoSdk)
+        }
+    }
+
+    pub fn stats(&self) -> Stats {
+        #[cfg(decklink_sdk_present)]
+        {
+            let mut s = pmg_dl_stats::default();
+            // SAFETY: out-pointer to a local; the shim only writes scalars.
+            if unsafe { pmg_dl_output_stats(self.raw, &mut s) } == PMG_DL_OK {
+                return Stats {
+                    scheduled: s.scheduled,
+                    completed: s.completed,
+                    displayed_late: s.displayed_late,
+                    dropped: s.dropped,
+                    buffered: s.buffered,
+                };
+            }
+        }
+        Stats::default()
+    }
+}
+
+impl Drop for Output {
+    fn drop(&mut self) {
+        #[cfg(decklink_sdk_present)]
+        // SAFETY: paired with pmg_dl_output_open; the shim stops playback and
+        // releases the pool.
+        unsafe {
+            pmg_dl_output_stop(self.raw);
+            pmg_dl_output_release(self.raw);
+        }
     }
 }
 

@@ -1,7 +1,7 @@
 # S3 — DeckLink output from Rust
 
 **Gates:** M0 → M2 · **Risk:** [R4](../RISKS.md#r4) · **ADR:** 0003
-**Status:** enumeration half done (2026-08-14) · output path not started · **Highest-risk spike in M0**
+**Status:** output path implemented (2026-08-14); soak blocked on a driver-extension approval + reboot · **Highest-risk spike in M0**
 
 ## Question
 
@@ -82,7 +82,33 @@ vertical slice.
 
 ## Result — enumeration half, 2026-08-14
 
-The output soak has **not** run. What has: device enumeration and capability
+The scheduled-output path is now written (`pmg_dl_output_*` in the shim,
+`decklink_sys::Output` in Rust, `pmgctl decklink out` to drive it). **The soak
+has not run**: updating Desktop Video 14.5 → 16.3 left a new framework talking to
+an old driver extension, and every device stopped enumerating. That needs an
+extension approval in System Settings and a reboot — see the fourth entry in
+`docs/INTEGRATION-NOTES.md`.
+
+Design decisions made while writing it, worth keeping:
+
+- **Frames are pre-rendered into a pool and scheduled from it.** Generating per
+  frame would put ~17.55 ms of CPU work in the loop and the soak would measure
+  the pattern generator instead of DeckLink's scheduling.
+- **The completion callback does two things**: bump a relaxed atomic counter, and
+  publish the freed pool slot into a single-producer ring via acquire/release.
+  No allocation, no lock, no I/O — header rule 1.
+- **Completion handling stays in the shim.** Exposing DeckLink's thread to Rust
+  would make rule 1 every call site's problem to remember.
+- **The output path deliberately does NOT use the versioned-IID fallback chain.**
+  Its methods sit past the common vtable prefix, so it requires a driver matching
+  the SDK and says so when open fails. Enumeration is the opposite case: it has
+  to work on whatever is in the building.
+- **Buffer access is obtained by QueryInterface, never by cast** —
+  `IDeckLinkVideoBuffer` (16.0, with StartAccess/EndAccess) falling back to
+  `IDeckLinkVideoFrame_v14_2_1::GetBytes`. A QI returns a pointer genuinely valid
+  for that interface; a cast across frame versions would not be.
+
+### The earlier enumeration findings What has: device enumeration and capability
 probing, via `pmgctl decklink list|modes|ref`. Three findings, all in
 `docs/INTEGRATION-NOTES.md` in full:
 
