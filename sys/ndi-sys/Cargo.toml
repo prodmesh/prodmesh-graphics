@@ -1,0 +1,15 @@
+[package]
+name = "ndi-sys"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+build = "build.rs"
+
+# The NDI runtime is loaded at runtime, never linked, so redistribution stays a
+# deployment question rather than a build-time commitment (ADR 0003 §Seam).
+
+[dependencies]
+
+[build-dependencies]

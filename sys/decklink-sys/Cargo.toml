@@ -1,0 +1,21 @@
+[package]
+name = "decklink-sys"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+links = "pmg_decklink"
+build = "build.rs"
+
+# All unsafe in this workspace lives in sys/. See ADR 0003.
+#
+# The DeckLink SDK is not vendored: it is licensed separately by Blackmagic and
+# is fetched by the developer into vendor/ (gitignored). Without it, build.rs
+# emits a cfg and the crate compiles to stubs, so `cargo build --workspace`
+# works on a machine that has never seen the SDK.
+
+[dependencies]
+
+[build-dependencies]
+# cc = "1"   # enabled once shim/pmg_decklink.cpp is implemented (spike S3)

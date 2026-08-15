@@ -1,0 +1,18 @@
+Copyright (c) 2026 Justin Beale. All rights reserved.
+
+This software and its source code are proprietary and confidential.
+
+No permission is granted to use, copy, modify, merge, publish, distribute,
+sublicense, or sell copies of this software, in whole or in part, by any party
+other than the copyright holder, except under a separate written agreement
+signed by the copyright holder.
+
+This notice is deliberate and is not an oversight. The sibling projects in the
+ProdMesh family are MIT-licensed; this one is not, because the commercial
+posture recorded in docs/VISION.md keeps productization open as a future
+decision. Choosing a permissive license later is easy. Un-choosing one is
+impossible. Any change to this file is a decision that belongs in an ADR.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.

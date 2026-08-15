@@ -1,0 +1,104 @@
+name: build
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # The job that ENFORCES the pure-set rule (ADR 0004).
+  #
+  # pmg-scene, pmg-layout, pmg-text, pmg-anim, pmg-render, and pmg-color may not
+  # depend on tokio, the filesystem, or any vendor SDK — because pmg-render has
+  # to compile to WASM unchanged for the Design canvas, which is the whole
+  # premise of ADR 0001.
+  #
+  # This job IS the enforcement. A lint would drift; a build that fails cannot be
+  # argued with. Do not make it non-blocking.
+  pure-set-wasm:
+    name: pure set builds for wasm32
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: '1.90.0'
+          targets: wasm32-unknown-unknown
+      - uses: Swatinem/rust-cache@v2
+      - run: |
+          cargo build --target wasm32-unknown-unknown \
+            -p pmg-scene -p pmg-layout -p pmg-text \
+            -p pmg-anim -p pmg-render -p pmg-color
+
+  rust:
+    name: rust (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, ubuntu-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: '1.90.0'
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+
+      - run: cargo fmt --all --check
+      - run: cargo clippy --workspace --all-targets -- -D warnings
+      # Builds without the DeckLink SDK present. That is a supported
+      # configuration, not a degraded one — see sys/decklink-sys/build.rs.
+      - run: cargo build --workspace
+      - run: cargo test --workspace
+
+      # The release gate, same as prodmesh-caption and prodmesh-rta. Must print
+      # PASS; grepping for it means a silent early exit fails the job.
+      - name: selftest
+        shell: bash
+        run: cargo run -q -p pmg-cli -- --selftest | tee /tmp/selftest.txt && grep -qx PASS /tmp/selftest.txt
+
+  web:
+    name: server + web
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - run: npm ci
+      - run: npm run lint
+      - run: npm run build
+      - run: npm run test:server
+      - run: npm run test:web
+
+  docs:
+    name: docs are internally consistent
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      # Every ADR carries a Seam section. "In-house now, product later" is only
+      # real if it is a per-decision fact rather than an aspiration in VISION.md
+      # (docs/VISION.md §Commercial posture).
+      - name: every ADR has a Seam section
+        run: |
+          missing=0
+          for f in docs/decisions/*.md; do
+            grep -q '^## Seam' "$f" || { echo "::error file=$f::ADR has no '## Seam' section"; missing=1; }
+          done
+          exit $missing
+      - name: internal doc links resolve
+        run: |
+          broken=0
+          while IFS= read -r line; do
+            src=${line%%:*}; target=${line#*:}
+            resolved=$(cd "$(dirname "$src")" && realpath -m "${target%%#*}")
+            [ -e "$resolved" ] || { echo "::error file=$src::broken link -> $target"; broken=1; }
+          done < <(grep -rHoE '\]\(([A-Za-z0-9._/-]+\.md)' docs README.md AGENTS.md \
+                     | sed -E 's/\]\(//' )
+          exit $broken

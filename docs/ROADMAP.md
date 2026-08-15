@@ -1,0 +1,225 @@
+# Roadmap
+
+The uber-plan. Seven milestones, each a shippable increment with a demonstrable
+outcome and a verification you can actually run. What is *deferred* at each stage
+is listed as deliberately as what ships — the deferrals are the plan.
+
+`docs/STATE.md` tracks where we actually are. This document is where we are
+going.
+
+| Milestone | Outcome | Gating spikes |
+|---|---|---|
+| **M0** | Scaffold, docs, CI. Learn whether the foundational bets hold. | S1, S3, S6 |
+| **M1** | The lower-third vertical slice, on NDI. | — |
+| **M2** | Layers, playlists, the operator, DeckLink. | S8 |
+| **M3** | Media, multi-output, genlock, colour. | S4, S5, S7, S9 |
+| **M4** | Control surfaces. | — |
+| **M5** | Authoring maturity. | S2 |
+| **M6** | Productization seams. | — |
+
+---
+
+## M0 — Skeleton and truth-finding
+
+**This milestone's purpose is to be allowed to fail.** Everything after it
+assumes three things are true that nobody has verified on this hardware: that a
+Rust renderer produces the same picture natively and in a browser, that DeckLink
+can be driven cleanly from Rust without dropping frames, and that WebGPU is
+usable in the booth's actual browsers. If S1 or S3 goes badly, ADRs 0001, 0002,
+and 0003 get revisited *before* M1 rather than after.
+
+**Ships**
+- Repo scaffold: Cargo workspace where all 17 crates build, `sys/` shims with
+  their hand-written headers, npm project with the Express server and the React
+  four-mode shell, `testdata/` layout.
+- `pmgctl --selftest` printing `PASS`.
+- CI: `build.yml` (cargo + the `wasm32-unknown-unknown` pure-set job + node tests
+  + the selftest gate), `parity.yml`, `release.yml` with tag-version verification.
+- The full document set — this file, the ADRs, the specs, the spike briefs.
+- Rust toolchain pinned and installed.
+
+**Spikes** — S1 render parity, S3 DeckLink output soak, S6 WebGPU in the browser.
+
+**Demonstrable:** selftest `PASS` in CI; a moving 1-pixel line on SDI for ten
+minutes with zero late frames; a triangle and a text block rendered identically
+in Chrome and natively, with the diff numbers written down.
+
+**Deferred:** everything else. No engine code beyond what a spike needs.
+
+---
+
+## M1 — The lower-third vertical slice
+
+Design a responsive lower third in the browser → publish → push to a node → type
+a name and title in Edit → take it on and off air with In and Out animation, over
+**NDI with key and fill**.
+
+This is the slice that proves the architecture, because it touches every layer
+once: scene format, layout, text, renderer, WASM designer, control server, PMG
+Link, CAS, and output.
+
+**Why NDI and not SDI.** M1 already requires the entire stack above to work for
+the first time. Adding hardware frame-timing risk on top of that is what turns a
+slice into a quarter. NDI is pure software, carries alpha natively, and the demo
+an operator sees is identical. The DeckLink spike still runs in M0, so we learn
+early; the DeckLink *backend* lands in M2 on a renderer that already works.
+
+**Ships**
+- SceneDoc v1: `box`, `text`, `shape`. Canonical CBOR, JSON mirror, round-trip
+  property test.
+- Flexbox layout with content sizing — the shrink-and-grow behaviour.
+- Text binding with the fixed transform set, and `visible_if`.
+- `In` and `Out` timelines, cubic easing, **transform-only animation**.
+- One node, one output, one layer, one Item.
+- Control server: templates, items, nodes REST; PMG Link; CAS with asset sync.
+- Design mode: a crude but real canvas — layer tree, properties panel, WASM
+  preview.
+- Show mode: a take button that tells the truth.
+
+**Verification**
+- `pmgctl --selftest` covers scene round-trip, layout goldens, timeline
+  evaluation.
+- `npm run test:slice` publishes a fixture template, boots a node with
+  `--output null`, fires a take, and asserts rendered frames at t=0/400/800 ms
+  against goldens.
+- The manual on-air checklist in `docs/TESTING.md`, run against a real NDI
+  receiver.
+
+**Deferred:** video, images, multiple layers, playlists, preview stream, auth,
+discovery (type the IP), multiple outputs, genlock, DeckLink.
+
+---
+
+## M2 — Layers, playlists, and the operator
+
+The milestone that makes it usable by someone who is not the person who built it.
+
+**Ships**
+- Named layer stacks per output; `clear-layer` and `clear-all`.
+- Item destinations; Playlists; Rundown ordering.
+- The full cue protocol: arm / take / take-out / update, `seq` and acks, the
+  replay ring, deadline rejection, resync after disconnect, `StateReport`
+  adoption.
+- mDNS discovery and node adoption in Configure — with manual IP entry always
+  available.
+- The ADR 0013 auth model: stations, users, groups, permissions, audit.
+- DeckLink output backend, including fill+key on two ports of one device.
+- MJPEG preview — deliberately the cheap version, to get pixels on screen.
+
+**Verification**
+- The chaos harness (S8) becomes a gating selftest: kill the link mid-cue,
+  blackhole it for 30 s, restart the server, restart the node, all while firing
+  1000 takes. Final on-air state must match intent exactly and **no take may
+  fire twice**.
+- A 20-item rundown across 3 layers running unattended for an hour with induced
+  disconnects, ending in the expected state.
+
+**Deferred:** video and audio, WebCodecs preview, multiple outputs, genlock,
+GPI/MIDI/OSC, RossTalk, Companion.
+
+---
+
+## M3 — Media, multi-output, and colour
+
+Where it stops being a graphics toy and starts being broadcast equipment.
+
+**Ships**
+- Images; video with alpha; frame-synced embedded audio on SDI channel pairs.
+- Server-side ingest transcode to an all-intra intermediate, with a clear
+  message when a source is rejected.
+- 1–4 phase-locked outputs per node; output groups and their render threads.
+- Genlock/reference configuration and lock status surfaced in Configure.
+- Per-output fill / key / fill+key / embedded alpha.
+- Colour space, matrix, and range configuration, with the test patterns that
+  prove them.
+- WebCodecs-over-WebSocket preview replacing MJPEG.
+
+**Verification**
+- S9's colour suite run against real hardware, with results recorded — dated and
+  hardware-attributed — in `docs/INTEGRATION-NOTES.md`.
+- A two-hour soak with video looping on one layer and lower thirds firing on
+  another: zero dropped output frames, measured A/V drift within a frame.
+
+**Deferred:** PTP, cross-node take synchronisation, dynamic data sources, timers.
+
+---
+
+## M4 — Control surfaces
+
+**The rule that shapes this milestone: the open WS/REST API is the only real
+surface, and every other one is a thin adapter over it.** Building five surfaces
+in parallel means five half-tested paths into a live show. One path, tested hard,
+with adapters on top.
+
+**Ships**
+- The documented, OpenAPI'd control API.
+- A Bitfocus Companion module → `~/Code/bitfocus-companion-modules`.
+- A RossTalk listener.
+- A DashBoard `.grid` panel → `~/Code/ross-dashboard-panels` (use the
+  `ross-dashboard-grid` skill).
+- GPI, OSC, and MIDI — **terminating at the node**, not at the server, because
+  that is what makes them work when the server is down.
+- ProdMesh-Control as a consumer of the API.
+
+**Verification:** every surface fires a take **with the control server stopped**.
+That single checklist item is the proof of the ADR 0009 invariant. Plus API
+contract tests.
+
+**Deferred:** anything that would put a surface in the program path.
+
+---
+
+## M5 — Authoring maturity
+
+The milestone that makes Design something a volunteer designer can use, rather
+than something the author of the format can use.
+
+**Ships**
+- Arbitrary named timelines beyond In/Out — Update, Highlight, Loop.
+- A keyframe editor with curves.
+- Masks, gradients, shadows, text effects.
+- Template variants and themes.
+- Sample-data preview; an asset browser; undo/redo.
+- Template revision UI, including "update on-air items" with a real diff.
+- The migration machinery exercised for real on a v1.0 → v1.1 step.
+
+**Verification:** the golden corpus grows past 50 templates, and S1's parity
+suite runs across all of them on every CI run.
+
+---
+
+## M6 — Productization seams
+
+**Ships**
+- Multi-screen destinations (the ProPresenter-subsumption groundwork from
+  `docs/VISION.md`).
+- Timers and utility data sources — the P1 input types.
+- Export and import bundles, with the `include_fonts` licensing flag.
+- Licensing hooks.
+- An installer, and documentation for someone outside our building.
+- PTPv2 investigation.
+- The honest evaluation of whether screen content should move here.
+
+**Deferred until proven necessary, deliberately:** node redundancy, SMPTE 2110,
+HDR. Each is a real project; none is a v1 problem, and designing for all three
+speculatively would cost more than adding any one of them later.
+
+---
+
+## Spikes and what they gate
+
+Each has a brief in `docs/spikes/` with its question, method, success bar, and a
+results section to fill in — dated and hardware-attributed, per family
+convention.
+
+| Spike | Question | Gates |
+|---|---|---|
+| **S1** | Do native wgpu and browser WebGPU produce the same picture? | M0 → M1 |
+| **S2** | Is Rust text good enough for broadcast, especially animated? | M5 |
+| **S3** | Can Rust drive DeckLink output cleanly for ten minutes? | M0 → M2 |
+| **S4** | What does reference actually phase-lock, across machines? | M3 |
+| **S5** | Can we seek and play frame-accurately with synced audio? | M3 |
+| **S6** | Is WebGPU usable in the booth's browsers? | M0 → M1 |
+| **S7** | What is glass-to-glass preview latency, and at what cost? | M3 |
+| **S8** | Does the cue path survive chaos without losing or duplicating? | M2 |
+| **S9** | Is the colour and key output numerically correct? | M3 |

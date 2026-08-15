@@ -1,0 +1,33 @@
+# Rust
+/target
+**/*.rs.bk
+
+# Node
+node_modules/
+dist/
+web/pkg/
+
+# Runtime state — never committed
+data/
+*.db
+*.db-wal
+*.db-shm
+
+# Vendor SDKs — licensed separately, fetched by the developer (ADR 0003)
+sys/decklink-sys/vendor/
+sys/ndi-sys/vendor/
+
+# Secrets and local config
+.env
+.env.local
+config.local.json
+.claude/settings.local.json
+
+# OS / editor
+.DS_Store
+*.swp
+.idea/
+.vscode/
+
+# Spike scratch output — results go in docs/spikes/, not the artefacts
+/spike-out/

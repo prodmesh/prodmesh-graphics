@@ -1,0 +1,20 @@
+[package]
+name = "pmg-node"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[[bin]]
+name = "pmg-node"
+path = "src/main.rs"
+
+[dependencies]
+anyhow = { workspace = true }
+tracing = { workspace = true }
+pmg-scene = { path = "../pmg-scene" }
+pmg-anim = { path = "../pmg-anim" }
+pmg-color = { path = "../pmg-color" }
+pmg-cas = { path = "../pmg-cas" }
+pmg-proto = { path = "../pmg-proto" }

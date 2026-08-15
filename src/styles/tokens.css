@@ -1,0 +1,63 @@
+/* Design tokens — the single place colours, radii, and type live.
+   Feature CSS references these vars and never hard-codes a hex value.
+
+   Deliberately identical to ProdMesh-Control's src/styles/tokens.css. An
+   operator moving between the two apps should not feel they changed products,
+   and we should not invent a second answer to a solved problem. */
+:root {
+  /* Surfaces */
+  --bg: #090d11;
+  --bg-sidebar: #0c1117;
+  --bg-raised: #10161d;
+  --bg-tile: #151d26;
+  --bg-tile-hover: #1a2530;
+  --border: #27323d;
+  --border-subtle: #1b242d;
+  --border-strong: #3a4856;
+
+  /* Text */
+  --text: #edf2f7;
+  --text-dim: #95a2af;
+  --text-faint: #65717d;
+  --text-on-accent: #07111c;
+
+  /* Accents */
+  --accent: #52a8ff;
+  --accent-hover: #78bbff;
+  --accent-text: #9fd0ff;
+  --accent-soft: rgba(82, 168, 255, 0.1);
+  --accent-border: rgba(82, 168, 255, 0.34);
+  --ok: #43d17d;
+  --ok-soft: rgba(52, 199, 89, 0.12);
+  --ok-border: rgba(52, 199, 89, 0.35);
+  --warn: #ffb020;
+  --warn-text: #ffcf70;
+  --warn-soft: rgba(255, 176, 32, 0.12);
+  --warn-border: rgba(255, 176, 32, 0.4);
+  --danger: #ff6b6b;
+  --danger-soft: rgba(255, 107, 107, 0.5);
+  --purple-text: #c79bff;
+  --purple-soft: rgba(175, 123, 240, 0.14);
+  --purple-border: rgba(175, 123, 240, 0.45);
+
+  /* On air. The one colour this app adds to the family palette, and the only
+     thing it may ever mean. Never reuse it for a warning or an error. */
+  --on-air: #ff3b30;
+  --on-air-soft: rgba(255, 59, 48, 0.14);
+  --on-air-border: rgba(255, 59, 48, 0.5);
+
+  /* Shape */
+  --radius-sm: 4px;
+  --radius: 6px;
+  --radius-lg: 8px;
+  --radius-xl: 10px;
+
+  /* Type */
+  --font-ui: 'IBM Plex Sans Variable', -apple-system, BlinkMacSystemFont,
+    'Segoe UI', system-ui, sans-serif;
+  --font-mono: 'IBM Plex Mono', 'SFMono-Regular', Consolas, monospace;
+
+  /* Layout */
+  --sidebar-w: 236px;
+  --sidebar-rail: 62px;
+}

@@ -1,0 +1,52 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/pmg-scene",
+    "crates/pmg-layout",
+    "crates/pmg-text",
+    "crates/pmg-anim",
+    "crates/pmg-render",
+    "crates/pmg-color",
+    "crates/pmg-media",
+    "crates/pmg-audio",
+    "crates/pmg-cas",
+    "crates/pmg-proto",
+    "crates/pmg-node",
+    "crates/pmg-out-ndi",
+    "crates/pmg-out-decklink",
+    "crates/pmg-out-window",
+    "crates/pmg-preview",
+    "crates/pmg-wasm",
+    "crates/pmg-cli",
+    "sys/decklink-sys",
+    "sys/ndi-sys",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.90"
+license = "LicenseRef-Proprietary"
+publish = false
+
+# Keep this in lockstep with package.json — the server and the node ship as a
+# matched pair, and a version skew between them is a show-stopper (ADR 0004).
+
+[workspace.dependencies]
+# --- The pure set may use only these. No tokio, no std::fs, no vendor SDKs.
+#     Enforced by the required wasm32-unknown-unknown CI job (ADR 0004).
+serde = { version = "1", features = ["derive"] }
+thiserror = "2"
+
+# --- Everything else. Available to non-pure crates only.
+anyhow = "1"
+tracing = "0.1"
+
+[profile.release]
+# A late frame is a visible glitch. Optimise for consistent frame time rather
+# than for build speed or binary size.
+opt-level = 3
+lto = "thin"
+codegen-units = 1
+panic = "unwind"          # the node catches and reports rather than dying
+debug = 1                 # keep symbols: a crash on a Sunday needs a backtrace

@@ -1,0 +1,12 @@
+# Pinned deliberately. The renderer must produce identical output from the
+# native and the wasm32 builds (ADR 0001, spike S1), and a floating toolchain is
+# one more thing that can move between them.
+#
+# The wasm32-unknown-unknown target is not optional: the CI job that builds the
+# pure set for it IS the enforcement of the "no I/O, no platform" rule in
+# ADR 0004. A lint would drift; a failing build cannot.
+[toolchain]
+channel = "1.90.0"
+components = ["rustfmt", "clippy"]
+targets = ["wasm32-unknown-unknown"]
+profile = "minimal"

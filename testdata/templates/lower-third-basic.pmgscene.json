@@ -1,0 +1,139 @@
+{
+  "format": "pmg.scene",
+  "format_version": { "major": 1, "minor": 0 },
+  "min_reader": 1,
+  "id": "01J8ZKLOWERTHIRDBASIC0001",
+  "name": "Lower Third — Speaker",
+
+  "canvas": { "width": 1920, "height": 1080, "safe": { "action": 0.93, "title": 0.90 } },
+
+  "fields": [
+    { "key": "name",  "type": "text", "label": "Name",  "required": true,
+      "max_len": 40, "sample": "Pastor Dan Whitfield" },
+    { "key": "title", "type": "text", "label": "Title", "sample": "Lead Pastor" }
+  ],
+
+  "fonts": [
+    { "family": "IBM Plex Sans", "weight": 600, "style": "normal", "asset": "blake3:0000000000000000000000000000000000000000000000000000000000000000" },
+    { "family": "IBM Plex Sans", "weight": 400, "style": "normal", "asset": "blake3:0000000000000000000000000000000000000000000000000000000000000000" }
+  ],
+  "assets": [],
+
+  "root": {
+    "id": "root",
+    "display_name": "Root",
+    "kind": "box",
+    "layout": { "width": { "Px": 1920 }, "height": { "Px": 1080 }, "direction": "column",
+                "justify": "end", "align": "start",
+                "padding": { "top": 0, "right": 0, "bottom": 120, "left": 140 } },
+    "children": [
+      {
+        "id": "band",
+        "display_name": "Band",
+        "kind": "box",
+
+        "//": "width:Content is the whole responsive trick. The band sizes to the text it contains, ONCE, when data binds. The reveal below is a transform, which costs nothing per frame (docs/specs/scene-format.md §3.2).",
+        "layout": { "direction": "column", "width": "Content", "height": "Content",
+                    "align": "start", "gap": 2,
+                    "padding": { "top": 18, "right": 34, "bottom": 18, "left": 28 },
+                    "max_width": { "Px": 1200 } },
+
+        "transform": { "translate": [0, 0], "anchor": [0, 0.5] },
+        "style": { "fill": { "rgba": [0.03, 0.05, 0.07, 0.92] }, "radius": 4 },
+        "clip": true,
+
+        "children": [
+          {
+            "id": "name",
+            "display_name": "Name",
+            "kind": "text",
+            "layout": { "width": "Content", "height": "Content" },
+            "transform": { "translate": [0, 0] },
+            "content": {
+              "kind": "text",
+              "binding": { "expr": "${name}", "transform": ["trim", "ellipsize:40"] },
+              "font": { "family": "IBM Plex Sans", "weight": 600, "size": 46,
+                        "features": ["kern", "liga"], "line_height": 1.1 },
+              "align": "start", "wrap": "none"
+            },
+            "style": { "fill": { "rgba": [0.93, 0.95, 0.97, 1.0] } }
+          },
+          {
+            "id": "title",
+            "display_name": "Title",
+            "kind": "text",
+
+            "//": "visible_if REMOVES this from layout, so the band collapses to one line when there is no title. Interpolation alone cannot express that — it is why the field exists (docs/specs/scene-format.md §5.3).",
+            "visible_if": { "field": "title", "op": "non_empty" },
+
+            "layout": { "width": "Content", "height": "Content" },
+            "transform": { "translate": [0, 0] },
+            "content": {
+              "kind": "text",
+              "binding": { "expr": "${title}", "transform": ["trim", "ellipsize:56"] },
+              "font": { "family": "IBM Plex Sans", "weight": 400, "size": 26,
+                        "features": ["kern"], "tracking": 0.02, "line_height": 1.2 },
+              "align": "start", "wrap": "none"
+            },
+            "style": { "fill": { "rgba": [0.58, 0.64, 0.69, 1.0] } }
+          }
+        ]
+      }
+    ]
+  },
+
+  "timelines": [
+    {
+      "name": "In",
+      "duration_ms": 800,
+      "on_complete": "hold",
+      "loop": false,
+      "//": "Targets are node_id/property. Ids are stable forever, so reordering or renaming a layer can never break this (docs/specs/scene-format.md §3.1). Every target here is transform.* or style.* — nothing forces a relayout.",
+      "tracks": [
+        { "target": "band/transform.translate.x", "blend": "replace",
+          "keys": [ { "t": 0,   "v": -900, "ease": { "cubic": [0.16, 1.0, 0.3, 1.0] } },
+                    { "t": 700, "v": 0 } ] },
+        { "target": "band/style.opacity", "blend": "replace",
+          "keys": [ { "t": 0,   "v": 0, "ease": "linear" },
+                    { "t": 240, "v": 1 } ] },
+        { "target": "title/transform.translate.y", "blend": "replace",
+          "keys": [ { "t": 0,   "v": 24, "ease": { "cubic": [0.2, 0.0, 0.0, 1.0] } },
+                    { "t": 300, "v": 24 },
+                    { "t": 800, "v": 0 } ] },
+        { "target": "title/style.opacity", "blend": "replace",
+          "keys": [ { "t": 0,   "v": 0, "ease": "linear" },
+                    { "t": 320, "v": 0 },
+                    { "t": 640, "v": 1 } ] }
+      ]
+    },
+    {
+      "name": "Out",
+      "duration_ms": 420,
+      "on_complete": "evict",
+      "loop": false,
+      "tracks": [
+        { "target": "band/transform.translate.x", "blend": "replace",
+          "keys": [ { "t": 0,   "v": 0, "ease": { "cubic": [0.7, 0.0, 0.84, 0.0] } },
+                    { "t": 420, "v": -900 } ] },
+        { "target": "band/style.opacity", "blend": "replace",
+          "keys": [ { "t": 0,   "v": 1, "ease": "linear" },
+                    { "t": 380, "v": 0 } ] }
+      ]
+    },
+    {
+      "name": "Update",
+      "duration_ms": 300,
+      "on_complete": "hold",
+      "loop": false,
+      "//": "Played by an explicit Timeline cue when the data of a live item changes, so a name swap does not require a take out and a take.",
+      "tracks": [
+        { "target": "name/style.opacity", "blend": "replace",
+          "keys": [ { "t": 0,   "v": 1, "ease": "linear" },
+                    { "t": 120, "v": 0 },
+                    { "t": 300, "v": 1 } ] }
+      ]
+    }
+  ],
+
+  "ext": {}
+}

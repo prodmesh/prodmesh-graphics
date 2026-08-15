@@ -1,0 +1,59 @@
+name: parity
+
+# Spike S1's success bar, as a permanent gate (docs/spikes/S1-render-parity.md).
+#
+# Two INDEPENDENT numbers, reported separately on purpose:
+#
+#   - channel delta       a shade one step off is a GPU backend difference we
+#                         have already accepted (risk R1)
+#   - geometric displacement   a glyph two pixels to the left is a failure of the
+#                         design promise itself, and the bar is ZERO
+#
+# Combining them into one score would hide the one that matters.
+#
+# Disabled until pmg-render can draw something. Enabling it is part of M0's
+# spike S1.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'crates/pmg-render/**'
+      - 'crates/pmg-layout/**'
+      - 'crates/pmg-text/**'
+      - 'crates/pmg-scene/**'
+      - 'crates/pmg-wasm/**'
+      - 'testdata/**'
+  pull_request:
+    paths:
+      - 'crates/pmg-render/**'
+      - 'crates/pmg-layout/**'
+      - 'crates/pmg-text/**'
+      - 'crates/pmg-scene/**'
+      - 'crates/pmg-wasm/**'
+      - 'testdata/**'
+  workflow_dispatch:
+
+jobs:
+  golden:
+    name: native vs wasm golden diff
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: '1.90.0'
+          targets: wasm32-unknown-unknown
+      - uses: Swatinem/rust-cache@v2
+
+      - name: not yet enabled
+        run: |
+          echo "Spike S1 has not run — see docs/spikes/S1-render-parity.md."
+          echo "This job turns on when pmg-render can draw a triangle and a text block."
+          exit 0
+
+      # - run: cargo run -p pmg-cli -- render-golden testdata/templates --out /tmp/native
+      # - run: wasm-pack build crates/pmg-wasm --target web --out-dir ../../web/pkg
+      # - run: node tools/render-wasm-golden.mjs testdata/templates /tmp/wasm
+      # - run: cargo run -p pmg-cli -- golden-diff /tmp/native /tmp/wasm \
+      #          --max-channel-delta 2 --min-within-1-255 99.9 --max-displacement 0

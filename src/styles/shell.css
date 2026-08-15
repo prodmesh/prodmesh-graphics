@@ -1,0 +1,63 @@
+.shell { display: flex; height: 100%; }
+
+.shell__sidebar {
+  width: var(--sidebar-w);
+  flex: 0 0 auto;
+  background: var(--bg-sidebar);
+  border-right: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  padding: 14px 10px;
+  gap: 4px;
+}
+
+.shell__brand {
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  padding: 4px 10px 14px;
+}
+.shell__brand span { color: var(--text-faint); font-weight: 400; }
+
+.shell__nav { display: flex; flex-direction: column; gap: 2px; }
+
+.shell__link {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 9px 10px;
+  border-radius: var(--radius);
+  color: var(--text-dim);
+  text-decoration: none;
+  /* Touch targets: Show is used on a booth touchscreen under time pressure. */
+  min-height: 40px;
+}
+.shell__link:hover { background: var(--bg-tile-hover); color: var(--text); }
+.shell__link--active {
+  background: var(--accent-soft);
+  border: 1px solid var(--accent-border);
+  color: var(--accent-text);
+}
+
+.shell__hint {
+  margin-top: auto;
+  padding: 10px;
+  font-size: 12px;
+  color: var(--text-faint);
+  border-top: 1px solid var(--border-subtle);
+}
+
+.shell__main { flex: 1 1 auto; overflow: auto; padding: 22px 26px; }
+
+.mode__stub {
+  border: 1px dashed var(--border-strong);
+  border-radius: var(--radius-lg);
+  padding: 20px;
+  color: var(--text-dim);
+  max-width: 62ch;
+}
+.mode__stub code { color: var(--accent-text); }
+
+@media (max-width: 860px) {
+  .shell__sidebar { width: var(--sidebar-rail); }
+  .shell__brand, .shell__link span, .shell__hint { display: none; }
+}
