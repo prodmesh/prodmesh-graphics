@@ -346,14 +346,20 @@ fn out(args: &[String]) -> Result<()> {
     println!("  preroll            {preroll} frames");
     println!("  pattern            {pattern_name} (pre-rendered pool, not generated per frame)");
 
-    // Pre-render one cycle of the pattern. `line` sweeps across the width, so a
-    // full cycle is `width` frames — enough to see tearing without regenerating.
+    // Pre-render a short cycle of the pattern.
+    //
+    // CAP THIS. A full width-length sweep at 1080p is 1920 frames x 8.29 MB =
+    // ~16 GB, which is reckless on a dev box and fatal on a booth machine. The
+    // line's job here is to reveal tearing and stutter, and a one-second loop
+    // does that as well as a full sweep.
+    const MAX_POOL_FRAMES: u64 = 60;
     let pool_len = if pattern == Pattern::MovingLine {
-        mode.width as u64
+        (mode.width as u64).min(MAX_POOL_FRAMES)
     } else {
         1
     };
-    println!("  pre-rendering      {pool_len} frame(s)…");
+    let pool_mb = (mode.width as u64 * mode.height as u64 * 4 * pool_len) / (1024 * 1024);
+    println!("  pre-rendering      {pool_len} frame(s), ~{pool_mb} MB…");
     let t0 = std::time::Instant::now();
     let pool: Vec<Vec<u8>> = (0..pool_len)
         .map(|i| {
@@ -388,8 +394,12 @@ fn out(args: &[String]) -> Result<()> {
                 // Pool exhausted: DeckLink has not returned a frame yet. Back
                 // off rather than spin — a busy-wait here would steal CPU from
                 // the very thread we are measuring.
+                //
+                // Sleep a quarter-frame rather than a fixed 500 us. At 500 us
+                // this loop woke ~17 times per frame to do nothing, which is
+                // noise in the measurement and heat in the room.
                 backoffs += 1;
-                std::thread::sleep(std::time::Duration::from_micros(500));
+                std::thread::sleep(std::time::Duration::from_micros((budget_ms * 250.0) as u64));
             }
         }
 
@@ -407,11 +417,15 @@ fn out(args: &[String]) -> Result<()> {
         }
     }
 
+    // Time the scheduling window itself. The drain wait below must not be
+    // counted, or the reported rate is depressed by a fixed half second.
+    let sched_elapsed = start.elapsed().as_secs_f64();
+
     // Let the tail of the queue drain before reading final counters, or the
     // last few frames show as scheduled-but-not-completed and look like a fault.
     std::thread::sleep(std::time::Duration::from_millis(500));
     let s = output.stats();
-    let elapsed = start.elapsed().as_secs_f64();
+    let elapsed = sched_elapsed;
 
     println!("\n--- result ---");
     println!("  elapsed            {elapsed:.2}s");
