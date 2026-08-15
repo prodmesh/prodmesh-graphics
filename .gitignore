@@ -31,3 +31,6 @@ config.local.json
 
 # Spike scratch output — results go in docs/spikes/, not the artefacts
 /spike-out/
+
+# TypeScript incremental build state
+*.tsbuildinfo
