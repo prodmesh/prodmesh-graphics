@@ -28,6 +28,8 @@ import { declare, report } from './health.js'
 import { router as healthRouter } from './routes/health.js'
 import { router as templatesRouter } from './routes/templates.js'
 import { router as itemsRouter } from './routes/items.js'
+import { router as cueRouter } from './routes/cue.js'
+import * as nodeLink from './nodeLink.js'
 import * as cas from './cas.js'
 import { open as openDb } from './db.js'
 import { SCENE_READER_MAJOR } from './manifest.js'
@@ -55,10 +57,19 @@ export function createApp() {
   report('server', 'ok')
 
   registerCueLogTopics()
+  nodeLink.registerTopics()
 
   app.use(healthRouter)
   app.use(templatesRouter)
   app.use(itemsRouter)
+  app.use(cueRouter)
+
+  app.get('/api/nodes', (_req, res) => res.json({ nodes: nodeLink.list() }))
+  app.get('/api/nodes/:id', (req, res) => {
+    const n = nodeLink.get(req.params.id)
+    if (!n) return res.status(404).json({ error: 'not_found', label: 'No node with that id has connected.' })
+    res.json(n)
+  })
   app.get('/api/stream', handleStream)
   app.get('/cas/:hash', cas.handleGet)
   app.head('/cas/:hash', cas.handleGet)
@@ -116,7 +127,11 @@ export function createApp() {
 
 // Only listen when run directly, so tests can import createApp() freely.
 if (process.argv[1] && import.meta.url === `file://${process.argv[1]}`) {
-  createApp().listen(PORT, () => {
+  const server = createApp().listen(PORT, () => {
     console.log(`ProdMesh Graphics control server on :${PORT} (M1)`)
   })
+  // PMG Link shares the HTTP listener: it is a WebSocket upgrade on /link, so
+  // it needs the server object rather than the app. Assets and preview stay
+  // elsewhere on purpose (pmg-link.md §0).
+  nodeLink.attach(server)
 }

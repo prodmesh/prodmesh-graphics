@@ -1,0 +1,213 @@
+//! The wire contract, tested as a contract.
+//!
+//! Two ends speak this protocol and only one of them is written in Rust. So
+//! these tests do two jobs: check the Rust round trip, and **emit a fixture the
+//! JavaScript server's tests decode**, so a change to either side that breaks
+//! the other fails somewhere rather than nowhere.
+//!
+//! The fixture is checked in. Regenerating it is the deliberate act of changing
+//! the protocol.
+
+use pmg_proto::*;
+use std::collections::BTreeMap;
+
+fn sample_cue() -> Cue {
+    Cue {
+        cue_id: "01JAQ8Z3K7V2N5R9T1W4Y6B8C0".into(),
+        seq: 8813,
+        epoch: 19,
+        deadline_ms: Some(DEFAULT_TAKE_DEADLINE_MS),
+        at: None,
+        op: CueOp::Take {
+            item: "01JBQ8Z3K7V2N5R9T1W4Y6B8C0".into(),
+            output: "out-0".into(),
+            layer: "Lower Third".into(),
+        },
+    }
+}
+
+fn sample_hello() -> Hello {
+    Hello {
+        proto_ver: PROTO_VER,
+        node_id: "01JNODE0000000000000000000".into(),
+        boot_id: "01JBOOT0000000000000000000".into(),
+        name: "Booth-1".into(),
+        version: "0.1.0".into(),
+        assignment_gen: Some(41),
+        last_applied_seq: 8812,
+        capabilities: Capabilities {
+            outputs: vec![OutputCapability {
+                device: "DeckLink Quad 2 (0)".into(),
+                kind: "decklink".into(),
+                index: 0,
+                modes: vec!["1080p5994".into(), "1080i5994".into()],
+                supports_key_fill: true,
+                paired_port: Some(1),
+                has_genlock: true,
+                genlock_locked: false,
+                ref_format: None,
+                audio_pairs: 8,
+            }],
+            gpu: Some(GpuCapability {
+                adapter: "Apple M3 Max".into(),
+                backend: "Metal".into(),
+                max_texture_2d: 16384,
+            }),
+            decoders: vec!["prores".into(), "hap".into()],
+            max_layers: 8,
+            scene_reader_major: SCENE_READER_MAJOR,
+        },
+    }
+}
+
+#[test]
+fn messages_round_trip() {
+    let msgs = vec![
+        ToNode::Welcome(Welcome {
+            server_id: "01JSRV0000000000000000000".into(),
+            epoch: 19,
+            resume_from_seq: Some(8813),
+            time_ref: TimeRef {
+                utc_ms: 1_786_487_930_986,
+                monotonic_ns: 42,
+            },
+        }),
+        ToNode::Cue(sample_cue()),
+        ToNode::AssignmentOffer {
+            gen: 42,
+            digest: "blake3:aa".into(),
+        },
+        ToNode::Resync {
+            reason: "gap exceeded the replay ring".into(),
+        },
+    ];
+    for m in msgs {
+        let back: ToNode = decode(&encode(&m).unwrap()).unwrap();
+        assert_eq!(back, m);
+    }
+
+    let hello = ToServer::Hello(sample_hello());
+    assert_eq!(decode::<ToServer>(&encode(&hello).unwrap()).unwrap(), hello);
+}
+
+#[test]
+fn arm_and_preload_carry_no_deadline_expectation() {
+    // A deadline exists to stop a graphic appearing four seconds late. Arming
+    // is invisible, so being late costs nothing and rejecting it would be
+    // strictness with no purpose behind it.
+    let arm = CueOp::Arm {
+        item: "i".into(),
+        output: "o".into(),
+        layer: "l".into(),
+    };
+    assert!(!arm.is_deadline_bearing());
+    assert!(!CueOp::Preload { item: "i".into() }.is_deadline_bearing());
+
+    assert!(CueOp::TakeOut {
+        output: "o".into(),
+        layer: "l".into()
+    }
+    .is_deadline_bearing());
+    assert!(CueOp::ClearAll { output: "o".into() }.is_deadline_bearing());
+}
+
+#[test]
+fn every_visible_op_names_its_output() {
+    // Routing to the right render thread depends on this, and a `None` here
+    // would silently send a take to no output at all.
+    for op in [
+        CueOp::Take {
+            item: "i".into(),
+            output: "out-1".into(),
+            layer: "l".into(),
+        },
+        CueOp::Update {
+            output: "out-1".into(),
+            layer: "l".into(),
+            data: BTreeMap::new(),
+        },
+        CueOp::ClearAll {
+            output: "out-1".into(),
+        },
+        CueOp::Timeline {
+            output: "out-1".into(),
+            layer: "l".into(),
+            name: "In".into(),
+            action: TimelineAction::Goto { t_ms: 200 },
+        },
+    ] {
+        assert_eq!(op.output(), Some("out-1"), "{op:?}");
+    }
+}
+
+#[test]
+fn numbers_bind_without_a_trailing_point_zero() {
+    // A score of 3 must read "3". `format!("{}", 3.0f64)` gives "3", but the
+    // path through an f64 is exactly where a stray ".0" creeps in, and it is
+    // the kind of thing nobody notices until it is on a scoreboard.
+    assert_eq!(DataValue::Number(3.0).as_binding_str(), "3");
+    assert_eq!(DataValue::Number(-7.0).as_binding_str(), "-7");
+    assert_eq!(DataValue::Number(1.5).as_binding_str(), "1.5");
+    assert_eq!(
+        DataValue::Text("Pastor Dan".into()).as_binding_str(),
+        "Pastor Dan"
+    );
+}
+
+/// Write the fixture the JavaScript side decodes.
+///
+/// Run with `cargo test -p pmg-proto -- --ignored write_wire_fixture` after a
+/// deliberate protocol change. It is ignored by default so a normal test run
+/// never rewrites the thing the other side is being checked against — a fixture
+/// that regenerates itself proves only that the code agrees with itself.
+#[test]
+#[ignore]
+fn write_wire_fixture() {
+    let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../testdata/proto")
+        .canonicalize()
+        .unwrap_or_else(|_| {
+            let p = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../testdata/proto");
+            std::fs::create_dir_all(&p).unwrap();
+            p
+        });
+    std::fs::create_dir_all(&dir).unwrap();
+
+    std::fs::write(
+        dir.join("cue.cbor"),
+        encode(&ToNode::Cue(sample_cue())).unwrap(),
+    )
+    .unwrap();
+    std::fs::write(
+        dir.join("hello.cbor"),
+        encode(&ToServer::Hello(sample_hello())).unwrap(),
+    )
+    .unwrap();
+    std::fs::write(
+        dir.join("ack.cbor"),
+        encode(&ToServer::CueAck(CueAck {
+            seq: 8813,
+            cue_id: "01JAQ8Z3K7V2N5R9T1W4Y6B8C0".into(),
+            result: CueResult::Applied,
+            reason: None,
+            fired_at_frame: Some(1_841_944),
+            at_utc: 1_786_487_930_986,
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    std::fs::write(
+        dir.join("reject.cbor"),
+        encode(&ToServer::CueAck(CueAck {
+            seq: 8814,
+            cue_id: "01JAQ8Z3K7V2N5R9T1W4Y6B8C1".into(),
+            result: CueResult::Rejected,
+            reason: Some(RejectReason::DeadlinePassed),
+            fired_at_frame: None,
+            at_utc: 1_786_487_931_486,
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    eprintln!("wrote wire fixtures to {}", dir.display());
+}
