@@ -11,6 +11,9 @@
 import express from 'express'
 import * as rundown from '../rundown.js'
 import { handle } from '../db.js'
+import { requirePermission } from '../auth.js'
+
+const mayEdit = requirePermission('graphics.rundown.edit')
 
 export const router = express.Router()
 
@@ -31,13 +34,13 @@ router.get('/api/playlists/:id', (req, res) => {
   res.json(p)
 })
 
-router.post('/api/playlists', (req, res) => {
+router.post('/api/playlists', mayEdit, (req, res) => {
   const name = String(req.body?.name ?? '').trim()
   if (!name) return fail(res, 422, 'validation_failed', 'A playlist needs a name.')
   res.status(201).json(rundown.createPlaylist(name))
 })
 
-router.put('/api/playlists/:id/items', (req, res) => {
+router.put('/api/playlists/:id/items', mayEdit, (req, res) => {
   if (!rundown.getPlaylist(req.params.id)) {
     return fail(res, 404, 'not_found', 'There is no playlist with that id.')
   }
@@ -59,7 +62,7 @@ router.put('/api/playlists/:id/items', (req, res) => {
   res.json(rundown.setPlaylistItems(req.params.id, ids))
 })
 
-router.delete('/api/playlists/:id', (req, res) => {
+router.delete('/api/playlists/:id', mayEdit, (req, res) => {
   const info = handle().prepare('DELETE FROM playlists WHERE id = ?').run(req.params.id)
   if (!info.changes) return fail(res, 404, 'not_found', 'There is no playlist with that id.')
   res.status(204).end()
@@ -77,13 +80,13 @@ router.get('/api/rundowns/:id', (req, res) => {
   res.json(r)
 })
 
-router.post('/api/rundowns', (req, res) => {
+router.post('/api/rundowns', mayEdit, (req, res) => {
   const name = String(req.body?.name ?? '').trim()
   if (!name) return fail(res, 422, 'validation_failed', 'A rundown needs a name.')
   res.status(201).json(rundown.createRundown(name))
 })
 
-router.put('/api/rundowns/:id/playlists', (req, res) => {
+router.put('/api/rundowns/:id/playlists', mayEdit, (req, res) => {
   if (!rundown.getRundown(req.params.id)) {
     return fail(res, 404, 'not_found', 'There is no rundown with that id.')
   }
@@ -117,7 +120,7 @@ router.get('/api/rundowns/:id/cursor', (req, res) => {
  * "the rundown is here, the output is showing something else" instead of
  * pretending they cannot differ.
  */
-router.put('/api/rundowns/:id/cursor', (req, res) => {
+router.put('/api/rundowns/:id/cursor', requirePermission('graphics.operate'), (req, res) => {
   if (!rundown.getRundown(req.params.id)) {
     return fail(res, 404, 'not_found', 'There is no rundown with that id.')
   }

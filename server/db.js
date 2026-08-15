@@ -17,7 +17,7 @@ import Database from 'better-sqlite3'
 import fs from 'node:fs'
 import path from 'node:path'
 
-export const SCHEMA_VERSION = 4
+export const SCHEMA_VERSION = 5
 
 let db = null
 
@@ -193,6 +193,73 @@ const MIGRATIONS = [
         item_id    TEXT,
         updated_at INTEGER NOT NULL
       );
+    `)
+  },
+
+  // 5 — stations, users, groups, permissions, sessions, audit (ADR 0013).
+  //
+  // No PIN and no token is stored in a form that could be handed back: PINs are
+  // scrypt-hashed with a per-user salt, and session and station tokens are
+  // stored only as their SHA-256. A stolen copy of this file does not yield a
+  // live session.
+  (d) => {
+    d.exec(`
+      CREATE TABLE users (
+        id           TEXT PRIMARY KEY,
+        username     TEXT NOT NULL UNIQUE,
+        display_name TEXT,
+        pin_salt     TEXT NOT NULL,
+        pin_hash     TEXT NOT NULL,
+        created_at   INTEGER NOT NULL
+      );
+
+      CREATE TABLE groups (
+        id         TEXT PRIMARY KEY,
+        name       TEXT NOT NULL UNIQUE,
+        created_at INTEGER NOT NULL
+      );
+
+      CREATE TABLE group_permissions (
+        group_id   TEXT NOT NULL REFERENCES groups(id) ON DELETE CASCADE,
+        permission TEXT NOT NULL,
+        PRIMARY KEY (group_id, permission)
+      );
+
+      CREATE TABLE user_groups (
+        user_id  TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        group_id TEXT NOT NULL REFERENCES groups(id) ON DELETE CASCADE,
+        PRIMARY KEY (user_id, group_id)
+      );
+
+      -- A station is an identity for the audit log, and a scope if someone
+      -- later marks it trusted. Registration grants nothing.
+      CREATE TABLE stations (
+        id         TEXT PRIMARY KEY,
+        name       TEXT NOT NULL,
+        token_hash TEXT NOT NULL UNIQUE,
+        trusted    INTEGER NOT NULL DEFAULT 0,
+        scope      TEXT,
+        created_at INTEGER NOT NULL
+      );
+
+      CREATE TABLE sessions (
+        token_hash TEXT PRIMARY KEY,
+        user_id    TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        station_id TEXT,
+        created_at INTEGER NOT NULL,
+        expires_at INTEGER NOT NULL
+      );
+
+      CREATE TABLE audit_log (
+        id         INTEGER PRIMARY KEY AUTOINCREMENT,
+        at_utc     INTEGER NOT NULL,
+        user_id    TEXT,
+        station_id TEXT,
+        action     TEXT NOT NULL,
+        result     TEXT NOT NULL,
+        detail     TEXT
+      );
+      CREATE INDEX audit_log_recent ON audit_log(at_utc DESC);
     `)
   },
 ]

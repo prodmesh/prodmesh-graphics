@@ -30,6 +30,9 @@ import { router as templatesRouter } from './routes/templates.js'
 import { router as itemsRouter } from './routes/items.js'
 import { router as cueRouter } from './routes/cue.js'
 import { router as rundownRouter } from './routes/rundown.js'
+import { router as authRouter } from './routes/auth.js'
+import { attach as attachIdentity, requirePermission } from './auth.js'
+import * as authStore from './authStore.js'
 import * as rundown from './rundown.js'
 import * as nodeLink from './nodeLink.js'
 import { build as buildAssignment } from './assignment.js'
@@ -56,6 +59,11 @@ export function createApp() {
 
   openDb()
   cas.init()
+  authStore.sweep()
+
+  // Who is asking, on every request. Never throws; an unreadable token is
+  // simply nobody.
+  app.use(attachIdentity)
 
   declare('server', 'Control server')
   report('server', 'ok')
@@ -65,6 +73,7 @@ export function createApp() {
   rundown.registerTopics()
 
   app.use(healthRouter)
+  app.use(authRouter)
   app.use(templatesRouter)
   app.use(itemsRouter)
   app.use(cueRouter)
@@ -72,7 +81,7 @@ export function createApp() {
 
   app.get('/api/nodes', (_req, res) => res.json({ nodes: nodeLink.list() }))
 
-  app.post('/api/nodes/:id/adopt', (req, res) => {
+  app.post('/api/nodes/:id/adopt', requirePermission('graphics.nodes.configure'), (req, res) => {
     const adopted = req.body?.adopted !== false
     const n = nodeLink.setAdopted(req.params.id, adopted)
     if (!n) return res.status(404).json({ error: 'not_found', label: 'No node with that id has connected.' })
@@ -99,7 +108,7 @@ export function createApp() {
    * different operation entirely, because items address layers by name and a
    * rename would orphan them silently.
    */
-  app.put('/api/nodes/:id/outputs/:out', (req, res) => {
+  app.put('/api/nodes/:id/outputs/:out', requirePermission('graphics.nodes.configure'), (req, res) => {
     const layers = req.body?.layers
     if (!Array.isArray(layers) || layers.some((l) => typeof l !== 'string' || !l.trim())) {
       return res.status(422).json({
@@ -150,6 +159,7 @@ export function createApp() {
   // than filling a booth machine's disk.
   app.post(
     '/api/assets',
+    requirePermission('graphics.assets.manage'),
     express.raw({ type: '*/*', limit: '256mb' }),
     async (req, res) => {
       if (!req.body?.length) {

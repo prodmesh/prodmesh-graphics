@@ -24,6 +24,9 @@ import * as cas from '../cas.js'
 import { handle } from '../db.js'
 import { validateItemData } from '../manifest.js'
 import { newId } from '../ids.js'
+import { requirePermission } from '../auth.js'
+
+const mayEdit = requirePermission('graphics.rundown.edit')
 
 export const router = express.Router()
 
@@ -55,7 +58,7 @@ router.get('/api/items/:id', (req, res) => {
   res.json(hydrate(r))
 })
 
-router.post('/api/items', (req, res) => {
+router.post('/api/items', mayEdit, (req, res) => {
   const db = handle()
   const body = req.body ?? {}
 
@@ -98,7 +101,7 @@ router.post('/api/items', (req, res) => {
   res.status(201).json(hydrate(row))
 })
 
-router.patch('/api/items/:id', (req, res) => {
+router.patch('/api/items/:id', mayEdit, (req, res) => {
   const db = handle()
   const cur = db.prepare('SELECT * FROM items WHERE id = ?').get(req.params.id)
   if (!cur) return fail(res, 404, 'not_found', 'There is no item with that id.')
@@ -136,7 +139,7 @@ router.patch('/api/items/:id', (req, res) => {
   res.json(hydrate(db.prepare('SELECT * FROM items WHERE id = ?').get(cur.id)))
 })
 
-router.delete('/api/items/:id', (req, res) => {
+router.delete('/api/items/:id', mayEdit, (req, res) => {
   const info = handle().prepare('DELETE FROM items WHERE id = ?').run(req.params.id)
   if (!info.changes) return fail(res, 404, 'not_found', 'There is no item with that id.')
   res.status(204).end()

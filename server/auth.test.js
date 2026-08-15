@@ -1,0 +1,218 @@
+/**
+ * The permission boundary. ADR 0013.
+ *
+ * The claims worth defending: an unconfigured server is open and SAYS SO, the
+ * first user closes it for good, 401 and 403 mean different things, and a
+ * trusted station can operate within its scope and nowhere else.
+ */
+
+import assert from 'node:assert/strict'
+import test, { before, beforeEach } from 'node:test'
+import fs from 'node:fs'
+
+let store, db, app, port, server
+
+before(async () => {
+  process.env.PMG_DB = ':memory:'
+  process.env.PMG_CAS = fs.mkdtempSync('/tmp/pmg-auth-cas-')
+  store = await import('./authStore.js')
+  db = await import('./db.js')
+  app = (await import('./index.js')).createApp()
+  server = app.listen(0)
+  await new Promise((r) => server.once('listening', r))
+  port = server.address().port
+})
+test.after(() => server?.close())
+
+const req = async (method, url, body, headers = {}) => {
+  const res = await fetch(`http://127.0.0.1:${port}${url}`, {
+    method,
+    headers: { ...(body ? { 'content-type': 'application/json' } : {}), ...headers },
+    ...(body ? { body: JSON.stringify(body) } : {}),
+  })
+  const text = await res.text()
+  return { status: res.status, json: text ? JSON.parse(text) : null }
+}
+
+beforeEach(() => {
+  store._reset()
+  db.handle().exec(`DELETE FROM sessions; DELETE FROM user_groups; DELETE FROM group_permissions;
+                    DELETE FROM users; DELETE FROM groups; DELETE FROM stations; DELETE FROM audit_log;`)
+})
+
+const admin = () => {
+  const g = store.createGroup('Administrators', ['*'])
+  return { group: g, user: store.createUser({ username: 'jbeale', pin: '1234', groups: [g.id] }) }
+}
+
+// ---------------------------------------------------------------------------
+
+test('an unconfigured server is open, and says so', async () => {
+  assert.equal(store.unconfigured(), true)
+  const me = await req('GET', '/api/auth/me')
+  // Said out loud rather than inferred, so a UI cannot present an open server
+  // as a secured one.
+  assert.equal(me.json.unconfigured, true)
+
+  // And it genuinely is open — a booth appliance locked behind a password
+  // nobody wrote down is an outage on Sunday.
+  const r = await req('POST', '/api/playlists', { name: 'Anyone can' })
+  assert.equal(r.status, 201)
+})
+
+test('creating the first user closes it', async () => {
+  admin()
+  assert.equal(store.unconfigured(), false)
+  const r = await req('POST', '/api/playlists', { name: 'Not any more' })
+  // 401, not 403: nobody is logged in. That distinction is the browser's only
+  // way to tell "sign in" from "ask someone else".
+  assert.equal(r.status, 401)
+  assert.equal(r.json.error, 'permission_required')
+  assert.match(r.json.label, /Sign in/)
+})
+
+test('a logged-in user without the permission gets 403 and is told which', async () => {
+  const g = store.createGroup('Operators', ['graphics.operate'])
+  store.createUser({ username: 'sam', pin: '4321', groups: [g.id] })
+  admin() // so the server is configured either way
+
+  const login = await req('POST', '/api/auth/login', { username: 'sam', pin: '4321' })
+  assert.equal(login.status, 200)
+  const auth = { authorization: `Bearer ${login.json.token}` }
+
+  const refused = await req('POST', '/api/playlists', { name: 'nope' }, auth)
+  assert.equal(refused.status, 403, 'logged in, lacking the permission')
+  // Names the authority that is missing, so the message is actionable.
+  assert.match(refused.json.label, /Edit items, playlists and the rundown/)
+  assert.equal(refused.json.permission, 'graphics.rundown.edit')
+})
+
+test('an administrator holds every permission through the wildcard', async () => {
+  const { user } = admin()
+  const perms = store.permissionsOf(user.id)
+  for (const p of store.PERMISSIONS) assert.ok(perms.has(p), `missing ${p}`)
+})
+
+test('a wrong PIN and an unknown user are the same answer', async () => {
+  admin()
+  const wrong = await req('POST', '/api/auth/login', { username: 'jbeale', pin: '9999' })
+  const nobody = await req('POST', '/api/auth/login', { username: 'ghost', pin: '9999' })
+  // Distinguishing them tells an attacker which usernames exist.
+  assert.equal(wrong.status, 401)
+  assert.deepEqual(wrong.json, nobody.json)
+})
+
+test('repeated failures are throttled per station and username', async () => {
+  admin()
+  for (let i = 0; i < 5; i++) await req('POST', '/api/auth/login', { username: 'jbeale', pin: '0000' })
+  const blocked = await req('POST', '/api/auth/login', { username: 'jbeale', pin: '0000' })
+  assert.equal(blocked.status, 429)
+  assert.match(blocked.json.label, /Try again/)
+
+  // A different username is not affected: one jammed keypad must not lock out
+  // the building.
+  const other = await req('POST', '/api/auth/login', { username: 'someone-else', pin: '0000' })
+  assert.equal(other.status, 401)
+})
+
+test('a session expires and stops working', async () => {
+  admin()
+  const login = await req('POST', '/api/auth/login', { username: 'jbeale', pin: '1234' })
+  db.handle().prepare('UPDATE sessions SET expires_at = ?').run(Date.now() - 1000)
+  const r = await req('POST', '/api/playlists', { name: 'stale' }, { authorization: `Bearer ${login.json.token}` })
+  assert.equal(r.status, 401)
+})
+
+test('logging out invalidates the token immediately', async () => {
+  admin()
+  const login = await req('POST', '/api/auth/login', { username: 'jbeale', pin: '1234' })
+  const auth = { authorization: `Bearer ${login.json.token}` }
+  assert.equal((await req('POST', '/api/playlists', { name: 'ok' }, auth)).status, 201)
+  await req('POST', '/api/auth/logout', null, auth)
+  assert.equal((await req('POST', '/api/playlists', { name: 'gone' }, auth)).status, 401)
+})
+
+// ---------------------------------------------------------------------------
+// The one deliberate weakening
+// ---------------------------------------------------------------------------
+
+test('a trusted station may operate with nobody logged in, within its scope', async () => {
+  admin()
+  const st = store.registerStation('booth-mac')
+  store.setStationTrust(st.id, { trusted: true, scope: { outputs: ['out-0'], layers: ['Lower Third'] } })
+  const asStation = { 'x-prodmesh-station': st.token }
+
+  // Inside the scope: allowed, with no user. It fails later for an unrelated
+  // reason (no such node), which is the point — it got PAST the boundary.
+  const inScope = await req('POST', '/api/cue', {
+    cue_id: 'c1', node: 'nope', output: 'out-0', layer: 'Lower Third', op: 'take_out',
+  }, asStation)
+  assert.notEqual(inScope.status, 401)
+  assert.notEqual(inScope.status, 403)
+
+  // Outside the scope: refused. Trust is per station and scoped to named
+  // outputs and layers, never global.
+  const outOfScope = await req('POST', '/api/cue', {
+    cue_id: 'c2', node: 'nope', output: 'out-0', layer: 'Bug', op: 'take_out',
+  }, asStation)
+  assert.equal(outOfScope.status, 401)
+})
+
+test('a trusted station may still only operate, never edit', async () => {
+  admin()
+  const st = store.registerStation('booth-mac')
+  store.setStationTrust(st.id, { trusted: true, scope: null })
+  const r = await req('POST', '/api/playlists', { name: 'nope' }, { 'x-prodmesh-station': st.token })
+  // It grants graphics.operate and nothing else.
+  assert.equal(r.status, 401)
+})
+
+test('registering a station grants nothing by itself', async () => {
+  admin()
+  const st = store.registerStation('random-laptop')
+  const r = await req('POST', '/api/cue', {
+    cue_id: 'c3', node: 'nope', output: 'out-0', layer: 'Lower Third', op: 'take_out',
+  }, { 'x-prodmesh-station': st.token })
+  assert.equal(r.status, 401)
+})
+
+// ---------------------------------------------------------------------------
+
+test('refusals are audited, not just successes', async () => {
+  const { user } = admin()
+  await req('POST', '/api/playlists', { name: 'nope' }) // refused, nobody logged in
+
+  const entries = store.recentAudit(50)
+  const refusal = entries.find((e) => e.result === 'refused')
+  // A log that records only successes cannot answer "why couldn't they take it
+  // on air?", which is the question actually asked afterwards.
+  assert.ok(refusal, 'a refusal must be recorded')
+  assert.equal(refusal.action, 'graphics.rundown.edit')
+  assert.ok(user.id)
+})
+
+test('a station token is returned once and never stored in the clear', async () => {
+  admin()
+  const st = store.registerStation('booth-mac')
+  const row = db.handle().prepare('SELECT * FROM stations WHERE id = ?').get(st.id)
+  assert.ok(!JSON.stringify(row).includes(st.token), 'the raw token must not be in the row')
+  // It still resolves, because only its hash was needed.
+  assert.equal(store.stationByToken(st.token)?.id, st.id)
+})
+
+test('a PIN is never stored in the clear', () => {
+  const { user } = admin()
+  const row = db.handle().prepare('SELECT * FROM users WHERE id = ?').get(user.id)
+  assert.ok(!row.pin_hash.includes('1234'))
+  assert.notEqual(row.pin_hash, '1234')
+  assert.ok(row.pin_salt.length >= 16)
+})
+
+test('an unknown permission in a group is refused rather than silently granting nothing', async () => {
+  admin()
+  const login = await req('POST', '/api/auth/login', { username: 'jbeale', pin: '1234' })
+  const r = await req('POST', '/api/groups', { name: 'Typo', permissions: ['graphics.oprate'] },
+    { authorization: `Bearer ${login.json.token}` })
+  assert.equal(r.status, 422)
+  assert.match(r.json.label, /Not a permission/)
+})

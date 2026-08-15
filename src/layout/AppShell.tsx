@@ -18,6 +18,7 @@ const MODES = [
 
 export function AppShell() {
   const { data } = useQuery<{ server: string; milestone: string }>(keys.version())
+  const { data: me } = useQuery<{ unconfigured: boolean }>('/api/auth/me')
 
   return (
     <div className="shell">
@@ -44,6 +45,15 @@ export function AppShell() {
         </div>
       </nav>
       <main className="shell__main">
+        {me?.unconfigured ? (
+          // Said out loud. An open server that never mentions it is a quiet
+          // hole; a booth appliance locked behind a password nobody wrote down
+          // is an outage. This is the third option (ADR 0013).
+          <p className="shell__open" role="status">
+            No users yet — anyone on this network can operate this server. Add a
+            user in Configure to turn permissions on.
+          </p>
+        ) : null}
         <Outlet />
       </main>
     </div>

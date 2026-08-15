@@ -18,6 +18,9 @@ import * as cas from '../cas.js'
 import { handle } from '../db.js'
 import { validateManifest } from '../manifest.js'
 import { newId } from '../ids.js'
+import { requirePermission } from '../auth.js'
+
+const mayDesign = requirePermission('graphics.templates.edit')
 
 export const router = express.Router()
 
@@ -57,7 +60,7 @@ router.get('/api/templates/:id/revisions', (req, res) => {
   res.json({ revisions: rows })
 })
 
-router.post('/api/templates', (req, res) => {
+router.post('/api/templates', mayDesign, (req, res) => {
   const name = String(req.body?.name ?? '').trim()
   if (!name) return fail(res, 422, 'validation_failed', 'A template needs a name.')
 
@@ -89,7 +92,7 @@ router.post('/api/templates', (req, res) => {
  * revisions are immutable, a revision whose id did not match its bytes would be
  * a permanent lie rather than a recoverable mistake.
  */
-router.post('/api/templates/:id/publish', async (req, res) => {
+router.post('/api/templates/:id/publish', mayDesign, async (req, res) => {
   const db = handle()
   const t = db.prepare('SELECT * FROM templates WHERE id = ?').get(req.params.id)
   if (!t) return fail(res, 404, 'not_found', 'There is no template with that id.')

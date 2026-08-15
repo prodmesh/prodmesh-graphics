@@ -26,6 +26,10 @@ import express from 'express'
 import { handle } from '../db.js'
 import * as link from '../nodeLink.js'
 import { append } from '../cueLog.js'
+import { requirePermission } from '../auth.js'
+
+/** A trusted station's scope is checked against the output and layer it names. */
+const cueScope = (req) => ({ output: req.body?.output, layer: req.body?.layer })
 
 export const router = express.Router()
 
@@ -169,7 +173,7 @@ const context = (req) => ({
   station: req.get('x-prodmesh-station') ?? null,
 })
 
-router.post('/api/cue', async (req, res) => {
+router.post('/api/cue', requirePermission('graphics.operate', cueScope), async (req, res) => {
   const { http, payload } = await dispatch(req.body ?? {}, context(req))
   res.status(http).json(payload)
 })
@@ -180,7 +184,7 @@ router.post('/api/cue', async (req, res) => {
  * In order, and **not in parallel**: a look where the background arrives after
  * the text is a visible flash, and the ordering is the only thing preventing it.
  */
-router.post('/api/cue/batch', async (req, res) => {
+router.post('/api/cue/batch', requirePermission('graphics.operate'), async (req, res) => {
   const cues = Array.isArray(req.body?.cues) ? req.body.cues : []
   if (!cues.length) {
     return fail(res, 422, 'validation_failed', 'A batch needs at least one cue.')

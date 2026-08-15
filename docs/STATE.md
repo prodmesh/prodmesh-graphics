@@ -96,6 +96,7 @@ other than what they were.
 | Design / Edit / Show | 🟢 all three real. Design compiles and renders with the shared Rust; Show takes on air and does not lie |
 | `pmg-wasm` | 🟢 `compile_template` + `DesignSession` — the browser half of ADR 0001, pinned by a native test |
 | Fonts | 🟡 uploaded as CAS assets and fetched by hash. Family matching is still provisional — one face serves every family a template names |
+| Auth (ADR 0013) | 🟢 stations, users, groups, permissions, sessions, audit, trusted stations. **An unconfigured server is open and says so; the first user closes it.** 15 tests |
 | Adoption | 🟢 an unadopted node is welcomed and given **nothing** — no templates, no items, no cues. Persisted, so it survives a restart |
 | mDNS discovery | 🟡 **written, unverified.** Multicast is unusable on this host; `--server` is the tested path. See INTEGRATION-NOTES |
 | Configure | 🟢 adopt a node, see its capabilities, edit its layer stack — pushed live |
