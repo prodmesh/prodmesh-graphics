@@ -1059,6 +1059,7 @@ dependencies = [
  "jpeg-decoder",
  "png",
  "serde",
+ "serde_json",
  "thiserror",
  "tracing",
 ]

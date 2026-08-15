@@ -1,7 +1,8 @@
 //! Image and video decode.
 //!
-//! M3a: still images only — PNG and JPEG to straight RGBA8. Video, its frame
-//! cache, and the A/V clock are M3d.
+//! Stills are PNG and JPEG, decoded in-process (M3a). Video is ffmpeg as a child
+//! process feeding raw frames over a pipe — see [`video`], which documents why a
+//! pipe and not FFI, with the measurements.
 //!
 //! # Straight in, premultiplied at the boundary
 //!
@@ -12,13 +13,22 @@
 //! around every soft edge, which is the classic version of this bug and is
 //! invisible until it is over live video.
 //!
-//! # No filesystem
+//! # No filesystem — for stills, and only for stills
 //!
-//! Decoding takes bytes, not paths. The bytes come from the CAS, and keeping
-//! this dependency-light and IO-free is what lets the same decoder run in the
-//! browser for Design mode.
+//! Image decoding takes bytes, not paths. The bytes come from the CAS, and
+//! keeping that path dependency-light and IO-free is what lets the same still
+//! decoder run in the browser for Design mode.
+//!
+//! **Video cannot honour that and does not pretend to.** It takes a path,
+//! spawns a process, and is compiled out entirely on `wasm32` — the browser has
+//! `WebCodecs` and would never want this. The split is deliberate: one half of
+//! this crate stays portable, the other half is frankly native, and the module
+//! boundary is where you can see which is which.
 
 use std::io::Cursor;
+
+#[cfg(not(target_arch = "wasm32"))]
+pub mod video;
 
 #[derive(Debug, thiserror::Error)]
 pub enum MediaError {
@@ -30,6 +40,24 @@ pub enum MediaError {
     Jpeg(String),
     #[error("image is {w}x{h}, which exceeds the {limit}px limit for one texture")]
     TooLarge { w: u32, h: u32, limit: u32 },
+    /// ffmpeg or ffprobe is not on PATH, or would not start.
+    ///
+    /// Named separately from a decode failure because the fix is completely
+    /// different: one is "install ffmpeg", the other is "this file is broken".
+    #[error("ffmpeg is not available: {0}")]
+    NoFfmpeg(String),
+    #[error("could not read this file: {0}")]
+    Probe(String),
+    #[error("this file has no video stream")]
+    NoVideoStream,
+    /// Refused rather than accommodated (`docs/RISKS.md` R5): a variable-rate
+    /// source has no answer to "which frame is at 4.000 s", so every cue against
+    /// it would be approximately right.
+    #[error(
+        "this clip has a variable frame rate ({avg:.3} average against {nominal:.3} nominal), \
+         so it cannot be cued to an exact frame"
+    )]
+    VariableFrameRate { nominal: f64, avg: f64 },
 }
 
 /// Decoded pixels, **premultiplied** RGBA8, ready for the renderer.
@@ -228,6 +256,23 @@ pub fn selftest() -> Result<(), String> {
             "transparent white should premultiply to 0, got {}",
             d.rgba[8]
         ));
+    }
+
+    // The A/V clock, checked at a length no test clip will ever be. Two hours of
+    // 59.94 against 29.97 media must land on exactly half the frame count; a
+    // float-seconds conversion drifts here, and being one frame out at the end of
+    // a service is precisely the bug that never gets found in a ten-second test.
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        let c = video::MediaClock::new((60000, 1001), (30000, 1001));
+        let two_hours = 431_568u64;
+        if c.media_frame(two_hours) != two_hours / 2 {
+            return Err(format!(
+                "two hours of 2:1 pulldown drifted: got {}, expected {}",
+                c.media_frame(two_hours),
+                two_hours / 2
+            ));
+        }
     }
     Ok(())
 }

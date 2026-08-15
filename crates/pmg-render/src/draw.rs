@@ -118,8 +118,14 @@ pub struct SceneRenderer {
     pipeline_text: wgpu::RenderPipeline,
     pipeline_unknown: wgpu::RenderPipeline,
     pipeline_image: wgpu::RenderPipeline,
-    /// One bind group per decoded image, uploaded once at arm.
+    /// One bind group per image slot, built once at arm.
     image_binds: Vec<wgpu::BindGroup>,
+    /// The textures behind those bind groups, with their sizes.
+    ///
+    /// A still is written once and never touched again; a clip writes here every
+    /// frame. Keeping the handle costs nothing and is the whole of what playback
+    /// needed from this crate.
+    image_texs: Vec<(wgpu::Texture, u32, u32)>,
     bind_layout: wgpu::BindGroupLayout,
     sampler: wgpu::Sampler,
     atlas_view: wgpu::TextureView,
@@ -394,72 +400,126 @@ impl SceneRenderer {
             border_color: None,
         });
 
+        // Textures are kept, not just their bind groups: a clip overwrites its
+        // texture every frame, and a bind group alone gives no handle to write
+        // through. See `update_image`.
+        let (image_texs, image_binds): (Vec<_>, Vec<_>) = inst
+            .images
+            .iter()
+            .map(|img| {
+                let tex = device.create_texture(&wgpu::TextureDescriptor {
+                    label: Some("pmg-scene-image"),
+                    size: wgpu::Extent3d {
+                        width: img.width,
+                        height: img.height,
+                        depth_or_array_layers: 1,
+                    },
+                    mip_level_count: 1,
+                    sample_count: 1,
+                    dimension: wgpu::TextureDimension::D2,
+                    // Rgba8Unorm, never Rgba8UnormSrgb: no automatic colour
+                    // conversion anywhere in this pipeline (parity rule 3).
+                    format: wgpu::TextureFormat::Rgba8Unorm,
+                    usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+                    view_formats: &[],
+                });
+                queue.write_texture(
+                    wgpu::TexelCopyTextureInfo {
+                        texture: &tex,
+                        mip_level: 0,
+                        origin: wgpu::Origin3d::ZERO,
+                        aspect: wgpu::TextureAspect::All,
+                    },
+                    &img.rgba,
+                    wgpu::TexelCopyBufferLayout {
+                        offset: 0,
+                        bytes_per_row: Some(img.width * 4),
+                        rows_per_image: Some(img.height),
+                    },
+                    wgpu::Extent3d {
+                        width: img.width,
+                        height: img.height,
+                        depth_or_array_layers: 1,
+                    },
+                );
+                let view = tex.create_view(&wgpu::TextureViewDescriptor::default());
+                let bind = device.create_bind_group(&wgpu::BindGroupDescriptor {
+                    label: Some("pmg-scene-image-bind"),
+                    layout: &image_layout,
+                    entries: &[
+                        wgpu::BindGroupEntry {
+                            binding: 0,
+                            resource: wgpu::BindingResource::TextureView(&view),
+                        },
+                        wgpu::BindGroupEntry {
+                            binding: 1,
+                            resource: wgpu::BindingResource::Sampler(&image_sampler),
+                        },
+                    ],
+                });
+                ((tex, img.width, img.height), bind)
+            })
+            .unzip();
+
         Self {
             pipeline_box,
             pipeline_text,
             pipeline_unknown,
             pipeline_image,
-            image_binds: inst
-                .images
-                .iter()
-                .map(|img| {
-                    let tex = device.create_texture(&wgpu::TextureDescriptor {
-                        label: Some("pmg-scene-image"),
-                        size: wgpu::Extent3d {
-                            width: img.width,
-                            height: img.height,
-                            depth_or_array_layers: 1,
-                        },
-                        mip_level_count: 1,
-                        sample_count: 1,
-                        dimension: wgpu::TextureDimension::D2,
-                        // Rgba8Unorm, never Rgba8UnormSrgb: no automatic colour
-                        // conversion anywhere in this pipeline (parity rule 3).
-                        format: wgpu::TextureFormat::Rgba8Unorm,
-                        usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
-                        view_formats: &[],
-                    });
-                    queue.write_texture(
-                        wgpu::TexelCopyTextureInfo {
-                            texture: &tex,
-                            mip_level: 0,
-                            origin: wgpu::Origin3d::ZERO,
-                            aspect: wgpu::TextureAspect::All,
-                        },
-                        &img.rgba,
-                        wgpu::TexelCopyBufferLayout {
-                            offset: 0,
-                            bytes_per_row: Some(img.width * 4),
-                            rows_per_image: Some(img.height),
-                        },
-                        wgpu::Extent3d {
-                            width: img.width,
-                            height: img.height,
-                            depth_or_array_layers: 1,
-                        },
-                    );
-                    let view = tex.create_view(&wgpu::TextureViewDescriptor::default());
-                    device.create_bind_group(&wgpu::BindGroupDescriptor {
-                        label: Some("pmg-scene-image-bind"),
-                        layout: &image_layout,
-                        entries: &[
-                            wgpu::BindGroupEntry {
-                                binding: 0,
-                                resource: wgpu::BindingResource::TextureView(&view),
-                            },
-                            wgpu::BindGroupEntry {
-                                binding: 1,
-                                resource: wgpu::BindingResource::Sampler(&image_sampler),
-                            },
-                        ],
-                    })
-                })
-                .collect(),
+            image_texs,
+            image_binds,
             bind_layout,
             sampler,
             atlas_view: tex.create_view(&wgpu::TextureViewDescriptor::default()),
             atlas_size: (aw, ah),
         }
+    }
+
+    /// Overwrite one image slot's texture — how a clip gets on air.
+    ///
+    /// **Premultiplied RGBA8, exactly the slot's size.** A frame of the wrong
+    /// size is refused rather than stretched or partially written: a clip whose
+    /// dimensions changed mid-playback is a bug upstream, and painting three
+    /// quarters of a frame over the last one would hide it behind something that
+    /// merely looks like tearing.
+    ///
+    /// Returns whether the write happened. Still no I/O and no platform — this
+    /// is a queue write, so the crate compiles to WASM exactly as before.
+    #[must_use]
+    pub fn update_image(
+        &self,
+        queue: &wgpu::Queue,
+        slot: usize,
+        w: u32,
+        h: u32,
+        rgba: &[u8],
+    ) -> bool {
+        let Some((tex, tw, th)) = self.image_texs.get(slot) else {
+            return false;
+        };
+        if w != *tw || h != *th || rgba.len() != (w as usize * h as usize * 4) {
+            return false;
+        }
+        queue.write_texture(
+            wgpu::TexelCopyTextureInfo {
+                texture: tex,
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
+            rgba,
+            wgpu::TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some(w * 4),
+                rows_per_image: Some(h),
+            },
+            wgpu::Extent3d {
+                width: w,
+                height: h,
+                depth_or_array_layers: 1,
+            },
+        );
+        true
     }
 
     /// Draw one frame.

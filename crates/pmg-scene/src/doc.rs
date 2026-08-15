@@ -452,6 +452,21 @@ pub enum Content {
         #[serde(default)]
         fit: Fit,
     },
+    /// A clip, sharing `fit` with [`Content::Image`] because on the GPU it is an
+    /// image whose texture changes — the only difference the format needs to
+    /// know about is that a clip has a length and can be told to repeat.
+    Video {
+        asset_key: String,
+        #[serde(default)]
+        fit: Fit,
+        /// Repeat forever rather than holding the last frame at the end.
+        ///
+        /// A background loop wants `true`; a stinger wants `false`, and holding
+        /// its last frame is deliberate — going transparent at the end would
+        /// make the graphic vanish mid-shot without anyone taking it out.
+        #[serde(default, rename = "loop")]
+        looping: bool,
+    },
     Shape {
         shape: String,
     },

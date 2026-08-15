@@ -103,6 +103,19 @@ pub struct SceneInstance {
     pub atlas: CoverageAtlas,
     /// Decoded images, uploaded once at arm and sampled per frame.
     pub images: Vec<ImageData>,
+    /// Which image slots are actually clips, and what to feed them.
+    ///
+    /// **Video is an image whose texture changes.** It draws through the same
+    /// pipeline, with the same `fit` resolved the same way; the only thing the
+    /// renderer does differently is let the caller overwrite the texture between
+    /// frames ([`crate::SceneRenderer::update_image`]). That is what the comment
+    /// on [`RenderContent::Image`] promised, and it is why playback needed no
+    /// new shader, no new pipeline, and no new bind group layout.
+    ///
+    /// The asset key rides along because the caller has to know *which* clip to
+    /// open. It is an opaque string here — this crate never resolves it, which
+    /// is what keeps the no-I/O rule intact.
+    pub videos: Vec<VideoSlot>,
     /// Set when the document contained something this reader could not draw.
     /// Surfaced to the operator rather than swallowed.
     pub degraded: bool,
@@ -126,6 +139,18 @@ pub trait ImageSource {
     /// `pmg-media` does the multiply at decode. Handing back straight alpha
     /// would darken every soft edge, invisibly until it is over live video.
     fn image(&mut self, asset_key: &str) -> Option<(u32, u32, std::sync::Arc<Vec<u8>>)>;
+}
+
+/// A clip bound to one image slot.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct VideoSlot {
+    /// Index into [`SceneInstance::images`] — the texture to overwrite.
+    pub image: usize,
+    /// The document node, so a player can be reported per node rather than
+    /// per anonymous slot.
+    pub node_id: String,
+    pub asset_key: String,
+    pub looping: bool,
 }
 
 /// An image, sized and cropped for the box laid out for it.
@@ -311,6 +336,43 @@ fn flatten(
                     // The asset is not staged. DEGRADED, not silently blank —
                     // an empty rectangle where a background should be is the
                     // failure that gets noticed on air rather than before it.
+                    inst.degraded = true;
+                    RenderContent::Unknown
+                }
+            }
+        }
+        (
+            true,
+            Some(Content::Video {
+                asset_key,
+                fit,
+                looping,
+            }),
+        ) => {
+            // The source hands back the clip's FIRST frame, at the clip's size.
+            // That is what an armed-but-not-taken clip shows in preview, and it
+            // also sizes the texture the player will overwrite — so a missing
+            // clip degrades here, at arm, exactly like a missing still.
+            match images.image(asset_key) {
+                Some((w, h, rgba)) => {
+                    let idx = inst.images.len();
+                    inst.images.push(ImageData {
+                        width: w,
+                        height: h,
+                        rgba,
+                    });
+                    inst.videos.push(VideoSlot {
+                        image: idx,
+                        node_id: node.id.clone(),
+                        asset_key: asset_key.clone(),
+                        looping: *looping,
+                    });
+                    RenderContent::Image(PlacedImage {
+                        image: idx,
+                        uv: fit_uv(*fit, w, h, rect.w, rect.h),
+                    })
+                }
+                None => {
                     inst.degraded = true;
                     RenderContent::Unknown
                 }

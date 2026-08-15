@@ -995,3 +995,78 @@ Ingest is a **job**, not a request: a service-length clip takes minutes, and an
 HTTP request held open that long is one something in the middle will drop.
 Conversions run one at a time, because parallel transcodes on a booth machine
 would compete with whatever is going on air.
+
+## ffmpeg as a child process, because the local build is GPL
+
+**2026-08-15, M3d.** `docs/RISKS.md` R5 recommends `rsmpeg`/`ffmpeg-next` — FFI
+into libavcodec. Playback ships as a **child process feeding raw frames over a
+pipe** instead, and the deciding reason is not performance.
+
+The ffmpeg on this machine is Homebrew 7.1.1, configured `--enable-gpl
+--enable-version3`. That is the default build, and it is what any developer on
+this project will have. Linking it in-process makes the whole binary GPL. R5
+says "LGPL components only, dynamically linked, no GPL" and ADR 0003 keeps that
+as a productization seam — **a seam that closes silently, at build time, on a
+developer's own machine is not a seam.** Invoking a separate program over a pipe
+is the ordinary aggregation boundary and closes nothing.
+
+Performance turned out not to argue the other way. 1080p, 1200 frames, Apple
+M-series, otherwise idle, frames written to `/dev/null`:
+
+| Source | Through the pipe | vs 59.94 |
+|---|---|---|
+| ProRes 422 HQ, no alpha | 736 fps | 12.3× |
+| ProRes 4444, alpha, premultiplied by ffmpeg | 168 fps | **2.8×** |
+| seek + one frame, cold spawn | 80 ms | — |
+
+2.8× on the case that matters — keyed video — is enough and is not enormous. It
+cost about **9.4 cores** to get, and that is the number to watch: it is decode
+competing with a render loop on the same box, not a pipe bottleneck. Capping
+`-threads 4` made it *slower* (126 fps) for barely less total CPU, so there is no
+cheap win there.
+
+Revisit FFI when a node must play several 4K clips at once, or when a frame needs
+to reach the GPU without a trip through system RAM. Neither is true yet, and
+starting here makes neither harder.
+
+Two details that are load-bearing rather than incidental:
+
+- **`-stream_loop -1` for looping, never re-spawning at EOF.** A respawn puts
+  that 80 ms hole in every loop point. Letting ffmpeg loop internally also keeps
+  the emitted frame index monotonic, which is what lets the clock stay a single
+  multiply instead of a modulo with a wrap case.
+- **Premultiply with ffmpeg's own filter, and only when there is alpha.**
+  `format=rgba,premultiply=inplace=1` runs off our thread and vectorised. It also
+  costs a full pass over every pixel, so applying it to opaque media buys a
+  no-op at 2.8× the price of the decode.
+
+## A missing pre-roll looks exactly like a decoder underrun
+
+**2026-08-15, M3d.** The first playback measurement reported 6 held and 12
+dropped frames over 10 s of a 36 MB keyed clip. Held frames mean the decoder fell
+behind and the output repeated a picture — and on a clip that small, against a
+decoder measured at 2.8× realtime, that made no sense.
+
+It was not an underrun. **A deeper queue changed nothing**: depths 3, 8 and 24
+gave byte-identical counts (6 held, 12 dropped), while depth 1 gave 53. Real
+starvation improves with buffer; a deterministic result does not.
+
+The cause was that the clock started before the decoder did. ffmpeg needs ~120 ms
+to spawn and produce its first frame, so output frame 0 asked for a picture that
+would not exist until output frame 7. From then on the player was permanently
+seven frames behind the wall clock and spent the next stretch sprinting to catch
+up — holding and discarding pictures the whole way. **The stutter was at the
+start and the symptom was spread across the clip.**
+
+Waiting for the first frame before starting the clock — `VideoPlayer::preroll`,
+called at arm — takes it to **0 held, 0 dropped** on the same clip, and to 0 held
+with a single expected pulldown drop on a pathological 225 MB/s 4444 clip. Worst
+case pulling a frame on the render thread: **0.085 ms against a 16.68 ms budget**,
+because all the work is on the decoder's own thread.
+
+This is the arm/take split earning its keep for the third time, after layout and
+shaping. A clip is armed before it is taken; the 120 ms is spent off air, where
+there is nothing to be late for. The general form is worth keeping in mind:
+**a fixed cost at startup does not show up as a startup problem — it shows up
+smeared across everything that follows, wearing the costume of a capacity
+problem.**

@@ -14,6 +14,7 @@ mod scene;
 mod spike_s2;
 mod take;
 mod text;
+mod video;
 
 use anyhow::{bail, Result};
 
@@ -107,6 +108,7 @@ fn main() -> Result<()> {
         Some("scene") => scene::main(&args[1..]),
         Some("text") => text::main(&args[1..]),
         Some("take") => take::main(&args[1..]),
+        Some("video") => video::main(&args[1..]),
         Some("spike") => match args.get(1).map(String::as_str) {
             Some("s2") => spike_s2::main(&args[2..]),
             _ => {
