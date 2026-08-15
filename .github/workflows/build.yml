@@ -71,6 +71,29 @@ jobs:
         with:
           node-version: 20
           cache: npm
+
+      # The web bundle genuinely depends on the WASM artifact: Design imports
+      # src/wasm/, which is generated rather than committed (a checked-in binary
+      # drifts from the Rust it was built from). So the job that builds the app
+      # has to build the wasm too — `npm run build` runs `npm run wasm` first.
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+      - uses: Swatinem/rust-cache@v2
+
+      # The CLI version MUST match the RESOLVED wasm-bindgen crate version, or
+      # the generated glue fails at load with a schema mismatch — measured the
+      # hard way in this repo (a 0.2.104 CLI against a 0.2.127 crate).
+      #
+      # Read from Cargo.lock rather than pinned here, because the manifest says
+      # "0.2.104" and caret-resolves to something newer: a hardcoded number
+      # would be correct today and silently wrong after the next `cargo update`.
+      - name: wasm-bindgen CLI, version taken from Cargo.lock
+        run: |
+          VER=$(awk '/^name = "wasm-bindgen"$/{f=1} f&&/^version = /{gsub(/"/,"",$3); print $3; exit}' Cargo.lock)
+          echo "wasm-bindgen resolves to $VER"
+          cargo install --locked wasm-bindgen-cli@"$VER"
+
       - run: npm ci
       - run: npm run lint
       - run: npm run build
