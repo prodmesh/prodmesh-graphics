@@ -110,6 +110,8 @@ pub struct Options {
     pub server_http: String,
     pub fallback_font: Option<Vec<u8>>,
     pub headless: bool,
+    /// 0 disables the preview channel entirely.
+    pub preview_port: u16,
 }
 
 pub struct Runtime {
@@ -314,6 +316,32 @@ impl Runtime {
         // — a single shared renderer would be rebuilt once per layer per frame
         // the moment two layers are occupied.
         let mut renderers = crate::render::RendererCache::default();
+
+        // The preview channel: its own thread, its own port, its own
+        // connection. `offer` never blocks — a stalled viewer must not be able
+        // to reach back and cost a frame on air.
+        let preview = if self.opts.preview_port == 0 {
+            None
+        } else {
+            match pmg_preview::Preview::start(pmg_preview::Config {
+                source_width: self.opts.width,
+                source_height: self.opts.height,
+                port: self.opts.preview_port,
+                ..Default::default()
+            }) {
+                Ok(p) => {
+                    let (w, h) = p.size();
+                    tracing::info!(port = self.opts.preview_port, w, h, "preview channel open");
+                    Some(p)
+                }
+                Err(e) => {
+                    // A preview that cannot start is not a reason to refuse to
+                    // play. It is a monitoring feature.
+                    tracing::warn!(error = %e, "preview channel unavailable");
+                    None
+                }
+            }
+        };
         let mut last_state = Instant::now();
         let mut worst_ms = 0.0f64;
         let budget_ms = 1000.0 / (self.opts.fps.0 as f64 / self.opts.fps.1 as f64);
@@ -428,6 +456,10 @@ impl Runtime {
                 // different reason, and against a clock that can be genlocked.
                 Backend::DeckLink(d) => d.send_rgba_premultiplied(&rgba)?,
                 Backend::Headless => std::thread::sleep(Duration::from_millis(budget_ms as u64)),
+            }
+
+            if let Some(p) = &preview {
+                p.offer(&rgba);
             }
 
             self.engine.tick(&output_id);

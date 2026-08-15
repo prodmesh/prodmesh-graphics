@@ -5,7 +5,7 @@ change that makes something real — not afterwards.
 
 `docs/ROADMAP.md` is where we are going. This is where we are.
 
-**Last updated: 2026-08-15 · M0 complete · **M1 is complete**: design in the browser, publish, take on air over NDI.**
+**Last updated: 2026-08-15 · M0 and M1 complete · **M2 complete**: layers, playlists and a rundown, adoption, auth, SDI output, preview — and S8 gating it.**
 
 ---
 
@@ -103,6 +103,7 @@ other than what they were.
 | S8 chaos harness | 🟢 **gating.** `npm run chaos` — 1000+ takes through five injections, zero fired twice |
 | `pmg-node` | 🟢 **the playout binary.** Link client, staging, durable assignment, layer engine, NDI out. Survives server loss; 10 cue-rule tests |
 | `pmg-cas` | 🟢 atomic writes, streaming put, verify. Agrees with `server/cas.js` |
+| `pmg-preview` | 🟢 **MJPEG preview.** 480x270 over a checkerboard on port 8521, two viewers, **zero late frames** on the output |
 | `pmg-out-decklink` | 🟢 **SDI output.** Fill and key on two ordinary ports, 90 s at 1080p59.94, zero late frames. The key *picture* is unverified on a scope |
 | `pmg-out-ndi` | 🟢 the shared sender — one unpremultiply loop for the node and the CLI |
 | `streamHub` | ✅ ported from ProdMesh-Control — refcounted topics, conflation, snapshot-on-join |

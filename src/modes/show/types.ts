@@ -43,6 +43,14 @@ export type NodeSummary = {
   last_seen: number
   /** The node's own report of its outputs and their layers. Never our idea of them. */
   state: { outputs: OutputState[] } | null
+  /**
+   * Where to fetch this node's MJPEG preview.
+   *
+   * Points at the NODE, not at the control server: preview is a separate
+   * connection on a separate port so that a stalled or bandwidth-hungry viewer
+   * cannot delay a cue (ADR 0007).
+   */
+  preview_url?: string | null
 }
 
 export type OutputState = {

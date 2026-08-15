@@ -67,6 +67,7 @@ USAGE:
     --font <file.ttf>      A face to use when the assignment carries no font
                            asset. Provisional — see runtime.rs.
     --headless             Render and time frames, but send nothing.
+    --preview-port <n>     MJPEG preview. Default 8521; 0 disables it.
 ";
 
 fn arg(args: &[String], flag: &str) -> Option<String> {
@@ -161,6 +162,9 @@ fn main() -> Result<()> {
         server_http: format!("http://{server}"),
         fallback_font,
         headless: args.iter().any(|a| a == "--headless"),
+        preview_port: arg(&args, "--preview-port")
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(pmg_preview::PREVIEW_PORT),
     };
 
     println!("pmg-node  {}  ({})", identity.name, identity.node_id);

@@ -48,7 +48,7 @@ export function Show() {
         <NoNodes />
       ) : (
         <div className="show">
-          <OnAir name={node.name} outputId={output?.id ?? 'out-0'} />
+          <OnAir name={node.name} outputId={output?.id ?? 'out-0'} previewUrl={node.preview_url ?? null} />
           <Rack
             nodeId={node.node_id}
             nodeName={node.name}
@@ -89,8 +89,17 @@ function NoNodes() {
 // The NAME, not the id. An id identifies a node to the system; a name is what
 // is written on the machine in the rack, and that is what an operator needs at
 // 10:15 on a Sunday.
-function OnAir({ name, outputId }: { name: string; outputId: string }) {
+function OnAir({
+  name,
+  outputId,
+  previewUrl,
+}: {
+  name: string
+  outputId: string
+  previewUrl: string | null
+}) {
   const layers = useTopic<LayersSnapshot>(topics.outputLayers(outputId))
+  const [previewFailed, setPreviewFailed] = useState(false)
 
   return (
     <section className="show__onair" aria-label="On air">
@@ -100,6 +109,25 @@ function OnAir({ name, outputId }: { name: string; outputId: string }) {
         <span className="show__dim">{outputId}</span>
         {layers?.fps ? <span className="show__dim">{layers.fps.toFixed(2)} fps</span> : null}
       </header>
+
+      {previewUrl && !previewFailed ? (
+        // A plain <img>. multipart/x-mixed-replace renders natively, so the
+        // cheap preview needs no decoder in the browser at all (M2; WebCodecs
+        // is M3). The checkerboard is drawn INTO the frame by the node, because
+        // the output is a key signal and a black rectangle could be a graphic
+        // or could be nothing.
+        <img
+          className="show__preview"
+          src={previewUrl}
+          alt={`Preview of ${outputId}`}
+          onError={() => setPreviewFailed(true)}
+        />
+      ) : null}
+      {previewFailed ? (
+        <p className="show__dim show__pad">
+          No preview from {name}. What’s on air is unaffected.
+        </p>
+      ) : null}
 
       {!layers?.layers?.length ? (
         <p className="show__dim show__pad">Nothing on air.</p>

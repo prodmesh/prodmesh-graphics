@@ -28,6 +28,7 @@ pmg-text = { path = "../pmg-text" }
 pmg-render = { path = "../pmg-render" }
 pmg-out-ndi = { path = "../pmg-out-ndi" }
 pmg-out-decklink = { path = "../pmg-out-decklink" }
+pmg-preview = { path = "../pmg-preview" }
 serde = { workspace = true }
 ciborium = { workspace = true }
 blake3 = { workspace = true }

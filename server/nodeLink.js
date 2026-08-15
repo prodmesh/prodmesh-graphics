@@ -28,6 +28,9 @@ import * as wire from './wire.js'
 import { build as buildAssignment } from './assignment.js'
 import { handle } from './db.js'
 
+/** The node's MJPEG preview port. Family 85xx: control 8519, node 8520. */
+const PREVIEW_PORT = 8521
+
 /** New every server start. Cue idempotency keys are scoped to it. */
 const EPOCH = Math.floor(Date.now() / 1000)
 const SERVER_ID = randomUUID()
@@ -67,6 +70,12 @@ function session(nodeId) {
       // adoption must survive a server restart — otherwise every restart turns
       // the whole fleet back into strangers.
       adopted: false,
+      // Where the node is, as seen from here. Used only to build the preview
+      // URL: preview is a separate connection on a separate port, so the
+      // browser talks to the node directly rather than through this server
+      // (ADR 0007). A 4 GB-per-minute video stream must not transit the
+      // control plane.
+      address: null,
     }
     sessions.set(nodeId, s)
   }
@@ -74,6 +83,20 @@ function session(nodeId) {
 }
 
 const isOnline = (s) => Boolean(s.ws && s.ws.readyState === 1)
+
+/**
+ * The address a node dialled us from, which is the address a browser on the
+ * same network can reach its preview at.
+ *
+ * `ws._socket` is the documented escape hatch in the `ws` library for reaching
+ * the underlying net.Socket; there is no public accessor. IPv4-mapped IPv6
+ * (`::ffff:10.0.0.5`) is unwrapped so the URL is one a browser will accept.
+ */
+function remoteAddressOf(ws) {
+  // oxlint-disable-next-line no-underscore-dangle
+  const socket = ws._socket
+  return socket?.remoteAddress?.replace(/^::ffff:/, '') ?? null
+}
 
 /**
  * Find a session by node id or by display name.
@@ -182,6 +205,9 @@ function onHello(ws, hello) {
         JSON.stringify(hello.capabilities ?? {}))
 
   s.ws = ws
+  // The address the node dialled us FROM, which is the address a browser on
+  // the same network can reach it at.
+  s.address = remoteAddressOf(ws)
   s.bootId = hello.boot_id
   s.name = hello.name || s.nodeId
   s.version = hello.version
@@ -437,6 +463,9 @@ export function list() {
     last_seen: s.lastSeen,
     capabilities: s.capabilities,
     state: s.state,
+    // Null until the node has connected at least once — there is nowhere to
+    // point at before then.
+    preview_url: s.address ? `http://${s.address}:${PREVIEW_PORT}/` : null,
   }))
 }
 

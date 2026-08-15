@@ -347,3 +347,8 @@
   background: var(--warn-soft); border: 1px solid var(--warn-border);
   color: var(--warn-text); font-size: 0.85rem;
 }
+
+.show__preview {
+  display: block; width: 100%; height: auto;
+  border-bottom: 1px solid var(--border-subtle); background: var(--bg);
+}
