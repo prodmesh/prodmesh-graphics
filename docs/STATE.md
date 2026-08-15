@@ -5,7 +5,7 @@ change that makes something real — not afterwards.
 
 `docs/ROADMAP.md` is where we are going. This is where we are.
 
-**Last updated: 2026-08-14 · M0 complete · M1a–M1d landed. A lower third goes on air.**
+**Last updated: 2026-08-15 · M0 complete · M1a–M1e landed on the server and browser side. The one gap left in M1 is the Rust node's link client.**
 
 ---
 
@@ -33,8 +33,25 @@ Out over NDI with key and fill. Armed in **0.3–2 ms**; worst frame **13.9 ms
 against a 16.68 ms budget**, because per frame it only evaluates timelines and
 applies transforms.
 
-**Still no server beyond health and no browser UI** — that is M1e, and it is
-what turns a CLI demo into something an operator can use.
+**The control plane is real (M1e).** Templates publish as opaque CAS blobs with
+a validated manifest sidecar; Items pin the revision they were built against;
+PMG Link carries assignment and acked cues over CBOR; `POST /api/cue` blocks
+until the node confirms; Edit builds an Item and Show takes it. Verified end to
+end against a running server with a node speaking real CBOR: publish → CAS
+round-trip byte-identical → item → take → on-air state adopted from the node →
+take out → take log with the surface recorded.
+
+**The one thing M1 still lacks is the Rust node's own link client.** `pmg-node`
+prints its configuration and exits; everything above was exercised with a
+JavaScript node that speaks the protocol. So the protocol is proven and the
+render path is proven (`pmgctl take`), but **they have not yet been joined in
+the process that will actually run in a booth.** That is the next piece of work
+and nothing should be described as an end-to-end system until it is done.
+
+**Spike S2 ran, and it failed on one criterion.** Fringing, tabular figures, and
+glyph-cache cost all measure clean, but sub-pixel motion deviates from linear by
+0.33 px for text and **0.21 px for a plain box** — so the fault is not text and
+not the atlas. Root cause is open; see `docs/spikes/S2-text-typography.md`.
 
 `docs/INTEGRATION-NOTES.md` is no longer empty; seven entries came out of one
 afternoon, and three were version-skew failures that each presented as something
@@ -54,8 +71,14 @@ other than what they were.
 | `pmg-color::patterns` | 🟢 ramp, bars, soft-edge, alpha staircase, moving line — the diagnostic instruments from `output-config.md` §8 |
 | `pmgctl ndi` / `pmgctl decklink` | 🟢 info, probe, send / list, modes, ref |
 | `pmgctl take` | 🟢 **the M1 vertical slice** — template to NDI, In/hold/Out |
-| Control server | 🟡 boots; health, version, and the topic stream. 10 tests — **M1e, next** |
-| SQLite schema | ⬜ sketched in `server/db.js`, not created |
+| Control server | 🟢 templates, revisions, items, CAS origin, PMG Link, cues, nodes. **39 tests** |
+| SQLite schema | 🟢 migrated on boot: templates, revisions, items, assets, nodes, assignments. No `on_air` column, by design |
+| `server/cas.js` | 🟢 atomic writes, hash verified never trusted, `GET /cas/:hash` with Range and resume. blake3 **agrees with the Rust crate**, tested |
+| `server/nodeLink.js` | 🟢 handshake, assignment offer/ack, cues with deadlines, replay ring, StateReport adopted |
+| `POST /api/cue` | 🟢 synchronous — 503 `cue_not_acked` when the node stays silent, never a silent success |
+| `pmg-proto` | 🟢 the wire contract, with checked-in CBOR fixtures the JavaScript tests decode |
+| Design / Edit / Show | 🟡 Edit and Show are real; **Design is still a stub** — the canvas needs the WASM scene renderer |
+| `pmg-node` link client | ⬜ **not started.** Prints config and exits |
 | `streamHub` | ✅ ported from ProdMesh-Control — refcounted topics, conflation, snapshot-on-join |
 | `cueLog` | ✅ the log-tail bridge from ADR 0008, with gap recovery. 6 tests |
 | PMG Link | ⬜ spec only |
