@@ -98,7 +98,7 @@ other than what they were.
 | Fonts | 🟡 uploaded as CAS assets and fetched by hash. Family matching is still provisional — one face serves every family a template names |
 | Auth (ADR 0013) | 🟢 stations, users, groups, permissions, sessions, audit, trusted stations. **An unconfigured server is open and says so; the first user closes it.** 15 tests |
 | Adoption | 🟢 an unadopted node is welcomed and given **nothing** — no templates, no items, no cues. Persisted, so it survives a restart |
-| mDNS discovery | 🟡 **written, unverified.** Multicast is unusable on this host; `--server` is the tested path. See INTEGRATION-NOTES |
+| mDNS discovery | 🟡 **written, unverified.** Blocked by macOS Local Network Privacy on this host (EHOSTUNREACH on multicast, unicast fine); `--server` is the tested path. See INTEGRATION-NOTES |
 | Configure | 🟢 adopt a node, see its capabilities, edit its layer stack — pushed live |
 | S8 chaos harness | 🟢 **gating.** `npm run chaos` — 1000+ takes through five injections, zero fired twice |
 | `pmg-node` | 🟢 **the playout binary.** Link client, staging, durable assignment, layer engine, NDI out. Survives server loss; 10 cue-rule tests |

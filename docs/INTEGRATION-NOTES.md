@@ -689,27 +689,46 @@ the stranger, so it says what to look at rather than that something is wrong.
 
 ---
 
-## mDNS discovery is written but UNVERIFIED, and it nearly took the server down
+## mDNS fails with EHOSTUNREACH because macOS blocks it, not because the network is odd
 
-**2026-08-15.** The server advertises `_pmg-control._tcp` and `pmg-node` browses
-for it when `--server` is omitted. Neither half could be verified on this
-machine, and the reason is worth recording because it is not a code defect.
+**2026-08-15, corrected the same day.** The server advertises `_pmg-control._tcp`
+and `pmg-node` browses for it when `--server` is omitted. Neither works on this
+machine yet:
 
 ```
 discovery: mDNS error (advertisement only, the server is fine) — send EHOSTUNREACH 224.0.0.251:5353
 ```
 
-`netstat` shows a valid route to 224.0.0.251 on en0, so multicast is not dead —
-the host has a pile of virtual interfaces (`anpi1`, `anpi2`, `gif0`, loopback,
-and VPN tunnels) and the responder sends on ones that cannot carry it. The Rust
-node could not find a service advertised by **macOS's own `dns-sd -R`** either,
-which puts the fault below both implementations.
+**The diagnosis, isolated to five lines.** A bare `dgram` socket sending one
+datagram to `224.0.0.251:5353` fails `EHOSTUNREACH`, while a unicast send to
+loopback from the same process succeeds. Nothing about the protocol, the
+library, or the interface set is involved:
 
-**Status: the code is written, the fallback is tested, discovery itself is
-unproven.** `--server` works and is the supported path — which the spec has said
-all along: *mDNS is an aid, never an authority; manual host entry must work
-everywhere discovery appears.* The failure message names the flag rather than
-leaving an operator staring at "not found".
+```js
+s.send(Buffer.from('probe'), 5353, '224.0.0.251', cb)  // EHOSTUNREACH
+s.send(Buffer.from('x'),     5353, '127.0.0.1',   cb)  // OK
+```
+
+That is **macOS Local Network Privacy** denying the process, which surfaces as
+`EHOSTUNREACH` rather than `EPERM`. The app needs approval in
+*System Settings → Privacy & Security → Local Network*, per responsible app —
+which for a CLI is the terminal or whatever launched it — and the process must
+be restarted after granting.
+
+**What I got wrong first, recorded because the wrong version is instructive.**
+The original note here claimed the host's many virtual interfaces (`anpi1`,
+`anpi2`, `gif0`, VPN tunnels) meant the responder was sending on ones that could
+not carry multicast, citing a `netstat` route table as evidence. That was a
+plausible story assembled from circumstantial output, and it was wrong. A route
+to 224.0.0.251 existing says nothing about whether *this process* is allowed to
+use it. **`EHOSTUNREACH` on multicast with working unicast is an OS permission,
+not a routing problem** — and the five-line test above distinguishes them in
+seconds, which the route table never could.
+
+**Status: still unverified end to end.** `--server` works and is the supported
+path, which the spec has said all along: *mDNS is an aid, never an authority;
+manual host entry must work everywhere discovery appears.* The failure message
+names the flag rather than leaving an operator staring at "not found".
 
 **The part that matters more than the feature.** `bonjour-service`'s default
 error handler is `function (err) { throw err }`, called from inside a socket
