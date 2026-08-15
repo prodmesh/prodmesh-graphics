@@ -103,6 +103,58 @@ Operationally this is worth knowing before a Sunday: **updating Desktop Video is
 not a self-completing operation.** It leaves the machine in a state where video
 I/O is silently dead until a human clicks Allow and restarts.
 
+### …and the reboot may not fix it: the old driver extension can deadlock holding the card
+*2026-08-14 · same machine, immediately after the above*
+
+After approving the extension and rebooting, still zero devices. The state was:
+
+```
+com.blackmagic-design.BlackmagicIO.DExt (16.3)  [activated enabled]
+com.blackmagic-design.BlackmagicIO.DExt (14.5)  [terminating for upgrade via delegate]
+```
+
+which reads as "16.3 is live". **It was not.** The only running dext process came
+from the bundle staged in April 2025 — the 14.5 one:
+
+```
+ps -ax -o args= | grep BlackmagicIO.DExt
+  /Library/SystemExtensions/E661202C-…/…BlackmagicIO.DExt   ← staged Apr 2025 = 14.5
+  (the 16.3 bundle, staged today, was not running at all)
+```
+
+**A deadlock.** The old extension cannot finish terminating because it is holding
+the PCIe device; the new one cannot claim the device because the old one has it.
+Rebooting does not break the cycle — on boot the old dext matches the card again
+before the upgrade completes.
+
+Note the PCI device itself was healthy throughout:
+`pcibdbd,a13f@0 … registered, matched, active` (vendor `0xbdbd` = Blackmagic,
+two functions on a Quad 2). The hardware was never the problem.
+
+**Fix, least invasive first:**
+
+1. **Unplug the Thunderbolt chassis, wait ~10 s, plug it back in.** Removing the
+   device is what lets the old dext release and terminate. No password needed.
+2. Failing that, force it out and re-activate:
+   ```
+   sudo systemextensionsctl uninstall 9ZGFBWLSYP com.blackmagic-design.BlackmagicIO.DExt
+   ```
+   then reboot, open Desktop Video Setup to re-request activation, approve,
+   reboot again.
+
+**How to tell the truth from `systemextensionsctl`:** it reports what is
+*registered*, not what is *running*. Compare against the actual process:
+
+```
+systemextensionsctl list | grep -i blackmagic     # what macOS thinks
+ps -ax -o args= | grep BlackmagicIO.DExt          # what is actually driving the card
+ls -ldT /Library/SystemExtensions/<uuid>          # stage date tells you which version
+```
+
+If those disagree, the upgrade is wedged. This is the third distinct
+userspace/driver version-skew failure found in one afternoon, and the only one
+where the tooling actively reports a healthy state that is not true.
+
 ### On a Quad 2, external keying is reported on only 2 of 8 connectors
 *2026-08-14 · same hardware as above*
 

@@ -99,8 +99,22 @@ fn list() -> Result<()> {
         println!("a new framework is talking to an old dext and nothing enumerates.");
         println!();
         println!("Fix: System Settings > Privacy & Security, approve the Blackmagic Design");
-        println!("system software, then REBOOT. Otherwise check the Thunderbolt connection");
-        println!("and that Desktop Video Setup sees the device.");
+        println!("system software, then REBOOT.");
+        println!();
+        println!("IF YOU ALREADY REBOOTED AND IT IS STILL ZERO: systemextensionsctl reports");
+        println!("what is REGISTERED, not what is RUNNING. Check which one actually has the");
+        println!("card:");
+        println!();
+        println!("    ps -ax -o args= | grep BlackmagicIO.DExt");
+        println!("    ls -ldT /Library/SystemExtensions/<uuid-from-that-path>");
+        println!();
+        println!("If the running bundle is older than the one listed as [activated enabled],");
+        println!("the old extension is deadlocked holding the PCIe device and a reboot will");
+        println!("not break it. Unplug the Thunderbolt chassis for ~10s and plug it back in;");
+        println!("removing the device is what lets the old extension release.");
+        println!();
+        println!("Otherwise check the Thunderbolt connection and that Desktop Video Setup");
+        println!("sees the device.");
         return Ok(());
     }
 
