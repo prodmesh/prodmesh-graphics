@@ -52,7 +52,7 @@ const post = async (url, body, headers = {}) => {
  * `answer` returns the CueAck body, or null to stay silent — silence being the
  * case the synchronous cue endpoint exists to handle honestly.
  */
-async function fakeNode({ nodeId = 'booth-1', bootId = 'boot-a', answer = () => ({ result: 'Applied' }) } = {}) {
+async function fakeNode({ nodeId = 'booth-1', bootId = 'boot-a', adopt = true, answer = () => ({ result: 'Applied' }) } = {}) {
   const ws = new WebSocket(`ws://127.0.0.1:${port}/link`)
   const seen = []
   let welcome = null
@@ -106,6 +106,9 @@ async function fakeNode({ nodeId = 'booth-1', bootId = 'boot-a', answer = () => 
     },
   }))
   await welcomed
+  // Most tests are about cues, not about adoption, so nodes arrive adopted
+  // unless a test is specifically exercising the boundary.
+  if (adopt) link.setAdopted(nodeId, true)
 
   return {
     ws, seen, welcome: () => welcome,
@@ -177,6 +180,51 @@ test('u64 arrives as a Number, not a BigInt', () => {
 // ---------------------------------------------------------------------------
 // Handshake and liveness
 // ---------------------------------------------------------------------------
+
+test('an unadopted node is welcomed but gets nothing', async () => {
+  seedItem()
+  const n = await fakeNode({ nodeId: 'stranger-1', adopt: false })
+  assert.equal(link.get('stranger-1').adopted, false)
+
+  const r = await post('/api/cue', {
+    cue_id: 'c-adopt', node: 'stranger-1', output: 'out-0', layer: 'L', op: 'take', item: 'item-1',
+  })
+  // Connected, and not ours. Handing content to any process that dials the port
+  // would make adoption a decoration.
+  assert.equal(r.status, 409)
+  assert.equal(r.json.error, 'not_adopted')
+  assert.match(r.json.label, /Configure/)
+  await n.close()
+})
+
+test('adopting a node makes it usable immediately', async () => {
+  seedItem()
+  const n = await fakeNode({ nodeId: 'stranger-2', adopt: false })
+  assert.equal(
+    (await post('/api/cue', { cue_id: 'c-a1', node: 'stranger-2', output: 'out-0', layer: 'L', op: 'take', item: 'item-1' })).status,
+    409,
+  )
+  link.setAdopted('stranger-2', true)
+  // No restart, no reconnect. An operator who clicks Adopt expects it to work.
+  const after = await post('/api/cue', {
+    cue_id: 'c-a2', node: 'stranger-2', output: 'out-0', layer: 'L', op: 'take', item: 'item-1',
+  })
+  assert.equal(after.status, 200)
+  await n.close()
+})
+
+test('adoption survives the node reconnecting', async () => {
+  const a = await fakeNode({ nodeId: 'persist-1', adopt: false })
+  link.setAdopted('persist-1', true)
+  await a.close()
+  await new Promise((r) => setTimeout(r, 30))
+
+  const b = await fakeNode({ nodeId: 'persist-1', bootId: 'boot-b', adopt: false })
+  // Read back from the database on Hello. Otherwise every server restart turns
+  // the whole fleet back into strangers.
+  assert.equal(link.get('persist-1').adopted, true)
+  await b.close()
+})
 
 test('a node that connects is welcomed with the server epoch', async () => {
   const n = await fakeNode({ nodeId: 'welcome-1' })

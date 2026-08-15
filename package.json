@@ -20,10 +20,12 @@
     "lint": "oxlint server src",
     "selftest": "cargo run -q -p pmg-cli -- --selftest",
     "wire:fixtures": "node tools/write-wire-fixtures.mjs",
+    "chaos": "node tools/chaos.mjs",
     "wasm": "cargo build --release -p pmg-wasm --target wasm32-unknown-unknown && wasm-bindgen --target web --out-dir src/wasm target/wasm32-unknown-unknown/release/pmg_wasm.wasm"
   },
   "dependencies": {
     "better-sqlite3": "^12.4.1",
+    "bonjour-service": "^1.4.4",
     "cbor-x": "^1.6.5",
     "express": "^5.1.0",
     "hash-wasm": "^4.12.0",

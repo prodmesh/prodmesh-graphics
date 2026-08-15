@@ -5,6 +5,7 @@
 //! must put identical pixels on the wire, and two implementations of that is
 //! two chances to disagree.
 
+pub mod discover;
 pub mod engine;
 pub mod link;
 pub mod render;

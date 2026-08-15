@@ -301,3 +301,43 @@
 }
 .running__label { flex: 1; min-width: 0; font-size: 0.88rem; }
 .running__add { display: flex; flex-wrap: wrap; gap: 0.35rem; }
+
+/* Configure. */
+.cfg__h2 { font-size: 1rem; margin: 1.25rem 0 0.5rem; }
+.cfg__strangers { margin-bottom: 1.5rem; }
+.cfg__strangers h2 { font-size: 1rem; margin: 0 0 0.5rem; }
+.cfg__stranger {
+  display: flex; align-items: center; justify-content: space-between; gap: 1rem;
+  padding: 0.9rem; border-radius: var(--radius);
+  background: var(--accent-soft); border: 1px solid var(--accent-border);
+}
+.cfg__stranger p { margin: 0.3rem 0 0; font-size: 0.85rem; }
+
+.cfg__node {
+  border: 1px solid var(--border); border-radius: var(--radius-lg);
+  background: var(--bg-raised); padding: 0.9rem; margin-bottom: 1rem;
+}
+.cfg__node header { display: flex; align-items: center; gap: 0.5rem; margin-bottom: 0.6rem; }
+.cfg__dot { width: 8px; height: 8px; border-radius: 50%; background: var(--text-faint); }
+.cfg__dot--up { background: var(--ok); }
+.cfg__caps { margin: 0 0 0.8rem; display: grid; gap: 0.25rem; font-size: 0.85rem; }
+.cfg__caps > div { display: grid; grid-template-columns: 8rem 1fr; gap: 0.5rem; }
+.cfg__caps dt { color: var(--text-dim); display: flex; align-items: center; gap: 0.3rem; }
+.cfg__caps dd { margin: 0; }
+
+.cfg__output {
+  border-top: 1px solid var(--border-subtle); padding-top: 0.7rem; margin-top: 0.7rem;
+}
+.cfg__output h4 { margin: 0 0 0.15rem; font-size: 0.88rem; }
+.cfg__output p { margin: 0 0 0.5rem; }
+.cfg__saved { color: var(--ok); font-weight: 400; }
+.cfg__layers { list-style: none; margin: 0 0 0.6rem; padding: 0; display: grid; gap: 0.3rem; }
+.cfg__layers li {
+  display: flex; align-items: center; gap: 0.4rem;
+  padding: 0.3rem 0.4rem; border-radius: var(--radius-sm); background: var(--bg-tile);
+}
+.cfg__add { display: flex; gap: 0.4rem; }
+.cfg__add input {
+  flex: 1; padding: 0.4rem 0.5rem; border-radius: var(--radius-sm);
+  border: 1px solid var(--border-strong); background: var(--bg); color: var(--text); font: inherit;
+}

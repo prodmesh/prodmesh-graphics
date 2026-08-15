@@ -61,6 +61,10 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 # that gives the control server no HTTPS.
 tungstenite = { version = "0.28", default-features = false, features = ["handshake"] }
 ureq = { version = "3", default-features = false, features = ["gzip"] }
+# DNS-SD browsing, so a node can find a server with nothing typed in. An AID,
+# never an authority — manual entry must work everywhere discovery appears,
+# because multicast is unreliable across VLANs and behind poor IGMP snooping.
+mdns-sd = { version = "0.15", default-features = false, features = ["async"] }
 
 [profile.release]
 # A late frame is a visible glitch. Optimise for consistent frame time rather

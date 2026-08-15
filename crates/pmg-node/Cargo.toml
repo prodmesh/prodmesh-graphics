@@ -34,6 +34,7 @@ wgpu = { workspace = true }
 pollster = "0.4"
 tungstenite = { workspace = true }
 ureq = { workspace = true }
+mdns-sd = { workspace = true }
 
 [dev-dependencies]
 pmg-scene = { path = "../pmg-scene" }

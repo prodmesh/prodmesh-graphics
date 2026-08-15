@@ -26,6 +26,7 @@ import { randomUUID } from 'node:crypto'
 import { publish, registerTopic } from './streamHub.js'
 import * as wire from './wire.js'
 import { build as buildAssignment } from './assignment.js'
+import { handle } from './db.js'
 
 /** New every server start. Cue idempotency keys are scoped to it. */
 const EPOCH = Math.floor(Date.now() / 1000)
@@ -62,6 +63,10 @@ function session(nodeId) {
       state: null,
       ready: null,
       staging: null,
+      // Whether an operator has said this node belongs here. Persisted, because
+      // adoption must survive a server restart — otherwise every restart turns
+      // the whole fleet back into strangers.
+      adopted: false,
     }
     sessions.set(nodeId, s)
   }
@@ -162,6 +167,20 @@ function onHello(ws, hello) {
   // than telling it any.
   const resumeFrom = sameBoot && hello.last_applied_seq < s.seq ? hello.last_applied_seq + 1 : null
 
+  // Remember the node, and recover whether it was adopted. A node the operator
+  // adopted last week must not have to be adopted again because the server was
+  // restarted.
+  const db = handle()
+  const known = db.prepare('SELECT adopted FROM nodes WHERE node_id = ?').get(hello.node_id)
+  s.adopted = Boolean(known?.adopted)
+  db.prepare(
+    `INSERT INTO nodes (node_id, name, adopted, last_seen, capabilities)
+     VALUES (?, ?, ?, ?, ?)
+     ON CONFLICT(node_id) DO UPDATE SET
+       name = excluded.name, last_seen = excluded.last_seen, capabilities = excluded.capabilities`,
+  ).run(hello.node_id, hello.name || hello.node_id, s.adopted ? 1 : 0, Date.now(),
+        JSON.stringify(hello.capabilities ?? {}))
+
   s.ws = ws
   s.bootId = hello.boot_id
   s.name = hello.name || s.nodeId
@@ -192,12 +211,21 @@ function onHello(ws, hello) {
     },
   })
 
-  // Offer the current content on every connect. The node answers
-  // AssignmentNeed or AssignmentOk, so an already-current node costs one
-  // round trip and no transfer — which is the whole reason the offer carries a
-  // digest instead of the body.
+  // **An unadopted node gets nothing.** It is welcomed, it appears in
+  // Configure as a stranger asking to join, and that is all. Handing content to
+  // any process that dials the port would make "adopt" a decoration — and on a
+  // shared church network, a laptop running a stale build is exactly the thing
+  // that must not quietly start receiving this week's graphics.
   try {
-    offerAssignment(hello.node_id, buildAssignment({ nodeId: hello.node_id }))
+    if (s.adopted) {
+      // Offer the current content on every connect. The node answers
+      // AssignmentNeed or AssignmentOk, so an already-current node costs one
+      // round trip and no transfer — which is the whole reason the offer
+      // carries a digest instead of the body.
+      offerAssignment(hello.node_id, buildAssignment({ nodeId: hello.node_id }))
+    } else {
+      console.log(`link: ${hello.name} (${hello.node_id}) is waiting to be adopted`)
+    }
   } catch (e) {
     // A node that cannot be given content is still a node that may be holding
     // graphics on air. Log and carry on rather than dropping the link.
@@ -354,6 +382,11 @@ export function cue(nodeId, { cue_id, op, deadline_ms, at = null }) {
   if (!s) {
     return Promise.resolve({ result: 'unknown_node', reason: 'no_such_node' })
   }
+  if (!s.adopted) {
+    // It is connected and it is not ours. Refusing here rather than at the node
+    // keeps the boundary in one place.
+    return Promise.resolve({ result: 'not_adopted', reason: 'not_adopted' })
+  }
   if (!isOnline(s)) {
     return Promise.resolve({ result: 'offline', reason: 'node_offline' })
   }
@@ -398,6 +431,7 @@ export function list() {
     node_id: s.nodeId,
     name: s.name,
     reachable: isOnline(s),
+    adopted: s.adopted,
     version: s.version,
     assignment_gen: s.ackedGen,
     last_seen: s.lastSeen,
@@ -406,12 +440,35 @@ export function list() {
   }))
 }
 
+/**
+ * Adopt (or release) a node.
+ *
+ * Adopting immediately offers it the current content — an operator who clicks
+ * Adopt expects the node to be usable, not to need a restart.
+ */
+export function setAdopted(nodeId, adopted) {
+  const s = find(nodeId)
+  if (!s) return null
+  s.adopted = adopted
+  handle().prepare('UPDATE nodes SET adopted = ? WHERE node_id = ?').run(adopted ? 1 : 0, s.nodeId)
+  if (adopted) {
+    try {
+      offerAssignment(s.nodeId, buildAssignment({ nodeId: s.nodeId }))
+    } catch (e) {
+      console.error('link: could not offer content after adoption', e)
+    }
+  }
+  republish(s)
+  return get(s.nodeId)
+}
+
 export function get(nodeId) {
   const s = find(nodeId)
   return s ? list().find((n) => n.node_id === s.nodeId) : null
 }
 
 export const epoch = () => EPOCH
+export const serverId = () => SERVER_ID
 
 export function registerTopics() {
   const known = (id) => sessions.has(id)

@@ -252,7 +252,7 @@ on air.** Preview never shares the control socket.
 
 ## R8 — Cue delivery under failure
 
-**Status:** open · **Spike:** [S8](spikes/S8-cue-chaos.md) · **ADRs:** 0007, 0008
+**Status:** **measured and holding** (2026-08-15, spike S8) · **Spike:** [S8](spikes/S8-cue-chaos.md) · **ADRs:** 0007, 0008
 
 The honest analysis: over TCP, packet loss is not the failure mode. **Connection
 loss and slow applications are.** Therefore:

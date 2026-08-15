@@ -41,7 +41,15 @@ export type NodeSummary = {
   version: string | null
   assignment_gen: number | null
   last_seen: number
-  state: { outputs: { id: string }[] } | null
+  /** The node's own report of its outputs and their layers. Never our idea of them. */
+  state: { outputs: OutputState[] } | null
+}
+
+export type OutputState = {
+  id: string
+  fps?: number
+  late_frames?: number
+  layers: { name: string; occupant: Occupant | null }[]
 }
 
 export type CueLogEntry = {

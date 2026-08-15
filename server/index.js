@@ -33,6 +33,7 @@ import { router as rundownRouter } from './routes/rundown.js'
 import * as rundown from './rundown.js'
 import * as nodeLink from './nodeLink.js'
 import { build as buildAssignment } from './assignment.js'
+import * as discovery from './discovery.js'
 import * as cas from './cas.js'
 import { open as openDb } from './db.js'
 import { SCENE_READER_MAJOR } from './manifest.js'
@@ -70,6 +71,13 @@ export function createApp() {
   app.use(rundownRouter)
 
   app.get('/api/nodes', (_req, res) => res.json({ nodes: nodeLink.list() }))
+
+  app.post('/api/nodes/:id/adopt', (req, res) => {
+    const adopted = req.body?.adopted !== false
+    const n = nodeLink.setAdopted(req.params.id, adopted)
+    if (!n) return res.status(404).json({ error: 'not_found', label: 'No node with that id has connected.' })
+    res.json(n)
+  })
 
   app.get('/api/nodes/:id/outputs', (req, res) => {
     const rows = openDb()
@@ -221,4 +229,16 @@ if (process.argv[1] && import.meta.url === `file://${process.argv[1]}`) {
   // it needs the server object rather than the app. Assets and preview stay
   // elsewhere on purpose (pmg-link.md §0).
   nodeLink.attach(server)
+
+  // Advertised so a node with no stored pairing can find us. Manual entry
+  // always works and is the path that must never depend on this.
+  discovery.advertise({ port: PORT, serverId: nodeLink.serverId() })
+  process.on('SIGINT', shutdown)
+  process.on('SIGTERM', shutdown)
+}
+
+/** Withdraw the mDNS advertisement rather than leaving a ghost service behind. */
+function shutdown() {
+  discovery.stop()
+  process.exit(0)
 }

@@ -1,7 +1,7 @@
 # S8 — Cue delivery under chaos
 
 **Gates:** M2 · **Risk:** [R8](../RISKS.md#r8) · **ADRs:** 0007, 0008, 0009
-**Status:** not started
+**Status:** **PASS 2026-08-15** — 1000+ takes through five injections; zero fired twice, zero without a terminal outcome
 
 ## Question
 
@@ -72,20 +72,67 @@ finding about the protocol, not about the test.
 - **Takes queued behind an asset transfer** → something is sharing a connection
   that must not. Structural, and must be fixed before M2 ships.
 
-## Result
+## Result — 2026-08-15 · PASS
 
-*Not yet run.*
+`node tools/chaos.mjs --takes 1000`, MacBook Pro M3 Max. Real server, real
+`pmg-node`, with a TCP proxy in between so the control link can be severed
+without touching either.
 
-```
-Date:
-Server / node versions:
-Takes fired:
-Fired twice:
-Lost:
-Cues with no terminal outcome:
-Take latency under asset saturation (p50 / p95 / max):
-State after server restart:
-State after node restart:
-Gap-recovery correctness:
-Notes:
-```
+| | |
+|---|---|
+| Takes attempted | **1518** (1000 budgeted + filler, see below) |
+| Applied / deduped / rejected | 210 / 29 / 1220 |
+| **Fired twice** | **0** |
+| **No terminal outcome** | **0** |
+| Transport unknown | 4 |
+| Node came up black after restart | ✅ |
+| Cue-log gap recovery | ✅ no holes, no duplicates |
+| Final on-air state vs intent | ✅ exact, all three layers |
+| Take latency under asset saturation | **p50 1.6 ms · p95 27.5 ms · max 754 ms** |
+
+All five injections ran: link killed mid-cue, blackholed 30 s, server restarted,
+link killed again, node restarted. 1014 bulk 8 MB asset pulls crossed the server
+during the run, from a separate process.
+
+The high rejection count is the harness working, not the system failing: for
+much of the run the link is deliberately down, and **a take that cannot be
+confirmed is rejected rather than fired late**. Every one of those 1220 got a
+reason.
+
+### Three ways the harness lied before it told the truth
+
+**It skipped its own hard cases and still went green.** Injections were keyed to
+a fraction of progress, and the take loop ended the run. A blackholed link makes
+every take fail in about a millisecond, so a 1000-take run drained to completion
+*during* the 30 s blackhole — the server restart and node restart never fired,
+and it reported PASS. Injections are now gated on take count and the run will
+not end until every one has executed, firing filler takes if the budget runs out
+first. A harness that can skip its hard cases and pass is worse than none.
+
+**It asserted an empty expectation.** The first genuinely-complete run passed
+with `intended_final: []` — the node restart correctly cleared the intent model,
+nothing succeeded afterwards, and the final-state check compared nothing to
+nothing. There is now a deterministic settle phase: after chaos ends and the
+link is healthy, one take per layer, and *that* is what the final state is
+checked against.
+
+**It measured itself.** Saturation ran in-process, buffering each 8 MB pull with
+`arrayBuffer()` on the same event loop that fires the takes and holds the
+stopwatch. It reported **513 cue requests timing out at 4 s** and a p95 that
+excluded them, because percentiles were taken over successful takes only. Moving
+the load to a separate process and streaming-to-discard dropped
+`transport_unknown` from **513 to 4**; latency is now measured over every take,
+successful or not. The server was never the problem — the measurement was.
+
+### What it also proved
+
+- **After a node restart it came up black.** Checked in the moment, before any
+  new take, because a moment later it is unobservable. Auto-restore remains a
+  deliberate non-feature (ADR 0009).
+- **After a server restart, nothing on air changed** — the new process adopted
+  the node's `StateReport`.
+- **Idempotency is exercised, not assumed.** 29 duplicate `cue_id`s were
+  deduped. A run that never observes a dedupe now *fails*, because a green run
+  that skipped idempotency has not tested the thing most likely to break it.
+- **Bulk assets do not delay cues.** 1014 concurrent 8 MB transfers while takes
+  ran at p95 27.5 ms — the three-connection split in ADR 0007 holding up.

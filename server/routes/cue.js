@@ -132,6 +132,9 @@ async function dispatch(body, ctx) {
     case 'deduped':
       return { http: 200, payload: { result: ack.result, fired_at_frame: ack.fired_at_frame ?? null,
                                      at_utc: ack.at_utc ?? entry.at_utc, seq: entry.seq } }
+    case 'not_adopted':
+      return { http: 409, payload: { error: 'not_adopted',
+        label: `${body.node} hasn’t been adopted yet. Adopt it in Configure before taking to it.` } }
     case 'unknown_node':
       // Distinct from offline on purpose. "It is offline, everything is fine"
       // is a reassuring sentence, and saying it about a node that does not

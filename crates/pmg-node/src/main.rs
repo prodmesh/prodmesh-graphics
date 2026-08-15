@@ -47,9 +47,10 @@ pmg-node — ProdMesh Graphics playout node
 USAGE:
     pmg-node --server <host:port> [options]
 
-    --server <host:port>   Control server to dial. Required in M1; mDNS
-                           discovery is M2. Manual entry always works, and
-                           must — multicast is unreliable across VLANs.
+    --server <host:port>   Control server to dial. Omitted, the node browses
+                           for one over mDNS. Manual entry always wins and
+                           always works — multicast is unreliable across VLANs
+                           and behind switches with poor IGMP snooping.
     --state-dir <path>     Where identity, assignment, and the CAS live.
                            Default ./var/node
     --name <name>          Display name. Default: this machine's hostname.
@@ -84,11 +85,26 @@ fn main() -> Result<()> {
         return Ok(());
     }
 
-    let server = arg(&args, "--server").context(
-        "--server is required. mDNS discovery lands in M2, and manual entry must work \
-         everywhere discovery appears anyway — multicast is genuinely unreliable across \
-         VLANs and behind switches with poor IGMP snooping",
-    )?;
+    // Manual entry first, always. Discovery is what happens when nobody typed
+    // an address — never something that can override one.
+    let server = match arg(&args, "--server") {
+        Some(s) => s,
+        None => {
+            println!("  looking for a control server on this network…");
+            let (found, all) = pmg_node::discover::find(std::time::Duration::from_secs(5)).context(
+                "no control server found on this network, and no --server given.\n\
+                 Multicast is unreliable across VLANs and behind switches with poor IGMP \
+                 snooping, so this is a normal thing to hit — pass --server <host:port>.",
+            )?;
+            if all.len() > 1 {
+                // Reported, not silently resolved. Two control servers on one
+                // network is a misconfiguration a node cannot arbitrate.
+                println!("  WARNING: {} control servers answered: {}", all.len(), all.join(", "));
+                println!("  using {found}. Pass --server to choose.");
+            }
+            found
+        }
+    };
     let state_dir = arg(&args, "--state-dir").unwrap_or_else(|| "var/node".into());
     let store = store::Store::open(&state_dir)?;
     let identity = store.identity(arg(&args, "--name"))?;
