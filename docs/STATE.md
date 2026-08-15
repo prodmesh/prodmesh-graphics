@@ -96,6 +96,10 @@ other than what they were.
 | Design / Edit / Show | 🟢 all three real. Design compiles and renders with the shared Rust; Show takes on air and does not lie |
 | `pmg-wasm` | 🟢 `compile_template` + `DesignSession` — the browser half of ADR 0001, pinned by a native test |
 | Fonts | 🟡 uploaded as CAS assets and fetched by hash. Family matching is still provisional — one face serves every family a template names |
+| Adoption | 🟢 an unadopted node is welcomed and given **nothing** — no templates, no items, no cues. Persisted, so it survives a restart |
+| mDNS discovery | 🟡 **written, unverified.** Multicast is unusable on this host; `--server` is the tested path. See INTEGRATION-NOTES |
+| Configure | 🟢 adopt a node, see its capabilities, edit its layer stack — pushed live |
+| S8 chaos harness | 🟢 **gating.** `npm run chaos` — 1000+ takes through five injections, zero fired twice |
 | `pmg-node` | 🟢 **the playout binary.** Link client, staging, durable assignment, layer engine, NDI out. Survives server loss; 10 cue-rule tests |
 | `pmg-cas` | 🟢 atomic writes, streaming put, verify. Agrees with `server/cas.js` |
 | `pmg-out-ndi` | 🟢 the shared sender — one unpremultiply loop for the node and the CLI |

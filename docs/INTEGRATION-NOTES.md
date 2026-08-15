@@ -686,3 +686,35 @@ something this rundown does not contain** — taken from the rack, fired by a GP
 left over from earlier. Where they are *within* the running order is already
 carried by the two marks in the list, which needs no prose. The notice now names
 the stranger, so it says what to look at rather than that something is wrong.
+
+---
+
+## mDNS discovery is written but UNVERIFIED, and it nearly took the server down
+
+**2026-08-15.** The server advertises `_pmg-control._tcp` and `pmg-node` browses
+for it when `--server` is omitted. Neither half could be verified on this
+machine, and the reason is worth recording because it is not a code defect.
+
+```
+discovery: mDNS error (advertisement only, the server is fine) — send EHOSTUNREACH 224.0.0.251:5353
+```
+
+`netstat` shows a valid route to 224.0.0.251 on en0, so multicast is not dead —
+the host has a pile of virtual interfaces (`anpi1`, `anpi2`, `gif0`, loopback,
+and VPN tunnels) and the responder sends on ones that cannot carry it. The Rust
+node could not find a service advertised by **macOS's own `dns-sd -R`** either,
+which puts the fault below both implementations.
+
+**Status: the code is written, the fallback is tested, discovery itself is
+unproven.** `--server` works and is the supported path — which the spec has said
+all along: *mDNS is an aid, never an authority; manual host entry must work
+everywhere discovery appears.* The failure message names the flag rather than
+leaving an operator staring at "not found".
+
+**The part that matters more than the feature.** `bonjour-service`'s default
+error handler is `function (err) { throw err }`, called from inside a socket
+callback — an uncaught exception on the event loop. On this machine that fires
+repeatedly, so **an unreachable multicast group would have crashed the control
+server**. A convenience feature must not be able to take down playout control;
+`advertise()` now passes an error callback that logs and continues. Any future
+optional network feature gets the same treatment before it ships.
