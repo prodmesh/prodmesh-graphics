@@ -91,6 +91,8 @@ pub struct pmg_dl_stats {
     pub displayed_late: u64,
     pub dropped: u64,
     pub buffered: u64,
+    pub buffered_audio: u64,
+    pub audio_scheduled: u64,
 }
 
 pub enum pmg_dl_device {}
@@ -131,6 +133,8 @@ extern "C" {
         token: u64,
     ) -> pmg_dl_result;
     pub fn pmg_dl_output_stop(out: *mut pmg_dl_output) -> pmg_dl_result;
+    pub fn pmg_dl_output_last_hresult(out: *mut pmg_dl_output) -> i64;
+    pub fn pmg_dl_output_last_call(out: *mut pmg_dl_output) -> *const std::os::raw::c_char;
 }
 
 /// Key mode. See `docs/specs/output-config.md` §5.
@@ -434,6 +438,16 @@ pub struct Stats {
     pub displayed_late: u64,
     pub dropped: u64,
     pub buffered: u64,
+    /// Sample frames the card still holds.
+    ///
+    /// **The instrument for embedded audio.** Audio runs continuous, so a level
+    /// that is FLAT means the samples-per-frame cadence is right. Climbing means
+    /// too many are being fed and lip sync is walking late; falling means too
+    /// few, ending in a click at zero. No API reports either as an error.
+    pub buffered_audio: u64,
+    /// Sample frames the card actually ACCEPTED, which is not always what was
+    /// offered. A short write is not an API error and is a permanent offset.
+    pub audio_scheduled: u64,
 }
 
 /// An open output running scheduled playback.
@@ -448,6 +462,11 @@ pub struct Output {
     row_bytes: usize,
     #[cfg(decklink_sdk_present)]
     height: usize,
+    /// 0 when this output carries no audio. Kept so a caller cannot hand
+    /// samples to an output that was never enabled for them and have them
+    /// silently vanish.
+    #[cfg(decklink_sdk_present)]
+    audio_channels: usize,
 }
 
 impl Output {
@@ -457,6 +476,21 @@ impl Output {
     /// Preroll depth is one of the things spike S3 measures — starting on frame
     /// one underruns immediately.
     pub fn open(dev: &Device, mode: &Mode, key_mode: KeyMode, preroll: i32) -> Result<Self, Error> {
+        Self::open_with_audio(dev, mode, key_mode, preroll, 0)
+    }
+
+    /// Open with embedded audio on `audio_channels` channels.
+    ///
+    /// DeckLink accepts only **2, 8 or 16**; anything else is refused at open
+    /// rather than at the first scheduled frame, which is on air. `0` means no
+    /// audio, which is the right configuration for a lower-third key feed.
+    pub fn open_with_audio(
+        dev: &Device,
+        mode: &Mode,
+        key_mode: KeyMode,
+        preroll: i32,
+        audio_channels: i32,
+    ) -> Result<Self, Error> {
         if !available() {
             return Err(Error::NoSdk);
         }
@@ -475,7 +509,7 @@ impl Output {
                 paired_port: -1,
                 use_reference: 0,
                 preroll_frames: preroll,
-                audio_channels: 0,
+                audio_channels,
             };
             let mut raw: *mut pmg_dl_output = std::ptr::null_mut();
             // SAFETY: cfg is a local, out-pointer to a local; the shim writes
@@ -488,11 +522,12 @@ impl Output {
                 raw,
                 row_bytes: (mode.width as usize) * 4,
                 height: mode.height as usize,
+                audio_channels: audio_channels.max(0) as usize,
             })
         }
         #[cfg(not(decklink_sdk_present))]
         {
-            let (_, _, _, _) = (dev, mode, key_mode, preroll);
+            let (_, _, _, _, _) = (dev, mode, key_mode, preroll, audio_channels);
             Err(Error::NoSdk)
         }
     }
@@ -503,14 +538,41 @@ impl Output {
     /// yet returned a pool slot — the caller should back off one frame rather
     /// than spin.
     pub fn schedule_bgra(&self, fill: &[u8]) -> Result<(), Error> {
+        self.schedule_bgra_with_audio(fill, &[])
+    }
+
+    /// Schedule one 8-bit BGRA frame and the audio that belongs to it.
+    ///
+    /// `audio` is interleaved 32-bit signed samples — `audio.len()` must be a
+    /// whole number of sample frames of the output's channel count, and that
+    /// count must be **this frame's** count from `pmg_audio::AudioClock`, not a
+    /// round number. Handing the card a convenient 800 every frame at 59.94
+    /// drifts silently for an hour and is then seconds out.
+    ///
+    /// An empty slice means this output carries no audio, which is normal.
+    pub fn schedule_bgra_with_audio(&self, fill: &[u8], audio: &[i32]) -> Result<(), Error> {
         #[cfg(decklink_sdk_present)]
         {
             if fill.len() < self.row_bytes * self.height {
                 return Err(Error::Failed(PMG_DL_ERR_INTERNAL));
             }
-            // SAFETY: length checked above; the shim copies out of this buffer
-            // synchronously into its own pooled frame before returning, so the
-            // slice does not need to outlive the call.
+            // Sample FRAMES, not samples. Getting this wrong by a factor of the
+            // channel count is the obvious mistake and would sound like the
+            // clip playing at double speed.
+            let (aptr, aframes) = if audio.is_empty() || self.audio_channels == 0 {
+                (std::ptr::null(), 0i32)
+            } else {
+                if !audio.len().is_multiple_of(self.audio_channels) {
+                    return Err(Error::Failed(PMG_DL_ERR_INTERNAL));
+                }
+                (
+                    audio.as_ptr() as *const c_void,
+                    (audio.len() / self.audio_channels) as i32,
+                )
+            };
+            // SAFETY: lengths checked above; the shim copies out of both buffers
+            // synchronously before returning, so neither needs to outlive the
+            // call.
             let rc = unsafe {
                 pmg_dl_output_schedule(
                     self.raw,
@@ -518,8 +580,8 @@ impl Output {
                     self.row_bytes as i32,
                     std::ptr::null(),
                     0,
-                    std::ptr::null(),
-                    0,
+                    aptr,
+                    aframes,
                     0,
                     0,
                     0,
@@ -532,9 +594,37 @@ impl Output {
         }
         #[cfg(not(decklink_sdk_present))]
         {
-            let _ = fill;
+            let _ = (fill, audio);
             Err(Error::NoSdk)
         }
+    }
+
+    /// The vendor's own last failure: which SDK call, and its HRESULT.
+    ///
+    /// `PMG_DL_ERR_INTERNAL` alone says "the SDK said no". This says what said
+    /// no and with what code, which is the difference between a diagnosis and a
+    /// guess.
+    pub fn last_failure(&self) -> Option<(String, u32)> {
+        #[cfg(decklink_sdk_present)]
+        {
+            // SAFETY: the shim returns a static string and a scalar; neither is
+            // owned by us and the pointer is never null for a live output.
+            let hr = unsafe { pmg_dl_output_last_hresult(self.raw) };
+            if hr == 0 {
+                return None;
+            }
+            let p = unsafe { pmg_dl_output_last_call(self.raw) };
+            let name = if p.is_null() {
+                String::new()
+            } else {
+                unsafe { std::ffi::CStr::from_ptr(p) }
+                    .to_string_lossy()
+                    .into_owned()
+            };
+            Some((name, hr as u32))
+        }
+        #[cfg(not(decklink_sdk_present))]
+        None
     }
 
     pub fn stats(&self) -> Stats {
@@ -549,6 +639,8 @@ impl Output {
                     displayed_late: s.displayed_late,
                     dropped: s.dropped,
                     buffered: s.buffered,
+                    buffered_audio: s.buffered_audio,
+                    audio_scheduled: s.audio_scheduled,
                 };
             }
         }

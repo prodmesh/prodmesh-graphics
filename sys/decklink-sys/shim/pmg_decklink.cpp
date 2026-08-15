@@ -434,6 +434,15 @@ struct Output {
     uint64_t next_display_time = 0;
     int      preroll = 0;
     bool     started = false;
+    /* 0 when this output carries no audio, which is the common case for a
+     * lower-third key feed and is not a fault. */
+    int      audio_channels = 0;
+    bool     audio_prerolling = false;
+    std::atomic<uint64_t> n_audio{0};
+    /* Last SDK failure, kept so a caller can report the vendor's own code
+     * rather than our flattened one. */
+    std::atomic<int64_t>  last_hr{0};
+    const char *last_call = "";
 
     /* Counters. Written on the callback thread, read anywhere — relaxed is
      * fine, these are diagnostics, not control flow. */
@@ -443,6 +452,7 @@ struct Output {
         if (out) {
             out->StopScheduledPlayback(0, nullptr, 0);
             out->SetScheduledFrameCompletionCallback(nullptr);
+            if (audio_channels > 0) out->DisableAudioOutput();
             out->DisableVideoOutput();
         }
         for (auto *&f : pool)
@@ -563,6 +573,47 @@ pmg_dl_result pmg_dl_output_open(pmg_dl_device *dev, const pmg_dl_output_config 
         return PMG_DL_ERR_BUSY;
     }
 
+    /* Embedded audio, when the output is configured for it.
+     *
+     * CONTINUOUS, not timestamped. The card locks its audio clock to the video
+     * clock it is already running; we only decide how many sample frames ride
+     * with each video frame. That makes sync a property of the count, which is
+     * exactly the property pmg_audio::AudioClock guarantees exactly.
+     *
+     * The channel count is fixed at open because DeckLink accepts only 2, 8 or
+     * 16 — refusing an odd number here beats an E_INVALIDARG at the first
+     * scheduled frame, which is on air. */
+    if (cfg->audio_channels > 0) {
+        if (cfg->audio_channels != 2 && cfg->audio_channels != 8 &&
+            cfg->audio_channels != 16) {
+            delete op;
+            return PMG_DL_ERR_BAD_MODE;
+        }
+        if (o->EnableAudioOutput(bmdAudioSampleRate48kHz,
+                                 bmdAudioSampleType32bitInteger,
+                                 (uint32_t)cfg->audio_channels,
+                                 bmdAudioOutputStreamContinuous) != S_OK) {
+            delete op;
+            return PMG_DL_ERR_BUSY;
+        }
+        op->audio_channels = cfg->audio_channels;
+
+        /* Audio must be PREROLLED before it will accept a single sample.
+         *
+         * Measured 2026-08-15: without this, the first ScheduleAudioSamples
+         * returns 0x80000009 (E_ACCESSDENIED) even though EnableAudioOutput
+         * succeeded — the stream exists but is not open for business. The video
+         * path needs no equivalent, which is exactly why it is easy to miss.
+         *
+         * The bracket is Begin -> schedule the preroll frames -> End ->
+         * StartScheduledPlayback. */
+        if (o->BeginAudioPreroll() != S_OK) {
+            delete op;
+            return PMG_DL_ERR_BUSY;
+        }
+        op->audio_prerolling = true;
+    }
+
     /* Pre-create the whole pool. Allocating a frame mid-playback would be a
      * malloc on the critical path. */
     for (int i = 0; i < kPoolSize; i++) {
@@ -599,7 +650,7 @@ pmg_dl_result pmg_dl_output_set_callback(pmg_dl_output *, pmg_dl_frame_completed
 pmg_dl_result pmg_dl_output_schedule(pmg_dl_output *out,
                                      const void *fill, int32_t fill_stride,
                                      const void *key, int32_t /*key_stride*/,
-                                     const void * /*audio*/, int32_t /*audio_samples*/,
+                                     const void *audio, int32_t audio_samples,
                                      int64_t /*display_time*/, int64_t /*time_scale*/,
                                      uint64_t /*token*/) {
     Output *o = reinterpret_cast<Output *>(out);
@@ -661,14 +712,51 @@ pmg_dl_result pmg_dl_output_schedule(pmg_dl_output *out,
                                             (BMDTimeValue)o->next_display_time,
                                             (BMDTimeValue)o->frame_duration,
                                             (BMDTimeScale)o->time_scale);
-    if (hr != S_OK) return PMG_DL_ERR_INTERNAL;
+    if (hr != S_OK) {
+        o->last_hr.store((int64_t)(uint32_t)hr, std::memory_order_relaxed);
+        o->last_call = "ScheduleVideoFrame";
+        return PMG_DL_ERR_INTERNAL;
+    }
 
     o->next_display_time += (uint64_t)o->frame_duration;
     o->n_scheduled.fetch_add(1, std::memory_order_relaxed);
 
+    /* Audio AFTER the video frame is scheduled, so a video failure above never
+     * leaves the card holding samples for a picture that will not arrive —
+     * which would offset every frame after it by this frame's worth. */
+    if (audio && audio_samples > 0 && o->audio_channels > 0) {
+        uint32_t written = 0;
+        HRESULT ahr = o->out->ScheduleAudioSamples(const_cast<void *>(audio),
+                                                   (uint32_t)audio_samples,
+                                                   0, 0, &written);
+        if (ahr != S_OK) {
+            o->last_hr.store((int64_t)(uint32_t)ahr, std::memory_order_relaxed);
+            o->last_call = "ScheduleAudioSamples";
+            return PMG_DL_ERR_INTERNAL;
+        }
+        /* A SHORT WRITE IS NOT AN ERROR TO THE API and is a permanent sync
+         * offset to a viewer: the card took fewer samples than this frame owns,
+         * and every frame after it is early by the difference. Counted as what
+         * was actually accepted so `buffered_audio` and the caller's own clock
+         * disagree visibly rather than quietly. */
+        o->n_audio.fetch_add(written, std::memory_order_relaxed);
+    }
+
     /* Start only once enough frames are queued. Starting on frame 1 underruns
      * immediately; preroll depth is what spike S3 measures. */
     if (!o->started && o->n_scheduled.load(std::memory_order_relaxed) >= (uint64_t)o->preroll) {
+        /* Close the audio preroll bracket FIRST. Starting playback with the
+         * stream still prerolling leaves the card holding samples it will not
+         * play, and the video runs away from audio that never starts. */
+        if (o->audio_prerolling) {
+            HRESULT ehr = o->out->EndAudioPreroll();
+            if (ehr != S_OK) {
+                o->last_hr.store((int64_t)(uint32_t)ehr, std::memory_order_relaxed);
+                o->last_call = "EndAudioPreroll";
+                return PMG_DL_ERR_INTERNAL;
+            }
+            o->audio_prerolling = false;
+        }
         if (o->out->StartScheduledPlayback(0, (BMDTimeScale)o->time_scale, 1.0) == S_OK)
             o->started = true;
     }
@@ -704,7 +792,22 @@ pmg_dl_result pmg_dl_output_stats(pmg_dl_output *out, pmg_dl_stats *stats) {
     uint32_t buffered = 0;
     if (o->out) o->out->GetBufferedVideoFrameCount(&buffered);
     stats->buffered = buffered;
+
+    uint32_t abuf = 0;
+    if (o->out && o->audio_channels > 0)
+        o->out->GetBufferedAudioSampleFrameCount(&abuf);
+    stats->buffered_audio  = abuf;
+    stats->audio_scheduled = o->n_audio.load(std::memory_order_relaxed);
     return PMG_DL_OK;
 }
 
+int64_t pmg_dl_output_last_hresult(pmg_dl_output *out) {
+    Output *o = reinterpret_cast<Output *>(out);
+    return o ? o->last_hr.load(std::memory_order_relaxed) : 0;
+}
+
+const char *pmg_dl_output_last_call(pmg_dl_output *out) {
+    Output *o = reinterpret_cast<Output *>(out);
+    return (o && o->last_call) ? o->last_call : "";
+}
 } /* extern "C" */

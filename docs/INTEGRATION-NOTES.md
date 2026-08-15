@@ -1167,3 +1167,65 @@ which would undo the entire reason video is decoded a frame at a time.
 Same reasoning as `looks_like_a_font`, which was already there for the same
 reason: a CAS filename is a hash, so there is no extension to trust, and trusting
 one would be worse than having none.
+
+## DeckLink audio needs a preroll bracket, and says E_ACCESSDENIED without one
+*2026-08-15 · MacBook Pro arm64 · Desktop Video 16.3 · DeckLink SDK 16.0 · DeckLink Quad 2, sub-device 1*
+
+`EnableAudioOutput` succeeding does not mean the stream will take a sample. The
+first `ScheduleAudioSamples` returns **`0x80000009` (E_ACCESSDENIED)** — the
+stream exists and is not open for business.
+
+Continuous audio wants an explicit bracket, and the video path needs no
+equivalent, which is exactly why it is easy to miss:
+
+```
+EnableVideoOutput → EnableAudioOutput → BeginAudioPreroll
+  → schedule the preroll frames, video AND audio
+→ EndAudioPreroll → StartScheduledPlayback
+```
+
+`EndAudioPreroll` must come **before** `StartScheduledPlayback`. Starting with
+the stream still prerolling leaves the card holding samples it will not play,
+and the video runs away from audio that never starts.
+
+## The card's own audio buffer is the instrument, and it is the only one
+
+**2026-08-15, M3e.** Embedded audio has no error to check. The API accepts a
+wrong sample count without complaint, the video counters stay perfect, and the
+fault is a slow walk out of lip sync. What is actually observable is
+`GetBufferedAudioSampleFrameCount`: audio runs continuous, the card drains it at
+its own rate, and we top it up once per video frame — **so if the cadence is
+right, the level is flat.**
+
+Two minutes at 1080p59.94, 2 channels, 7193 frames, on the same run:
+
+| Cadence fed | abuf @30 s | @60 s | @90 s | Late | Dropped |
+|---|---|---|---|---|---|
+| exact (801/801/801/801/800) | 5550–5863 | 5534–6098 | 5460–6080 | 0 | 0 |
+| **flat 800, on purpose** | 3954–4522 | 2543–3134 | 1111–1730 | 0 | 0 |
+
+The exact cadence sits in the same band for the whole run. The naive one loses
+**0.79 samples a frame measured** against 0.8 predicted, and would have hit zero
+and clicked at about two minutes. Over a two-hour service that is **7.1 seconds**
+of lip sync.
+
+Note the last two columns. **Zero late and zero dropped in both rows.** Every
+video counter reads perfect while the audio quietly empties, which is the whole
+reason this needed an instrument rather than an assertion — and why `pmgctl
+decklink out --audio-naive` exists at all. A measurement you cannot make fail on
+demand is not yet evidence.
+
+## A loop that retries every error turns a fault into a hang
+
+**2026-08-15, M3e.** The soak's scheduling loop treated *any* `Err` as
+backpressure: back off a quarter frame and try again. That was correct when
+`BUSY` was the only error it could see. The moment audio could fail, the loop
+spun on E_ACCESSDENIED for **seven minutes**, scheduling zero frames, printing
+nothing, and looking exactly like a slow card.
+
+Two fixes, and the second matters more than the first. Only `PMG_DL_ERR_BUSY` is
+backpressure now; everything else stops and says so. And the shim records the
+**vendor's own HRESULT and which call produced it**, because
+`PMG_DL_ERR_INTERNAL` says "the SDK said no" and `ScheduleAudioSamples returned
+0x80000009` says what to go and read. Flattening a vendor error code into a
+generic one throws away the only part with diagnostic value.

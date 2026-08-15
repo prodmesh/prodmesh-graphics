@@ -23,6 +23,16 @@ pmgctl decklink — DeckLink enumeration and capability probe (M0)
     pmgctl decklink ref [index]      Reference (genlock) status
     pmgctl decklink out [flags]      Spike S3's soak: scheduled output
         --device N --minutes N --preroll N --pattern P --mode WxHpNUM/DEN
+        --audio N                    Embed N channels (2, 8 or 16) of a 1 kHz
+                                     tone, and report the card's audio buffer
+        --audio-naive                Deliberately feed floor(samples/frame)
+                                     instead of the exact cadence, to show what
+                                     a drifting buffer looks like
+
+With --audio the interesting number is `abuf`, the card's own buffered sample
+count. Audio runs continuous, so a FLAT level means the samples-per-frame
+cadence is exact. Climbing means too many samples per frame and lip sync
+walking late; falling ends in a click. Nothing reports either as an error.
 
 The soak's bar is ZERO late and ZERO dropped over ten minutes at 1080p59.94.
 One late frame in ten minutes is one visible glitch per ten minutes of service.
@@ -369,7 +379,45 @@ fn out(args: &[String]) -> Result<()> {
         .collect();
     println!("  pre-rendered in    {:.1}s\n", t0.elapsed().as_secs_f64());
 
-    let output = match dl::Output::open(&dev, &mode, dl::KeyMode::FillOnly, preroll) {
+    let audio_channels: i32 = arg(args, "--audio")
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(0);
+    // The clock that decides how many samples ride with each frame. Built from
+    // the OUTPUT's rate, which is the whole point — see pmg_audio.
+    let aclock = (audio_channels > 0)
+        .then(|| {
+            pmg_audio::AudioClock::new(
+                (mode.fps_num as u32, mode.fps_den as u32),
+                pmg_audio::SAMPLE_RATE,
+            )
+        })
+        .transpose()?;
+    // Deliberately wrong, so the instrument can be shown to work. A flat buffer
+    // level only means something if a drifting one is visibly different.
+    let naive = args.iter().any(|a| a == "--audio-naive");
+    if let Some(c) = &aclock {
+        println!(
+            "  audio              {audio_channels} ch, {:.1} samples/frame nominal, \
+             cadence repeats every {} frames",
+            c.samples_per_frame(),
+            c.cadence_frames()
+        );
+        if naive {
+            println!(
+                "  AUDIO NAIVE        feeding a flat {} samples/frame ON PURPOSE — \
+                 the buffer should DRAIN",
+                c.samples_per_frame().floor() as u64
+            );
+        }
+    }
+
+    let output = match dl::Output::open_with_audio(
+        &dev,
+        &mode,
+        dl::KeyMode::FillOnly,
+        preroll,
+        audio_channels,
+    ) {
         Ok(o) => o,
         Err(e) => {
             println!("could not open output: {e}");
@@ -386,10 +434,56 @@ fn out(args: &[String]) -> Result<()> {
     let mut scheduled = 0u64;
     let mut backoffs = 0u64;
 
+    // A 1 kHz tone, generated once per frame into a reused buffer. Generating
+    // it per frame is fine — it is a few hundred samples of sine, not a
+    // per-pixel pass — but the PHASE must be continuous across frames or the
+    // tone clicks every frame and the test measures nothing.
+    let mut tone: Vec<i32> = Vec::new();
+    let mut tone_phase: u64 = 0;
+
     while scheduled < total {
         let buf = &pool[(scheduled % pool_len) as usize];
-        match output.schedule_bgra(buf) {
+
+        if let Some(c) = &aclock {
+            let frames = if naive {
+                c.samples_per_frame().floor() as usize
+            } else {
+                c.samples_for(scheduled) as usize
+            };
+            tone.clear();
+            tone.reserve(frames * audio_channels as usize);
+            for _ in 0..frames {
+                // 1 kHz at 48 kHz: 48 samples a cycle. Phase carried in the
+                // absolute sample index so it never resets at a frame boundary.
+                let t = tone_phase as f64 / pmg_audio::SAMPLE_RATE as f64;
+                let v =
+                    ((t * 1000.0 * std::f64::consts::TAU).sin() * 0.25 * i32::MAX as f64) as i32;
+                for _ in 0..audio_channels {
+                    tone.push(v);
+                }
+                tone_phase += 1;
+            }
+        }
+
+        match output.schedule_bgra_with_audio(buf, &tone) {
             Ok(()) => scheduled += 1,
+            // ONLY busy is backpressure. Every other error means something is
+            // actually wrong, and treating it as "try again" turns a fault into
+            // a hang: the first version of this looped for seven minutes on a
+            // failing audio schedule, printing nothing, looking exactly like a
+            // slow card. A loop that retries everything cannot tell you what
+            // broke, and a soak that cannot tell you what broke is not an
+            // instrument.
+            Err(dl::Error::Failed(rc)) if rc != dl::PMG_DL_ERR_BUSY => {
+                let detail = match output.last_failure() {
+                    Some((call, hr)) => format!("{call} returned 0x{hr:08X}"),
+                    None => format!("code {rc}"),
+                };
+                anyhow::bail!(
+                    "scheduling failed after {scheduled} frames ({backoffs} back-offs): \
+                     {detail}. This is not backpressure."
+                );
+            }
             Err(_) => {
                 // Pool exhausted: DeckLink has not returned a frame yet. Back
                 // off rather than spin — a busy-wait here would steal CPU from
@@ -405,8 +499,17 @@ fn out(args: &[String]) -> Result<()> {
 
         if scheduled > 0 && scheduled.is_multiple_of(fps.round() as u64 * 30) {
             let s = output.stats();
+            let audio = if audio_channels > 0 {
+                format!(
+                    " · abuf {:>5} ({:.0} ms)",
+                    s.buffered_audio,
+                    s.buffered_audio as f64 * 1000.0 / pmg_audio::SAMPLE_RATE as f64
+                )
+            } else {
+                String::new()
+            };
             println!(
-                "  {:>6} sched · {:>6} done · late {} · dropped {} · buffered {} · {:.1}s",
+                "  {:>6} sched · {:>6} done · late {} · dropped {} · buffered {}{audio} · {:.1}s",
                 s.scheduled,
                 s.completed,
                 s.displayed_late,

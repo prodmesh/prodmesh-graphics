@@ -193,6 +193,16 @@ pmg_dl_result pmg_dl_output_set_callback(pmg_dl_output *out,
  * `display_time` is in `time_scale` units. For a fill+key pair, BOTH ports are
  * scheduled at the same display_time — that is what guarantees phase.
  *
+ * `audio` is interleaved 32-bit signed samples at 48 kHz, `audio_samples`
+ * SAMPLE FRAMES of `audio_channels` each — not individual samples, and not
+ * bytes. NULL when the output carries no audio.
+ *
+ * Audio is scheduled CONTINUOUS, not timestamped: the card keeps its own audio
+ * clock locked to the video clock and plays what it is given in order. Sync is
+ * therefore a property of the COUNT, not of a timestamp — hand it exactly the
+ * samples that belong to this frame (pmg_audio::AudioClock) and it cannot
+ * drift. Hand it a convenient round number and it drifts silently for an hour.
+ *
  * `token` is echoed back to the completion callback so the caller can retire
  * its buffer.
  */
@@ -214,9 +224,32 @@ typedef struct {
     uint64_t displayed_late;
     uint64_t dropped;
     uint64_t buffered;
+    /*
+     * Audio sample-frames the card still holds, and how many we have handed it.
+     *
+     * `buffered_audio` is THE instrument for embedded audio. Audio runs
+     * continuous: the card consumes it at its own rate, locked to the video
+     * clock, and we top it up once per video frame. If the samples-per-frame
+     * cadence is right the level is FLAT. A level that climbs means we are
+     * feeding too many and lip sync is walking late; one that falls means too
+     * few, and it ends in a click when it hits zero. Neither shows up as an
+     * error from any API — which is why it is counted here.
+     */
+    uint64_t buffered_audio;
+    uint64_t audio_scheduled;
 } pmg_dl_stats;
 
 pmg_dl_result pmg_dl_output_stats(pmg_dl_output *out, pmg_dl_stats *stats);
+
+/*
+ * The last HRESULT the SDK returned, and which call produced it.
+ *
+ * A pmg_dl_result of PMG_DL_ERR_INTERNAL says only "the SDK said no". This
+ * says WHAT said no and with what code, which is the difference between a
+ * diagnosis and a guess. `where` is a static string; do not free it.
+ */
+int64_t     pmg_dl_output_last_hresult(pmg_dl_output *out);
+const char *pmg_dl_output_last_call(pmg_dl_output *out);
 
 /* ---- Build / runtime introspection -------------------------------------- */
 
