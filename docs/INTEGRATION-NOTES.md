@@ -937,3 +937,28 @@ lock, so a take briefly stalls every group. An arm is 0.3–2 ms against a
 frame on a take. Two outputs across two groups ran at 59.94 with **zero** late
 frames through repeated takes. Moving the arm outside the lock is the obvious
 next step if it ever shows up on air.
+
+## Reference status must be read through the handle you already hold
+
+**2026-08-15, M3c.** `Sender::reference()` first re-opened the DeckLink device by
+index and got `None` every single time — because the device was already open,
+**by us**. The Sender now keeps its `Device` handle for the life of the output
+and reads through it. (It was previously `std::mem::forget`-ed, which kept the
+device alive but threw away the only way to ask it anything.)
+
+Measured on a DeckLink Quad 2 sub-device 1 with no reference generator attached:
+
+```
+sync: { present: true, locked: false, format: "" }
+```
+
+**What `present: true` means here is genuinely unclear** and should not be
+reported to an operator as fact until it is settled. With nothing plugged into
+the reference input it may mean "this card has a reference connector" rather
+than "a reference signal is detected". Distinguishing them needs a blackburst or
+tri-level generator to toggle — the Evertz box at church. Until then the UI shows
+the three states the card describes and does not editorialise.
+
+`None` is reserved for backends with **no reference concept at all** (NDI,
+headless) and is deliberately distinct from `present: false`. Showing them alike
+would tell an operator their card had lost reference when it never had one.

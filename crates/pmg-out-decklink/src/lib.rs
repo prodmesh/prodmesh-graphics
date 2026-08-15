@@ -58,6 +58,9 @@ pub struct Sender {
     height: u32,
     fps_num: i32,
     fps_den: i32,
+    /// Kept alive for the life of the output: it owns the handle the outputs
+    /// were opened from, and reference status is read through it.
+    dev: decklink_sys::Device,
     /// Reused between frames so a service does not allocate two buffers a frame.
     fill_buf: std::cell::RefCell<Vec<u8>>,
     key_buf: std::cell::RefCell<Vec<u8>>,
@@ -123,8 +126,6 @@ impl Sender {
             None => None,
         };
 
-        // The device handle must outlive the output it opened.
-        std::mem::forget(dev);
         let (w, h) = (mode.width as u32, mode.height as u32);
         Ok(Self {
             fill,
@@ -133,6 +134,7 @@ impl Sender {
             height: h,
             fps_num: mode.fps_num,
             fps_den: mode.fps_den,
+            dev,
             fill_buf: std::cell::RefCell::new(vec![0u8; (w * h * 4) as usize]),
             key_buf: std::cell::RefCell::new(vec![0u8; (w * h * 4) as usize]),
         })
@@ -259,6 +261,19 @@ impl Sender {
             }
         }
         Ok(())
+    }
+
+    /// What the card says about its reference input, right now.
+    ///
+    /// Read live rather than cached at open: a reference can be unplugged
+    /// mid-service, and a status that only reflects boot time is worse than
+    /// none because it is confidently stale.
+    ///
+    /// Uses the device handle this Sender already holds. The first version
+    /// re-opened the device by index and silently got `None` every time,
+    /// because the device is already open — by us.
+    pub fn reference(&self) -> Option<decklink_sys::Reference> {
+        self.dev.reference()
     }
 
     pub fn stats(&self) -> decklink_sys::Stats {

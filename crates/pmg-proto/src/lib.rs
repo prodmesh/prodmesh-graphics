@@ -522,10 +522,28 @@ pub struct StateReport {
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
 pub struct OutputState {
     pub id: String,
+    /// Reference/genlock, as the hardware reports it. `None` for a backend with
+    /// no such concept (NDI, headless) — which is different from "present:
+    /// false", and the UI must not conflate them.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sync: Option<SyncState>,
     pub layers: Vec<LayerState>,
     #[serde(deserialize_with = "lenient::f32")]
     pub fps: f32,
     pub late_frames: u64,
+}
+
+/// What the card says about its reference input.
+///
+/// **Genlock gives phase, not frame numbering** (ADR 0011). Two nodes on one
+/// reference output in lockstep and still disagree about which frame is number
+/// 1841944, so `locked` here promises phase within this node and nothing about
+/// simultaneity across nodes.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+pub struct SyncState {
+    pub present: bool,
+    pub locked: bool,
+    pub format: String,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]

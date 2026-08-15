@@ -83,6 +83,8 @@ pub struct Output {
     pub layers: Vec<Layer>,
     /// Colour handling, from the assignment.
     pub color: pmg_proto::ColorConfig,
+    /// Reference status, refreshed by the render thread that owns this output.
+    pub sync: Option<pmg_proto::SyncState>,
     /// A test pattern overriding everything on this output, if one is up.
     ///
     /// It sits ABOVE the layer stack on purpose: an instrument you have to
@@ -220,6 +222,7 @@ impl LayerEngine {
                 None => self.outputs.push(Output {
                     id: oa.id.clone(),
                     color: oa.color.clone(),
+                    sync: None,
                     test_pattern: None,
                     layers: oa
                         .layers
@@ -502,6 +505,7 @@ impl LayerEngine {
                 .iter()
                 .map(|o| pmg_proto::OutputState {
                     id: o.id.clone(),
+                    sync: o.sync.clone(),
                     fps: o.fps() as f32,
                     late_frames: o.late_frames,
                     layers: o

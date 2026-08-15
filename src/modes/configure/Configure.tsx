@@ -21,7 +21,7 @@
  */
 
 import { useCallback, useState } from 'react'
-import { Check, Cpu, Layers, MonitorPlay, Plus, X } from 'lucide-react'
+import { Check, Cpu, Layers, MonitorPlay, Plus, Radio, X } from 'lucide-react'
 import { useQuery, invalidate } from '../../lib/useQuery'
 import { keys } from '../../lib/keys'
 import { ApiError, post, put } from '../../lib/api'
@@ -147,6 +147,30 @@ function NodeCard({ node }: { node: FullNode }) {
         </div>
         <div><dt><Layers size={13} aria-hidden /> Max layers</dt><dd>{caps?.max_layers ?? '?'}</dd></div>
       </dl>
+
+      {liveOutputs.some((o) => o.sync) ? (
+        <dl className="cfg__caps">
+          {liveOutputs.filter((o) => o.sync).map((o) => (
+            <div key={o.id}>
+              <dt><Radio size={13} aria-hidden /> Reference · {o.id}</dt>
+              <dd>
+                {o.sync?.locked ? (
+                  <span className="cfg__lock cfg__lock--ok">locked · {o.sync.format || 'unknown format'}</span>
+                ) : o.sync?.present ? (
+                  // Present but not locked is the interesting state: a
+                  // reference is connected and the card is not following it,
+                  // which usually means a format mismatch.
+                  <span className="cfg__lock cfg__lock--warn">
+                    present, not locked{o.sync.format ? ` · ${o.sync.format}` : ''}
+                  </span>
+                ) : (
+                  <span className="cfg__lock">no reference connected — free running</span>
+                )}
+              </dd>
+            </div>
+          ))}
+        </dl>
+      ) : null}
 
       {(outputs.length
         ? outputs

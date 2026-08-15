@@ -108,6 +108,7 @@ other than what they were.
 | Test patterns | 🟢 on demand, above the layer stack, so a configuration can be proved without clearing the show off air |
 | `pmg-media` | 🟡 **stills only (M3a).** PNG and JPEG to premultiplied RGBA, format sniffed by magic bytes. Video, frame cache and A/V clock are M3d |
 | Images on air | 🟢 `kind: "image"` with `fit: cover \| contain \| stretch`, decoded once at assignment, soft alpha composites correctly over a key |
+| Genlock status | 🟡 read live from the card and surfaced in Configure; what `present: true` means with nothing plugged in is **unverified** — needs a reference generator |
 | Multi-output | 🟢 **1–N outputs per node**, a render thread per output GROUP (shared clock), independent content and resolutions per output. Two outputs at 59.94, zero late |
 | `pmg-preview` | 🟢 **MJPEG preview.** 480x270 over a checkerboard on port 8521, two viewers, **zero late frames** on the output |
 | `pmg-out-decklink` | 🟢 **SDI output.** Fill and key on two ordinary ports, 90 s at 1080p59.94, zero late frames. The key *picture* is unverified on a scope |

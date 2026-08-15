@@ -525,6 +525,7 @@ fn render_group(
         });
     }
 
+    let mut sync_poll = Instant::now();
     while !stop.load(std::sync::atomic::Ordering::Relaxed) {
         for out in &mut outputs {
             let budget_ms = 1000.0 / (out.spec.fps.0 as f64 / out.spec.fps.1 as f64);
@@ -612,6 +613,32 @@ fn render_group(
         if let Ok(mut e) = engine.lock() {
             for out in &outputs {
                 e.tick(&out.spec.id);
+            }
+        }
+
+        // Refresh reference status about once a second. A reference can be
+        // unplugged mid-service, so this is polled rather than read at open —
+        // a status that only reflects boot time is worse than none, because it
+        // is confidently stale.
+        if sync_poll.elapsed() >= Duration::from_secs(1) {
+            sync_poll = Instant::now();
+            for out in &outputs {
+                let sync = match &out.backend {
+                    Backend::DeckLink(d) => d.reference().map(|r| pmg_proto::SyncState {
+                        present: r.present,
+                        locked: r.locked,
+                        format: r.format,
+                    }),
+                    // NDI and headless have no reference input. None means "no
+                    // such concept", which is NOT the same as present: false
+                    // and must not be shown as an unlocked card.
+                    _ => None,
+                };
+                if let Ok(mut e) = engine.lock() {
+                    if let Some(o) = e.outputs.iter_mut().find(|o| o.id == out.spec.id) {
+                        o.sync = sync;
+                    }
+                }
             }
         }
     }

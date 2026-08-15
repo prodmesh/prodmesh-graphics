@@ -53,8 +53,18 @@ export type NodeSummary = {
   preview_url?: string | null
 }
 
+export type SyncState = { present: boolean; locked: boolean; format: string }
+
 export type OutputState = {
   id: string
+  /**
+   * Reference/genlock as the hardware reports it.
+   *
+   * `undefined` means the backend has no such concept (NDI, headless) — which
+   * is NOT the same as `present: false`, and showing them alike would tell an
+   * operator their card had lost reference when it never had one.
+   */
+  sync?: SyncState | null
   fps?: number
   late_frames?: number
   layers: { name: string; occupant: Occupant | null }[]

@@ -361,3 +361,7 @@
 .cfg__color p { margin: 0; }
 .cfg__color .field { grid-template-columns: 7rem 1fr; display: grid; align-items: center; }
 .cfg__color .field > span { margin: 0; }
+
+.cfg__lock { color: var(--text-dim); }
+.cfg__lock--ok { color: var(--ok); }
+.cfg__lock--warn { color: var(--warn-text); }
