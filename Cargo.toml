@@ -44,6 +44,9 @@ wgpu = "30"
 ciborium = "0.2"
 blake3 = "1"
 taffy = "0.13"
+# Shaping AND rasterization, with explicit subpixel-offset control — which is
+# the point (risk R3). CPU-only, so glyphs are identical native vs wasm.
+swash = "0.2"
 serde_json = "1"
 
 # --- Everything else. Available to non-pure crates only.

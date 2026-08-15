@@ -9,3 +9,6 @@ publish.workspace = true
 [dependencies]
 serde = { workspace = true }
 thiserror = { workspace = true }
+swash = { workspace = true }
+pmg-scene = { path = "../pmg-scene" }
+pmg-layout = { path = "../pmg-layout" }

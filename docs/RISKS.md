@@ -75,29 +75,53 @@ is an M6-or-later conversation.
 
 ## R3 — Rust text quality is the thing most likely to look amateur
 
-**Status:** open · **Spike:** [S2](spikes/S2-text-typography.md)
+**Status:** **structurally addressed** (2026-08-14), quality unmeasured ·
+**Spike:** [S2](spikes/S2-text-typography.md)
 
-**Recommended stack:** `parley` + `swash` + `fontique`, with `harfrust`/
-`rustybuzz` underneath. `cosmic-text` is the pragmatic all-in-one and it works,
-but its API is text-editor-shaped, its line breaking is simplistic, and it bakes
-in a system font database — all three fight what we need.
+`pmg-text` is built on **swash** — shaping *and* rasterization, with explicit
+subpixel-offset control, which is the reason to pick it. `parley` is deferred to
+M5, when multi-line, bidi, and rich text actually arrive; `TextMeasure` is a
+trait so that swap costs nothing.
+
+Each of the three hazards below now has a structural answer and a test. What is
+*not* yet established is quality — whether ⅛ px is enough phases, whether the
+edges look right keyed over live video. That is still spike S2's job, and it
+needs eyes on real hardware, not assertions.
+
+**Found while building it, and worth keeping:** metrics came back in font
+**design units** — an ascent of 85,284 "px" at 46 px — because `linear_scale()`
+multiplies raw units while `scale(ppem)` divides by units-per-em first. Every
+relationship assertion passed anyway: positive, monotonic, scaling linearly,
+because *both* numbers were wrong by the same factor. A suite that only compares
+values to each other cannot catch a units error, so the metrics test now carries
+**absolute** plausibility bounds as well.
 
 What will actually break, in order of how much it will hurt:
 
-- **Subpixel positioning.** Broadcast CG slides text horizontally during
-  animation. Integer-snapped glyphs *visibly shudder*. Needs fractional-offset
-  glyph caching (quantise to ⅛ px, cache per phase) or SDF glyphs. This is the
-  single most likely thing to make the output look amateur.
-- **Antialiasing over a key.** Grayscale only — subpixel-RGB AA is meaningless
-  over an alpha channel. The AA edge must be premultiplied correctly or you get
-  dark or light fringes when keyed over live video. This is *the* classic
-  broadcast CG bug. Test over mid-grey and over saturated backgrounds explicitly.
+- **Subpixel positioning.** ✅ **Implemented:** glyphs rasterize at 8 fractional
+  offsets and the phase is part of the cache key. Measured on Arial at 46 px, an
+  `M` across the phases varies in width (32↔33 px) and left bearing (3→4) while
+  its coverage sum holds at ~128,240 ± 20 — the same ink redistributed across
+  pixel boundaries, which is exactly what stops the shudder. A test asserts
+  phases 0 and 4 do **not** rasterize identically; without it, a regression here
+  would be invisible in a still frame and obvious in motion.
+- **Antialiasing over a key.** ✅ **Structurally enforced:** the atlas stores a
+  **single coverage channel** and nothing else — never premultiplied, never
+  coloured, never subpixel-RGB. Premultiplication happens once, at composite, in
+  the renderer's linear space (ADR 0012). Baking colour into the atlas would
+  premultiply in the wrong space *and* make the cache per-colour. Hinting is also
+  off: grid-fitting snaps glyphs to whole pixels, which is the shudder above.
+  **Still to verify by eye** over mid-grey and saturated backgrounds — S2.
 - **OpenType features.** `kern`, `liga`, `smcp`, `ss01`, and especially `tnum`
   (tabular figures — clocks and scores jitter without it). Per-run feature
   control belongs in the scene format.
-- **Vertical metrics.** The OS/2 typo vs hhea vs win mess. Pick one metric set,
-  document it, and **never change it** — changing it moves every existing
-  template by two pixels.
+- **Vertical metrics.** ✅ **Decided:** OS/2 typographic metrics when the font
+  sets `USE_TYPO_METRICS` (fsSelection bit 7), otherwise hhea — swash's rule,
+  and the rule browsers use, so text sits where a designer expects. It reads as
+  conditional but **cannot drift**: fonts are content-addressed, so a given font
+  hash always carries the same flag and therefore the same baseline. Documented
+  on `pmg_text::Metrics`. **Never change it** — doing so moves every existing
+  template by a couple of pixels, silently.
 - **Emoji.** COLRv1 via swash is fine. Declare sbix and SVG-in-OpenType
   unsupported rather than half-supporting them.
 - **RTL and CJK.** Shaping is handled by the stack; the *layout* side is the
