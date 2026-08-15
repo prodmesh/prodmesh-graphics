@@ -169,6 +169,27 @@ contract tests.
 
 ---
 
+## Open modelling questions — raised 2026-08-15, not yet decided
+
+Two requirements from the owner that the current data model cannot express.
+Both need an ADR **before** they are built, because they change the schema
+rather than the screen. Captured in `docs/UX-BRIEF.md` §4–5.
+
+**Playout mode per playlist.** The original brief's "playout controls that vary
+by playlist", made concrete: a **Follow** mode where navigating *is* taking
+(lyrics, arrow keys, no arm step) and a **Cue** mode of explicit arm-then-take
+(the message, media-heavy, an Xpression-style cuelist). The cursor's meaning and
+the keyboard map both change with the mode. The primitives exist — cursor and
+take are already separate operations — but a Playlist has no `mode` and nothing
+consumes one.
+
+**One Item, several destinations.** A lyric slide goes to a DeckLink fill+key
+pair *and* to an in-room LED wall over NDI, with a different treatment and
+possibly a different template for each. An Item today has exactly one
+`destination: { output, layer }`. This is the larger of the two gaps.
+
+---
+
 ## M5 — Authoring maturity
 
 The milestone that makes Design something a volunteer designer can use, rather
