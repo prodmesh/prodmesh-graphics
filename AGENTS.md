@@ -146,6 +146,17 @@ specifically shaped to avoid. Do not re-derive them.
   with a transform and a clip.
 - **A node refuses a template it is too old to read at assignment time**, loudly,
   not at take time. You find out Saturday, not at 10:15 Sunday.
+- **A vendor SDK newer than the installed driver reports capabilities as
+  *defaults*, not as errors.** Desktop Video 14.5 does not implement SDK-16.0
+  IIDs, so `QueryInterface` returns `E_NOINTERFACE` and a DeckLink Quad 2 reads
+  as having no keying, no audio, and persistent id 0. `sys/decklink-sys` queries
+  IIDs newest-first and falls back — which is safe **only** for methods at
+  identical vtable slots. `IDeckLinkOutput` diverges at slot 6. Verify a
+  method's slot in every version of the chain before calling it, or narrow the
+  chain. Measured, with the vtable table, in `docs/INTEGRATION-NOTES.md`.
+- **A CPU-generated 1080p frame misses 59.94.** Measured 17.55 ms against a
+  16.68 ms budget for generate + unpremultiply + encode. Rasterize once at arm;
+  animate transforms over the cached result; do the per-pixel encode on the GPU.
 - **Long-GOP H.264 is where frame-accurate seek goes to die.** Require an
   all-intra intermediate (ProRes 4444, DNxHR, HAP) for anything that must hit a
   mark; the server transcodes on ingest.

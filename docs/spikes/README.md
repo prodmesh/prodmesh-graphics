@@ -13,6 +13,10 @@ that ADRs 0001, 0002, and 0003 can be revisited before anything depends on them.
 | [S1](S1-render-parity.md) | Do native wgpu and browser WebGPU produce the same picture? | M0 → M1 |
 | [S2](S2-text-typography.md) | Is Rust text good enough for broadcast, especially animated? | M5 |
 | [S3](S3-decklink-output.md) | Can Rust drive DeckLink output cleanly for ten minutes? | M0 → M2 |
+
+**S3's enumeration half ran on 2026-08-14** and produced three findings in
+`docs/INTEGRATION-NOTES.md`, including one that would have made every DeckLink
+look incapable. The output soak has not run.
 | [S4](S4-genlock-phase.md) | What does reference actually phase-lock, across machines? | M3 |
 | [S5](S5-media-decode-sync.md) | Can we seek and play frame-accurately with synced audio? | M3 |
 | [S6](S6-webgpu-browser.md) | Is WebGPU usable in the booth's browsers? | M0 → M1 |

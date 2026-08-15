@@ -7,6 +7,9 @@
 //!
 //! Run it after touching `pmg-scene`, `pmg-layout`, `pmg-anim`, or `pmg-color`.
 
+mod decklink;
+mod ndi;
+
 use anyhow::{bail, Result};
 
 const USAGE: &str = "\
@@ -15,6 +18,14 @@ pmgctl — ProdMesh Graphics command line
 USAGE:
     pmgctl --selftest              Run every crate's assertions. Prints PASS.
     pmgctl --version
+
+    pmgctl ndi info                Load the NDI runtime and report it
+    pmgctl ndi probe               Validate the NDI ABI against a live source
+    pmgctl ndi send [--pattern p]  Send a test pattern (see `pmgctl ndi`)
+
+    pmgctl decklink list           Devices and probed capabilities
+    pmgctl decklink modes [i]      Display modes a device reports
+    pmgctl decklink ref [i]        Reference (genlock) status
 
 PLANNED (see docs/ROADMAP.md):
     pmgctl scene compile <in> <out>    M1
@@ -81,6 +92,8 @@ fn main() -> Result<()> {
     let args: Vec<String> = std::env::args().skip(1).collect();
     match args.first().map(String::as_str) {
         Some("--selftest") => selftest(),
+        Some("ndi") => ndi::main(&args[1..]),
+        Some("decklink") => decklink::main(&args[1..]),
         Some("--version") => {
             println!("pmgctl {}", env!("CARGO_PKG_VERSION"));
             Ok(())

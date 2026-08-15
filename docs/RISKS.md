@@ -98,7 +98,17 @@ What will actually break, in order of how much it will hurt:
 
 ## R4 — DeckLink from Rust is a C++ COM-alike, not a C API
 
-**Status:** open · **Spike:** [S3](spikes/S3-decklink-output.md) · **ADR:** 0003
+**Status:** partially confirmed (2026-08-14) — enumeration and capability probing
+work through the hand-written shim against a real Quad 2; the output path is
+untouched · **Spike:** [S3](spikes/S3-decklink-output.md) · **ADR:** 0003
+
+> **Found in the doing, and worse than the risk as originally written:** the SDK
+> and the installed *driver* are different versions, and a newer SDK's IIDs are
+> simply absent from an older driver. `QueryInterface` fails and every capability
+> reads as its default — the card looks incapable rather than the query looking
+> broken. Fixed with a newest-first IID fallback chain. Full detail, including
+> the vtable-slot constraint that makes the chain safe and where it stops being
+> safe, in `docs/INTEGRATION-NOTES.md`.
 
 The SDK is COM on Windows and a hand-rolled COM-alike on macOS and Linux:
 `IUnknown` refcounting, `QueryInterface`, and virtual interfaces such as
@@ -127,7 +137,9 @@ so probing is mandatory.
 
 ## R5 — Frame-accurate video decode
 
-**Status:** open · **Spike:** [S5](spikes/S5-media-decode-sync.md)
+**Status:** open · related measurement: a CPU generate-and-encode path at 1080p
+took 17.55 ms against a 16.68 ms budget (2026-08-14), so the decode-to-output
+path has no headroom for a software copy either · **Spike:** [S5](spikes/S5-media-decode-sync.md)
 
 **Recommendation:** ffmpeg via `rsmpeg`/`ffmpeg-next` for demux and decode, with
 platform hardware acceleration where available. `symphonia` is genuinely good for

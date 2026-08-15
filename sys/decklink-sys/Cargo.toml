@@ -16,6 +16,7 @@ build = "build.rs"
 # works on a machine that has never seen the SDK.
 
 [dependencies]
+thiserror = { workspace = true }
 
 [build-dependencies]
-# cc = "1"   # enabled once shim/pmg_decklink.cpp is implemented (spike S3)
+cc = "1"

@@ -5,19 +5,23 @@ change that makes something real — not afterwards.
 
 `docs/ROADMAP.md` is where we are going. This is where we are.
 
-**Last updated: 2026-08-14 · milestone M0 · nothing has run on hardware yet.**
+**Last updated: 2026-08-14 · milestone M0 · first hardware contact made.**
 
 ---
 
 ## The honest summary
 
-There is no engine. There is a repository with a complete design written down, a
-Cargo workspace whose crates compile as empty stubs, and a web app that serves an
-empty four-mode shell. The three M0 spikes that would tell us whether the
-foundational bets hold have not been run.
+There is no engine, and nothing has rendered a scene. There is a repository with
+a complete design written down, a Cargo workspace of mostly-stub crates, and a
+web app serving an empty four-mode shell.
 
-**Nothing in this repository has rendered a pixel or touched a piece of video
-hardware.**
+**But the two vendor boundaries are now real and measured.** NDI sends and
+receives frames with a hand-written, offset-verified binding, and DeckLink
+enumerates and probes actual hardware. Both produced findings that changed the
+code — see `docs/INTEGRATION-NOTES.md`, which is no longer empty.
+
+The three M0 spikes that would validate ADRs 0001–0003 (S1 render parity, S3
+DeckLink *output*, S6 WebGPU) have still not been run.
 
 ---
 
@@ -28,8 +32,10 @@ hardware.**
 | Documentation set | ✅ complete — 15 ADRs, 7 specs, 9 spike briefs |
 | Cargo workspace | 🟡 stubs — all 19 crates compile; `fmt`, `clippy -D warnings`, and the wasm32 pure-set job are green |
 | `pmgctl --selftest` | 🟡 prints `PASS` with **real** assertions in three crates (below); the rest are placeholders |
-| `sys/decklink-sys` | 🟡 header written, shim not implemented |
-| `sys/ndi-sys` | 🟡 header written, shim not implemented |
+| `sys/decklink-sys` | 🟢 enumeration, capability probing, modes, reference — **working against real hardware**. Output is spike S3 |
+| `sys/ndi-sys` | 🟢 runtime loading, find, receive, send — **frames verified in both directions**. ABI asserted statically and at runtime |
+| `pmg-color::patterns` | 🟢 ramp, bars, soft-edge, alpha staircase, moving line — the diagnostic instruments from `output-config.md` §8 |
+| `pmgctl ndi` / `pmgctl decklink` | 🟢 info, probe, send / list, modes, ref |
 | Control server | 🟡 boots; health, version, and the topic stream. 10 tests |
 | SQLite schema | ⬜ sketched in `server/db.js`, not created |
 | `streamHub` | ✅ ported from ProdMesh-Control — refcounted topics, conflation, snapshot-on-join |
@@ -41,7 +47,7 @@ hardware.**
 | Renderer | ⬜ not started |
 | Text stack | ⬜ not started |
 | Layout | ⬜ types only, no solver |
-| Any output backend | ⬜ not started |
+| `pmg-out-ndi` / `pmg-out-decklink` | ⬜ not started — `pmgctl` drives `sys/` directly for now |
 | CI | 🟡 workflows written and green locally; **never run on GitHub Actions** — no remote yet |
 | Rust toolchain on the dev box | ✅ 1.90.0 + `wasm32-unknown-unknown` |
 

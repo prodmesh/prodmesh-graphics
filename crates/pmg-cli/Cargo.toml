@@ -22,3 +22,5 @@ pmg-media = { path = "../pmg-media" }
 pmg-audio = { path = "../pmg-audio" }
 pmg-cas = { path = "../pmg-cas" }
 pmg-proto = { path = "../pmg-proto" }
+ndi-sys = { path = "../../sys/ndi-sys" }
+decklink-sys = { path = "../../sys/decklink-sys" }

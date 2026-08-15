@@ -1,7 +1,7 @@
 # S3 — DeckLink output from Rust
 
 **Gates:** M0 → M2 · **Risk:** [R4](../RISKS.md#r4) · **ADR:** 0003
-**Status:** not started · **Highest-risk spike in M0**
+**Status:** enumeration half done (2026-08-14) · output path not started · **Highest-risk spike in M0**
 
 ## Question
 
@@ -80,9 +80,36 @@ worth more than the pass/fail:
 Note that M1 outputs NDI specifically so this spike's outcome does not block the
 vertical slice.
 
-## Result
+## Result — enumeration half, 2026-08-14
 
-*Not yet run.*
+The output soak has **not** run. What has: device enumeration and capability
+probing, via `pmgctl decklink list|modes|ref`. Three findings, all in
+`docs/INTEGRATION-NOTES.md` in full:
+
+1. **The driver on the machine is 14.5; the SDK is 16.0.** SDK-16.0 IIDs do not
+   exist in a 14.5 driver, so `QueryInterface` returns `E_NOINTERFACE` and every
+   capability silently reads as its default — a Quad 2 presented as a card with
+   no keying, no audio, and persistent id 0. Fixed with a newest-first IID
+   fallback chain, which is safe **only** for methods at identical vtable slots.
+   **`IDeckLinkOutput` diverges at slot 6**, so the output path below should
+   narrow to one version and require a matching driver rather than extend the
+   chain.
+2. **External keying is reported on only 2 of 8 connectors** ([1] and [3]).
+   Probed, not predicted by the model number — exactly what header rule 3 says.
+3. **Connector-to-card grouping is unresolved.** Neither `persistent_id` nor
+   `topological_id` is cleanly "the card"; both encode the sub-device in their
+   low bits. **This spike must confirm on a scope that a fill+key pair really
+   shares a clock before Configure offers one as phase-locked.**
+
+Hardware for the soak: DeckLink Quad 2, 16 modes, 1080p59.94 available as
+`60000/1001`. Reference input present but **not locked** — nothing feeding it, so
+the soak needs a generator for its on-reference leg, and S4 is blocked until
+there is one.
+
+A prior number worth carrying in: a CPU-generated 1080p frame took **17.55 ms
+against a 16.68 ms budget** over the NDI path. If a memcpy-and-encode path is
+already at 105% of budget, DeckLink's scheduled output has no headroom for one —
+the render and readback have to be on the GPU.
 
 ```
 Date:
@@ -92,7 +119,7 @@ Mode tested:
 Late frames in 10 min:
 Dropped frames in 10 min:
 Reference lock behaviour:
-Key+fill port pairs found:
+Key+fill port pairs CONFIRMED ON A SCOPE:
 Preroll depth required:
 Callback thread observations:
 Notes:

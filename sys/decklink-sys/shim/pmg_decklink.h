@@ -80,12 +80,30 @@ typedef struct {
     char     display_name[128];
     char     model_name[128];
     int32_t  index;
-    int32_t  sub_device_count;
-    int32_t  supports_key_fill;   /* 0 or 1, PROBED                          */
-    int32_t  paired_port;         /* -1 if none                              */
+    int32_t  sub_device_count;    /* connectors on this physical card        */
+    int32_t  sub_device_index;    /* which connector this entry is, or -1    */
+    int32_t  supports_key_fill;   /* external keying, 0 or 1, PROBED         */
+    int32_t  supports_internal_key; /* 0 or 1, PROBED                        */
     int32_t  has_reference_input; /* 0 or 1                                  */
     int32_t  max_audio_channels;
+    int64_t  persistent_id;       /* stable across reboots; PER CONNECTOR    */
+    int64_t  topological_id;      /* identifies the physical CARD            */
 } pmg_dl_device_info;
+
+/*
+ * On pairing: SDK 16.0 has no "paired device" attribute, so grouping is ours to
+ * do. Group on topological_id, NOT persistent_id.
+ *
+ * Measured on a DeckLink Quad 2, 2026-08-14: persistent_id increments PER
+ * CONNECTOR (0xC55080A0 .. 0xC55080A7), so grouping on it invents eight
+ * single-connector "cards". topological_id is the physical card, and
+ * sub_device_index orders the connectors within it.
+ *
+ * This matters because a fill+key pair must be two connectors on ONE card —
+ * same card, same clock, which is what actually guarantees phase (ADR 0011).
+ * Grouping on the wrong field would let Configure offer a "pair" spanning two
+ * cards, which would look fine and be out of phase.
+ */
 
 /* Number of devices present. Safe to call before anything else. */
 int32_t pmg_dl_device_count(void);
@@ -209,6 +227,17 @@ int32_t pmg_dl_available(void);
 
 /* SDK version string, or "stub". Written into caller's buffer. */
 void pmg_dl_sdk_version(char *buf, int32_t cap);
+
+/*
+ * Which IID generation the DRIVER actually satisfied, per interface, after the
+ * newest-first fallback in the shim. E.g. "attrs=15.3.1 status=15.3.1 output=14.2.1".
+ *
+ * This exists because the failure it diagnoses is invisible: when the driver is
+ * older than the SDK, QueryInterface returns E_NOINTERFACE and every capability
+ * silently reads as its default, which looks exactly like a card that cannot do
+ * anything. Call it before believing a "no" from pmg_dl_device_info_at.
+ */
+void pmg_dl_interface_report(char *buf, int32_t cap);
 
 #ifdef __cplusplus
 }

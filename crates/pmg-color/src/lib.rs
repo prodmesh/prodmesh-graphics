@@ -12,6 +12,8 @@
 
 #![forbid(unsafe_code)]
 
+pub mod patterns;
+
 /// Signal range. `narrow` is what a switcher expects; some plants want a
 /// full-range key, which is why fill and key carry this independently
 /// (`docs/specs/output-config.md` §4).

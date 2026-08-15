@@ -1,7 +1,7 @@
 # S4 — Genlock and phase across machines
 
 **Gates:** M3 · **Risk:** [R2](../RISKS.md#r2) · **ADR:** 0011
-**Status:** not started
+**Status:** blocked — no reference generator. The Quad 2 reports a reference input present but not locked (2026-08-14)
 
 ## Question
 

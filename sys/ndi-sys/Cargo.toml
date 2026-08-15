@@ -11,5 +11,7 @@ build = "build.rs"
 # deployment question rather than a build-time commitment (ADR 0003 §Seam).
 
 [dependencies]
+libloading = "0.8"
+thiserror = { workspace = true }
 
 [build-dependencies]
