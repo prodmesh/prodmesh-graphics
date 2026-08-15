@@ -159,6 +159,35 @@ fn arg(args: &[String], flag: &str) -> Option<String> {
         .cloned()
 }
 
+/// The HTTP base for CAS transfers, from whatever `--server` was given.
+///
+/// **Assets never travel over the control socket** (ADR 0007), so the node needs
+/// an HTTP origin alongside the WebSocket one. `--server` is documented as a
+/// `host:port`, but `ws://host:port` is the obvious thing to type and the two
+/// must not disagree.
+///
+/// Blindly prefixing produced `http://ws://127.0.0.1:8519/cas/...`, and the
+/// symptom was not a bad URL in a log anyone read: the node linked, reported
+/// healthy, took its assignment, and simply never became ready — because every
+/// staging fetch failed and an un-armable Item is a *designed* state, not an
+/// error. It looked like a node that had nothing to play.
+fn http_base(server: &str) -> String {
+    let bare = server
+        .strip_prefix("ws://")
+        .or_else(|| server.strip_prefix("wss://"))
+        .or_else(|| server.strip_prefix("http://"))
+        .or_else(|| server.strip_prefix("https://"))
+        .unwrap_or(server);
+    // wss:// implies TLS on the control socket, so assets go over TLS too —
+    // anything else would be a downgrade nobody asked for.
+    let scheme = if server.starts_with("wss://") || server.starts_with("https://") {
+        "https"
+    } else {
+        "http"
+    };
+    format!("{scheme}://{}", bare.trim_end_matches('/'))
+}
+
 fn main() -> Result<()> {
     tracing_subscriber_init();
     let args: Vec<String> = std::env::args().skip(1).collect();
@@ -294,7 +323,7 @@ fn main() -> Result<()> {
 
     let opts = runtime::Options {
         outputs,
-        server_http: format!("http://{server}"),
+        server_http: http_base(&server),
         fallback_font,
     };
 
@@ -371,4 +400,33 @@ fn tracing_subscriber_init() {
         .with_target(false)
         .with_writer(std::io::stderr)
         .init();
+}
+
+#[cfg(test)]
+mod tests {
+    use super::http_base;
+
+    #[test]
+    fn a_server_url_with_a_scheme_is_not_prefixed_again() {
+        assert_eq!(http_base("127.0.0.1:8519"), "http://127.0.0.1:8519");
+        assert_eq!(http_base("ws://127.0.0.1:8519"), "http://127.0.0.1:8519");
+        assert_eq!(http_base("http://127.0.0.1:8519"), "http://127.0.0.1:8519");
+        assert_eq!(
+            http_base("ws://booth-1.local:8519/"),
+            "http://booth-1.local:8519"
+        );
+    }
+
+    /// A TLS control socket must not silently fetch assets in the clear.
+    #[test]
+    fn tls_on_the_socket_means_tls_for_assets() {
+        assert_eq!(
+            http_base("wss://gfx.example:8519"),
+            "https://gfx.example:8519"
+        );
+        assert_eq!(
+            http_base("https://gfx.example:8519"),
+            "https://gfx.example:8519"
+        );
+    }
 }

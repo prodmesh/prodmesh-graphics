@@ -38,7 +38,13 @@ pub enum FromLink {
     Tick,
     Disconnected,
     Assignment(Box<pmg_proto::Assignment>),
-    Cue(Box<pmg_proto::Cue>),
+    /// A cue, **stamped with the instant it came off the socket**.
+    ///
+    /// The stamp is taken here rather than where it is applied, because the
+    /// whole point is to measure the time in between: a node busy staging an
+    /// assignment can leave a cue sitting in the channel, and a deadline
+    /// measured from the moment of use cannot see that at all.
+    Cue(Box<pmg_proto::Cue>, std::time::Instant),
     Resync(String),
 }
 
@@ -194,7 +200,7 @@ fn handle(
             return Ok(Some(gen));
         }
         ToNode::Cue(c) => {
-            let _ = tx.send(FromLink::Cue(Box::new(c)));
+            let _ = tx.send(FromLink::Cue(Box::new(c), std::time::Instant::now()));
         }
         ToNode::Resync { reason } => {
             let _ = tx.send(FromLink::Resync(reason));

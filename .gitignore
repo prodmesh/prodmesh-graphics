@@ -9,6 +9,11 @@ web/pkg/
 
 # Runtime state — never committed
 data/
+# Scratch state from tools/e2e-clip-audio.sh. It stages real media, so an
+# uncommitted run is hundreds of megabytes and GitHub refuses the push — which
+# is how this line came to exist.
+data-e2e*/
+e2e-var/
 *.db
 *.db-wal
 *.db-shm

@@ -444,16 +444,35 @@ impl Runtime {
                         }
                     }
                 }
-                Ok(FromLink::Cue(c)) => {
+                Ok(FromLink::Cue(c, received_at)) => {
                     // Arming happens under the engine lock, which briefly stalls
                     // every render thread. An arm is 0.3–2 ms against a 16.68 ms
                     // budget and a take is a few times a minute, so it costs at
                     // most one late frame on a take — measured, not assumed, in
                     // the M3c notes. Moving the arm outside the lock is the
                     // obvious next step if that ever shows up on air.
+                    // Is this cue already stale by the time we can act on it?
+                    //
+                    // This argument was hard-coded `false`. The rejection
+                    // branch, its reason code and its tests all existed, and
+                    // the runtime simply never asked — so "reject a late take,
+                    // never fire it" was true of the engine and not of the
+                    // node. It surfaced end to end: the server gave up waiting
+                    // at 750 ms while the node was busy staging a clip, then
+                    // applied the take anyway when it got round to it. The
+                    // operator was told the take failed and the graphic went on
+                    // air, which is the dangerous direction of that lie.
+                    //
+                    // Measured from when the frame came OFF THE SOCKET, so it
+                    // catches the case that actually bit: this process too busy
+                    // to answer. It does NOT include network transit, because
+                    // the frame carries no issue timestamp and the server's
+                    // clock is not ours to trust. Closing that needs an
+                    // `issued_at` on the wire and is worth doing separately.
+                    let received_late = is_late(c.deadline_ms, received_at.elapsed());
                     let ack = {
                         let mut e = self.engine.lock().unwrap();
-                        e.apply(&c, &self.assigned, crate::link::now_ms(), false)
+                        e.apply(&c, &self.assigned, crate::link::now_ms(), received_late)
                     };
                     tracing::info!(cue = %c.cue_id, result = ?ack.result, reason = ?ack.reason, "cue");
                     let _ = tx.send(ToLink::Ack(ack));
@@ -555,6 +574,20 @@ fn looks_like_a_font(b: &[u8]) -> bool {
         b.get(0..4),
         Some(b"\x00\x01\x00\x00") | Some(b"true") | Some(b"OTTO") | Some(b"ttcf") | Some(b"wOFF")
     )
+}
+
+/// Has a cue's deadline passed before we could act on it?
+///
+/// A tiny function so it can be TESTED. The engine's rejection branch had a
+/// test from the start; the runtime that decides when to take it did not, and
+/// passed a hard-coded `false` for months. The rule was true of the engine and
+/// false of the node, which is the failure mode a unit test on the callee
+/// cannot see.
+///
+/// `None` means the op carries no deadline — an arm or a preload, which are not
+/// time-critical and must not be refused for being slow.
+fn is_late(deadline_ms: Option<u64>, elapsed: std::time::Duration) -> bool {
+    deadline_ms.is_some_and(|d| elapsed.as_millis() as u64 > d)
 }
 
 /// What one layer needs drawn this frame, taken under the lock and used without
@@ -782,6 +815,42 @@ fn render_group(
             }
             out.frame += 1;
 
+            // Audio has no error to check — the API takes a wrong sample count
+            // without complaint and the fault is a slow walk out of lip sync.
+            // The card's own buffer level is the only instrument, so a node
+            // carrying audio says it out loud every five seconds: FLAT is
+            // correct, a trend in either direction is not.
+            if out.spec.audio_channels > 0 && out.frame.is_multiple_of(300) {
+                if let Backend::DeckLink(d) = &out.backend {
+                    let st = d.stats();
+                    // The peak of THIS frame's samples, as dBFS. A flat buffer
+                    // level proves the cadence is right and says nothing at all
+                    // about what is in the samples — feeding exactly the right
+                    // number of zeroes looks identical. This is the difference
+                    // between "audio is timed correctly" and "audio is there".
+                    let peak = out
+                        .audio
+                        .iter()
+                        .map(|s| s.unsigned_abs())
+                        .max()
+                        .unwrap_or(0);
+                    let dbfs = if peak == 0 {
+                        f32::NEG_INFINITY
+                    } else {
+                        20.0 * (peak as f32 / i32::MAX as f32).log10()
+                    };
+                    tracing::info!(
+                        output = %out.spec.id,
+                        frame = out.frame,
+                        audio_buffered = st.buffered_audio,
+                        audio_ms = st.buffered_audio * 1000 / pmg_audio::SAMPLE_RATE as u64,
+                        peak_dbfs = format!("{dbfs:.1}"),
+                        late = st.displayed_late,
+                        "audio buffer"
+                    );
+                }
+            }
+
             let ms = t0.elapsed().as_secs_f64() * 1000.0;
             if ms > budget_ms {
                 if let Ok(mut e) = engine.lock() {
@@ -878,5 +947,35 @@ fn open_backend(spec: &OutputSpec) -> Result<Backend> {
             spec.fps.0 as i32,
             spec.fps.1 as i32,
         )?)),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::is_late;
+    use std::time::Duration;
+
+    #[test]
+    fn a_cue_inside_its_deadline_is_not_late() {
+        assert!(!is_late(Some(500), Duration::from_millis(0)));
+        assert!(!is_late(Some(500), Duration::from_millis(499)));
+        // Exactly on the deadline is still in time. A take that arrives at its
+        // own deadline is a take that made it.
+        assert!(!is_late(Some(500), Duration::from_millis(500)));
+    }
+
+    #[test]
+    fn a_cue_past_its_deadline_is_late() {
+        assert!(is_late(Some(500), Duration::from_millis(501)));
+        // The case that actually happened: the node was busy staging a clip and
+        // the cue sat in the channel while the server gave up waiting.
+        assert!(is_late(Some(500), Duration::from_secs(2)));
+    }
+
+    #[test]
+    fn an_op_with_no_deadline_is_never_late() {
+        // An arm or a preload is not time-critical, and refusing one for being
+        // slow would make a busy node un-preparable exactly when it needs to be.
+        assert!(!is_late(None, Duration::from_secs(60)));
     }
 }

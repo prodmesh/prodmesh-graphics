@@ -1229,3 +1229,66 @@ backpressure now; everything else stops and says so. And the shim records the
 `PMG_DL_ERR_INTERNAL` says "the SDK said no" and `ScheduleAudioSamples returned
 0x80000009` says what to go and read. Flattening a vendor error code into a
 generic one throws away the only part with diagnostic value.
+
+## A clip with sound, on air, out of SDI — and the four bugs the unit tests could not see
+*2026-08-15 · MacBook Pro arm64 · Desktop Video 16.3 · DeckLink Quad 2 sub-device 1 · M3e*
+
+The end-to-end M3e was missing: ingest → publish → assign → stage → take → SDI,
+with embedded audio. It passes. `tools/e2e-clip-audio.sh` runs it.
+
+```
+attempt 1: {"result":"applied","fired_at_frame":79,...}
+Fullscreen -> Reel with sound | phase hold | degraded False
+audio_buffered 5829..6015 · peak_dbfs -21.1 · late 0     (60 s)
+```
+
+Buffer flat, zero late frames, and the peak matches the source **exactly**:
+measured straight off the file through the same conversion, `source peak
+189792256 = -21.1 dBFS`. The path neither attenuates nor silences.
+
+**Every step of getting there found something a unit test could not.**
+
+**1. `http://ws://127.0.0.1:8519/cas/…`** — the node prefixed `http://` onto a
+`--server` that already carried a scheme. The symptom is the instructive part: it
+linked, reported healthy, acked its assignment, and simply never became ready,
+because **an un-armable Item is a designed state and not an error**. It looked
+exactly like a node with nothing to play. Fixed with `http_base`, which also
+maps `wss://` to `https://` rather than silently downgrading asset transfer.
+
+**2. The node never checked whether a cue was late.** `apply(..., received_late)`
+was called with a hard-coded `false`. The rejection branch, its reason code, and
+a passing test for it all existed — on the **engine**. The runtime that decides
+when to take that branch had no test at all, so *"reject a late take, never fire
+it"* was true of `LayerEngine` and false of `pmg-node`.
+
+It surfaced as the worst possible shape: the server stopped waiting at 750 ms
+while the node was busy staging a 566 MB clip, returned `503 cue_not_acked` — and
+the node then applied the take anyway when it got round to it. **The operator was
+told the take failed and the graphic went on air.** That is the dangerous
+direction of the lie ADR 0008 exists to prevent.
+
+Lateness is now measured from when the frame came **off the socket**, not from
+when it is used, because the gap between those two is exactly the delay a busy
+node introduces and cannot otherwise see. Network transit is still not covered —
+that needs an `issued_at` on the wire, and the server's clock is not ours to
+trust. Worth doing separately.
+
+The general lesson: **a unit test on the callee proves the callee.** A rule this
+load-bearing needed a test on the caller, and now has one (`is_late`).
+
+**3. A flat audio buffer proves the cadence, not the content.** Feeding exactly
+the right number of *zeroes* produces an identical graph. The node logs peak
+dBFS alongside the buffer depth for that reason — the difference between "audio
+is timed correctly" and "audio is there".
+
+**4. The harness lied three times before it told the truth**, and all three were
+the same mistake — suppressing errors to make it robust:
+
+| What | Hidden by |
+|---|---|
+| `n[0]["id"]` where the field is `node_id` | `2>/dev/null \|\| true` on the poll |
+| publish rejected: manifest carries its own `template_id` | `curl -sf`, which discards the body |
+| a stale server on 8519, so the node linked to the wrong one | no check that the server we started is the one answering |
+
+Each looked like a timeout. `curl -f` and `|| true` are how a failing step
+becomes a slow one.
