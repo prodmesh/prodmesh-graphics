@@ -18,6 +18,14 @@
 
 #![forbid(unsafe_code)]
 
+pub mod bind;
+pub mod cbor;
+pub mod doc;
+pub mod fixture;
+pub mod validate;
+
+pub use doc::*;
+
 /// The format version this build of the reader implements.
 pub const READER_MAJOR: u32 = 1;
 
@@ -39,6 +47,15 @@ pub enum SceneError {
 
     #[error("duplicate node id {0:?} — ids must be unique and are never reused")]
     DuplicateNodeId(String),
+
+    #[error("timeline {timeline:?} targets node {node:?}, which does not exist")]
+    DanglingTrack { timeline: String, node: String },
+
+    #[error("binding references field {0:?}, which the document does not declare")]
+    UnknownField(String),
+
+    #[error("format is {0:?}, expected \"pmg.scene\"")]
+    WrongFormat(String),
 }
 
 /// Can this reader open the document?
@@ -120,8 +137,11 @@ impl Transform {
 }
 
 /// Assertions that gate a release. Called by `pmgctl --selftest`.
+///
+/// These are the format's load-bearing guarantees. `docs/TESTING.md` says they
+/// must not be deleted or weakened, and this is where that is enforced.
 pub fn selftest() -> Result<(), String> {
-    // Version gating, in both directions.
+    // --- Version gating, in both directions -------------------------------
     check_readable(1, READER_MAJOR).map_err(|e| e.to_string())?;
     match check_readable(READER_MAJOR + 1, READER_MAJOR) {
         Err(SceneError::TooNew { needs, has })
@@ -129,7 +149,7 @@ pub fn selftest() -> Result<(), String> {
         other => return Err(format!("expected TooNew, got {other:?}")),
     }
 
-    // Transforms are total: no input, however hostile, may panic or error.
+    // --- Transforms are total ---------------------------------------------
     let hostile = [
         "",
         "   ",
@@ -155,14 +175,69 @@ pub fn selftest() -> Result<(), String> {
             let _ = t.apply(s); // must not panic — that is the assertion
         }
     }
-
-    // Ellipsize below the limit is a no-op; above it, it marks the cut.
     if Transform::Ellipsize(40).apply("Pastor Dan") != "Pastor Dan" {
         return Err("ellipsize altered a string under the limit".into());
     }
     let cut = Transform::Ellipsize(5).apply("Pastor Dan Whitfield");
     if !cut.ends_with('…') || cut.chars().count() != 5 {
         return Err(format!("ellipsize produced {cut:?}"));
+    }
+
+    let doc = fixture::lower_third();
+
+    // --- The reference document validates ---------------------------------
+    let warnings = validate::validate(&doc).map_err(|e| format!("fixture invalid: {e}"))?;
+    // It animates only transforms, so there must be no layout_animated warning.
+    if let Some(w) = warnings.iter().find(|w| w.code == "layout_animated") {
+        return Err(format!("fixture animates layout: {}", w.detail));
+    }
+
+    // --- CBOR round-trip is lossless --------------------------------------
+    //
+    // If this fails, template_rev is not a stable identity and every guarantee
+    // built on pinned revisions is false.
+    let bytes = cbor::to_canonical(&doc).map_err(|e| e.to_string())?;
+    let back: SceneDoc = cbor::from_canonical(&bytes).map_err(|e| e.to_string())?;
+    if back != doc {
+        return Err("CBOR round-trip changed the document".into());
+    }
+    if !cbor::is_canonical(&bytes) {
+        return Err("encoder did not produce canonical CBOR".into());
+    }
+
+    // --- Hashing is stable ------------------------------------------------
+    let a = validate::template_rev(&doc).map_err(|e| e.to_string())?;
+    let b = validate::template_rev(&back).map_err(|e| e.to_string())?;
+    if a != b {
+        return Err(format!("template_rev is not stable: {a} vs {b}"));
+    }
+    if !a.starts_with("blake3:") || a.len() != 7 + 64 {
+        return Err(format!("template_rev has the wrong shape: {a}"));
+    }
+
+    // --- The JSON mirror round-trips too ----------------------------------
+    let json = serde_json::to_string(&doc).map_err(|e| e.to_string())?;
+    let from_json: SceneDoc = serde_json::from_str(&json).map_err(|e| e.to_string())?;
+    if from_json != doc {
+        return Err("JSON mirror round-trip changed the document".into());
+    }
+    if validate::template_rev(&from_json).map_err(|e| e.to_string())? != a {
+        return Err("a document that went through the JSON mirror hashes differently".into());
+    }
+
+    // --- visible_if removes the title when empty --------------------------
+    //
+    // The behaviour the responsive lower third exists for.
+    let node = doc.node("title").ok_or("fixture lost its title node")?;
+    let cond = node.visible_if.as_ref().ok_or("title has no visible_if")?;
+    let with = [("title".to_string(), "Lead Pastor".to_string())]
+        .into_iter()
+        .collect();
+    let without = [("title".to_string(), "  ".to_string())]
+        .into_iter()
+        .collect();
+    if !bind::visible(cond, &with) || bind::visible(cond, &without) {
+        return Err("visible_if does not collapse an empty title".into());
     }
 
     Ok(())

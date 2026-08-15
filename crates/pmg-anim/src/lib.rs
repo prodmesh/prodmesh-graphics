@@ -75,7 +75,12 @@ fn cubic_bezier(x: f32, x1: f32, y1: f32, x2: f32, y2: f32) -> f32 {
 }
 
 /// One keyframe on a track.
-#[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize)]
+///
+/// `PartialEq` so a SceneDoc can be compared for equality — which the CBOR
+/// round-trip property test depends on. Float equality is exact here on
+/// purpose: the test asserts the encoding lost nothing, and "close enough"
+/// would defeat it.
+#[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct Key {
     /// Milliseconds from the timeline's start.
     pub t: f32,

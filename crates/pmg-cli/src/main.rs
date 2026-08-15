@@ -10,6 +10,7 @@
 mod decklink;
 mod golden;
 mod ndi;
+mod scene;
 
 use anyhow::{bail, Result};
 
@@ -28,13 +29,12 @@ USAGE:
     pmgctl decklink modes [i]      Display modes a device reports
     pmgctl decklink ref [i]        Reference (genlock) status
 
+    pmgctl scene compile|fmt|inspect|fixture   The SceneDoc compiler
+
     pmgctl render-golden <dir>     Spike S1: render the parity corpus natively
     pmgctl golden-diff <a> <b>     Spike S1: compare native against browser
 
 PLANNED (see docs/ROADMAP.md):
-    pmgctl scene compile <in> <out>    M1
-    pmgctl scene fmt <file>            M1  canonical CBOR <-> JSON mirror
-    pmgctl render-golden <dir>         M0  spike S1's native side
     pmgctl cas verify [--repair]       M1
     pmgctl chaos                       M2  spike S8, becomes a release gate
 ";
@@ -98,6 +98,7 @@ fn main() -> Result<()> {
         Some("--selftest") => selftest(),
         Some("ndi") => ndi::main(&args[1..]),
         Some("decklink") => decklink::main(&args[1..]),
+        Some("scene") => scene::main(&args[1..]),
         Some("render-golden") => {
             let dir = args
                 .get(1)

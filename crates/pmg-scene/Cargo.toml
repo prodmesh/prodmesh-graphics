@@ -9,3 +9,7 @@ publish.workspace = true
 [dependencies]
 serde = { workspace = true }
 thiserror = { workspace = true }
+ciborium = { workspace = true }
+blake3 = { workspace = true }
+pmg-anim = { path = "../pmg-anim" }
+serde_json = { workspace = true }

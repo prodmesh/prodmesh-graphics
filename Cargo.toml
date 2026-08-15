@@ -40,6 +40,10 @@ thiserror = "2"
 # Pinned deliberately and identically for both targets. A wgpu bump is a
 # release-gated change requiring a full golden re-run (risk R11).
 wgpu = "30"
+# Pure-set safe: no_std-capable, no filesystem, builds for wasm32.
+ciborium = "0.2"
+blake3 = "1"
+serde_json = "1"
 
 # --- Everything else. Available to non-pure crates only.
 anyhow = "1"

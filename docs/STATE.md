@@ -5,7 +5,7 @@ change that makes something real — not afterwards.
 
 `docs/ROADMAP.md` is where we are going. This is where we are.
 
-**Last updated: 2026-08-14 · milestone M0 · S1, S3, and most of S6 passed.**
+**Last updated: 2026-08-14 · M0 complete · M1a (the scene format) landed.**
 
 ---
 
@@ -36,7 +36,7 @@ something other than what they were.
 |---|---|
 | Documentation set | ✅ complete — 15 ADRs, 7 specs, 9 spike briefs |
 | Cargo workspace | 🟡 stubs — all 19 crates compile; `fmt`, `clippy -D warnings`, and the wasm32 pure-set job are green |
-| `pmgctl --selftest` | 🟡 prints `PASS` with **real** assertions in three crates (below); the rest are placeholders |
+| `pmgctl --selftest` | 🟢 gates the format's load-bearing guarantees: canonical CBOR round-trip, stable `template_rev`, JSON-mirror equivalence, `visible_if` collapse |
 | `sys/decklink-sys` | 🟢 enumeration, probing, modes, reference, **and scheduled output — 10 min at 1080p59.94, zero late, zero dropped** |
 | `sys/ndi-sys` | 🟢 runtime loading, find, receive, send — **frames verified in both directions**. ABI asserted statically and at runtime |
 | `pmg-color::patterns` | 🟢 ramp, bars, soft-edge, alpha staircase, moving line — the diagnostic instruments from `output-config.md` §8 |
@@ -52,7 +52,8 @@ something other than what they were.
 | Design canvas | ⬜ not started |
 | `pmg-render` | 🟡 the S1 parity corpus only — 3 figures on wgpu 30, native **and** wasm32. No scene rendering |
 | Text stack | ⬜ not started |
-| Layout | ⬜ types only, no solver |
+| `pmg-scene` | 🟢 **full document model**, canonical CBOR + JSON mirror, `template_rev`, validation, manifest, total binding evaluation. 25 tests |
+| `pmg-layout` | ⬜ types only, no solver — **M1b, next** |
 | `pmg-out-ndi` / `pmg-out-decklink` | ⬜ not started — `pmgctl` drives `sys/` directly for now |
 | CI | 🟡 workflows written and green locally; **never run on GitHub Actions** — no remote yet |
 | Rust toolchain on the dev box | ✅ 1.90.0 + `wasm32-unknown-unknown` |
