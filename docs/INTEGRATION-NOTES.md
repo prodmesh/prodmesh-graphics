@@ -718,3 +718,43 @@ repeatedly, so **an unreachable multicast group would have crashed the control
 server**. A convenience feature must not be able to take down playout control;
 `advertise()` now passes an error callback that logs and continues. Any future
 optional network feature gets the same treatment before it ships.
+
+---
+
+## DeckLink `BUSY` on schedule is backpressure, not a fault
+
+**Measured 2026-08-15, DeckLink Quad 2, Desktop Video 16.3, 1080p59.94.**
+
+`pmg_dl_output_schedule` returns `PMG_DL_ERR_BUSY` (-5) when the card's
+scheduling queue is full. That is **how a scheduled output paces its producer**
+— it has not returned a frame yet — and it is the mechanism the node's frame
+loop relies on instead of a timer of its own.
+
+Treating it as an error makes the node exit on its very first frame with
+`DeckLink call failed with code -5`, which reads exactly like a hardware fault
+and is not one. `pmg-out-decklink` backs off a quarter of a frame and retries,
+and only calls it a failure after ~2 s of a queue that never drains. The soak in
+`pmgctl decklink out` had this right already; the new backend had to learn it
+again.
+
+## Two ordinary ports beat the card's paired mode
+
+`KeyMode::FillKeyPair` is the card linking two connectors itself, and it needs a
+`paired_port` the shim does not pass yet plus `supports_key_fill` on the device
+— which on a Quad 2 is true for only **some** sub-devices (0 and 2 say no, 1 and
+3 say yes).
+
+`pmg-out-decklink` opens **two ordinary outputs and drives both**. It needs no
+keying capability, works on any two SDI outs, and sidesteps the sub-device
+lottery entirely. The cost is that the two halves are kept in step by scheduling
+them back to back rather than by the hardware, so nothing may be inserted
+between those two calls — a delay there is a delay between a fill and its key.
+
+**Measured: fill on port 2, key on port 4, a lower third on air for 90 s at
+1080p59.94 with zero late frames.**
+
+**Not yet verified: that the key signal is correct on a scope.** The frames are
+scheduled and the card is happy, and the key buffer is built as the spec
+requires (alpha replicated to R, G and B, opaque, never through a colour
+matrix). Whether a downstream keyer produces clean edges from it needs a scope
+or a monitor on the key port, which needs the Evertz box at church.

@@ -103,6 +103,7 @@ other than what they were.
 | S8 chaos harness | 🟢 **gating.** `npm run chaos` — 1000+ takes through five injections, zero fired twice |
 | `pmg-node` | 🟢 **the playout binary.** Link client, staging, durable assignment, layer engine, NDI out. Survives server loss; 10 cue-rule tests |
 | `pmg-cas` | 🟢 atomic writes, streaming put, verify. Agrees with `server/cas.js` |
+| `pmg-out-decklink` | 🟢 **SDI output.** Fill and key on two ordinary ports, 90 s at 1080p59.94, zero late frames. The key *picture* is unverified on a scope |
 | `pmg-out-ndi` | 🟢 the shared sender — one unpremultiply loop for the node and the CLI |
 | `streamHub` | ✅ ported from ProdMesh-Control — refcounted topics, conflation, snapshot-on-join |
 | `cueLog` | ✅ the log-tail bridge from ADR 0008, with gap recovery. 6 tests |

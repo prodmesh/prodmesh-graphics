@@ -59,6 +59,11 @@ USAGE:
     --size <WxH>           Default 1920x1080
     --fps <N/D>            Default 60000/1001
     --ndi-name <name>      Default \"ProdMesh Graphics\"
+    --backend <kind>       ndi (default) | decklink
+    --decklink <index>     Device index for the fill. See `pmgctl decklink list`
+    --decklink-key <index> Second port for the key half of a fill+key pair.
+                           Omit for fill only.
+    --decklink-mode <name> Display mode name, e.g. 1080p59.94
     --font <file.ttf>      A face to use when the assignment carries no font
                            asset. Provisional — see runtime.rs.
     --headless             Render and time frames, but send nothing.
@@ -91,15 +96,20 @@ fn main() -> Result<()> {
         Some(s) => s,
         None => {
             println!("  looking for a control server on this network…");
-            let (found, all) = pmg_node::discover::find(std::time::Duration::from_secs(5)).context(
-                "no control server found on this network, and no --server given.\n\
+            let (found, all) = pmg_node::discover::find(std::time::Duration::from_secs(5))
+                .context(
+                    "no control server found on this network, and no --server given.\n\
                  Multicast is unreliable across VLANs and behind switches with poor IGMP \
                  snooping, so this is a normal thing to hit — pass --server <host:port>.",
-            )?;
+                )?;
             if all.len() > 1 {
                 // Reported, not silently resolved. Two control servers on one
                 // network is a misconfiguration a node cannot arbitrate.
-                println!("  WARNING: {} control servers answered: {}", all.len(), all.join(", "));
+                println!(
+                    "  WARNING: {} control servers answered: {}",
+                    all.len(),
+                    all.join(", ")
+                );
                 println!("  using {found}. Pass --server to choose.");
             }
             found
@@ -140,6 +150,12 @@ fn main() -> Result<()> {
         layers,
         fps,
         ndi_name: arg(&args, "--ndi-name").unwrap_or_else(|| "ProdMesh Graphics".into()),
+        backend: arg(&args, "--backend").unwrap_or_else(|| "ndi".into()),
+        decklink_device: arg(&args, "--decklink")
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(0),
+        decklink_key_device: arg(&args, "--decklink-key").and_then(|s| s.parse().ok()),
+        decklink_mode: arg(&args, "--decklink-mode").unwrap_or_else(|| "1080p59.94".into()),
         width: w,
         height: h,
         server_http: format!("http://{server}"),

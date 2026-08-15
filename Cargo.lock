@@ -1027,6 +1027,7 @@ dependencies = [
  "pmg-cas",
  "pmg-color",
  "pmg-layout",
+ "pmg-out-decklink",
  "pmg-out-ndi",
  "pmg-proto",
  "pmg-render",
@@ -1046,6 +1047,7 @@ name = "pmg-out-decklink"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "decklink-sys",
  "serde",
  "thiserror",
  "tracing",

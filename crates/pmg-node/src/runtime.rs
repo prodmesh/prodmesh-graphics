@@ -81,11 +81,30 @@ impl Library for Assigned {
     }
 }
 
+/// Where an output's frames go.
+///
+/// One enum rather than a trait object because M2 has exactly two backends and
+/// they differ in how they are PACED — NDI clocks itself, DeckLink schedules
+/// against its own clock. A trait would hide that difference behind a uniform
+/// `send()`, which is the one thing about them that is not uniform.
+pub enum Backend {
+    /// Render and time frames, send nothing.
+    Headless,
+    Ndi(pmg_out_ndi::Sender),
+    DeckLink(Box<pmg_out_decklink::Sender>),
+}
+
 pub struct Options {
     pub output_id: String,
     pub layers: Vec<String>,
     pub fps: (u32, u32),
     pub ndi_name: String,
+    /// `ndi` | `decklink`
+    pub backend: String,
+    pub decklink_device: usize,
+    /// Second port for the key half of a fill+key pair.
+    pub decklink_key_device: Option<usize>,
+    pub decklink_mode: String,
     pub width: u32,
     pub height: u32,
     pub server_http: String,
@@ -252,10 +271,37 @@ impl Runtime {
         tracing::info!(adapter = %gpu.adapter_name, backend = %gpu.backend, "gpu");
         let target = Target::new(&gpu, self.opts.width, self.opts.height)?;
 
-        let ndi = if self.opts.headless {
-            None
+        let backend = if self.opts.headless {
+            Backend::Headless
+        } else if self.opts.backend == "decklink" {
+            let s = pmg_out_decklink::Sender::open(&pmg_out_decklink::Config {
+                device_index: self.opts.decklink_device,
+                key_device_index: self.opts.decklink_key_device,
+                mode: self.opts.decklink_mode.clone(),
+                // Two ordinary outputs, driven in step by us — not the card's
+                // hardware pairing. Works on any two SDI outs.
+                key_mode: pmg_out_decklink::KeyMode::FillOnly,
+                preroll: 3,
+            })?;
+            let (w, h) = s.size();
+            if (w, h) != (self.opts.width, self.opts.height) {
+                // Refuse rather than scale. A silently letterboxed graphic is a
+                // worse discovery than a node that would not start.
+                anyhow::bail!(
+                    "the display mode is {w}x{h} but this node renders {}x{}. Set --size to match.",
+                    self.opts.width,
+                    self.opts.height
+                );
+            }
+            tracing::info!(
+                device = self.opts.decklink_device,
+                mode = %self.opts.decklink_mode,
+                key = ?self.opts.decklink_key_device,
+                "DeckLink output open"
+            );
+            Backend::DeckLink(Box::new(s))
         } else {
-            Some(pmg_out_ndi::Sender::open(
+            Backend::Ndi(pmg_out_ndi::Sender::open(
                 &self.opts.ndi_name,
                 self.opts.width,
                 self.opts.height,
@@ -373,12 +419,15 @@ impl Runtime {
                 }
             }
 
-            if let Some(n) = &ndi {
+            match &backend {
                 // NDI was opened with clock_video, so this call is what paces
                 // the loop. No timer of our own, and none wanted here.
-                n.send_rgba_premultiplied(&rgba)?;
-            } else {
-                std::thread::sleep(Duration::from_millis(budget_ms as u64));
+                Backend::Ndi(n) => n.send_rgba_premultiplied(&rgba)?,
+                // DeckLink schedules against its own clock and blocks when the
+                // queue is full, which paces the loop the same way — but for a
+                // different reason, and against a clock that can be genlocked.
+                Backend::DeckLink(d) => d.send_rgba_premultiplied(&rgba)?,
+                Backend::Headless => std::thread::sleep(Duration::from_millis(budget_ms as u64)),
             }
 
             self.engine.tick(&output_id);
