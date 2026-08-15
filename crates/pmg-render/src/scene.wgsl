@@ -30,6 +30,8 @@ struct Node {
     // One design-space unit per pixel. Replaces fwidth() — see rule 1.
     px_per_unit : f32,
     _pad        : f32,
+    // Sub-rectangle of an image to sample: x, y, w, h, normalised.
+    uv          : vec4<f32>,
 };
 
 @group(0) @binding(0) var<uniform> u : Node;
@@ -155,4 +157,36 @@ fn fs_unknown(in : VsOut) -> @location(0) vec4<f32> {
     let stripe = fract((in.local.x + in.local.y) * 0.05);
     let a = select(0.35, 0.85, stripe < 0.5) * u.opacity;
     return vec4<f32>(vec3<f32>(1.0, 0.0, 1.0) * a, a);
+}
+
+// ---------------------------------------------------------------------------
+// Images.
+//
+// The texture holds PREMULTIPLIED RGBA — pmg-media multiplies at decode, so
+// compositing here needs no conversion and the blend state is the same
+// source-over every other pipeline uses. Sampling straight alpha and blending
+// it as premultiplied is the classic way to get a dark fringe on every soft
+// edge, and it is invisible until the graphic is over live video.
+//
+// `u.uv` is the sub-rectangle chosen by `fit` at BUILD time, so this shader
+// does one lookup and knows nothing about aspect ratios.
+// ---------------------------------------------------------------------------
+
+@group(1) @binding(0) var img_tex : texture_2d<f32>;
+@group(1) @binding(1) var img_smp : sampler;
+
+@fragment
+fn fs_image(in : VsOut) -> @location(0) vec4<f32> {
+    let uv = u.uv.xy + in.uv * u.uv.zw;
+    let texel = textureSample(img_tex, img_smp, uv);
+
+    // Rounded corners still apply: an image node with a radius is a rounded
+    // picture, not a rectangle with rounded paint over it.
+    let half = u.rect.zw * 0.5;
+    let r = min(u.radius, min(half.x, half.y));
+    let d = sd_rounded_box(in.local, half, r);
+    let coverage = clamp(0.5 - d, 0.0, 1.0);
+
+    // Already premultiplied, so opacity scales all four channels together.
+    return texel * coverage * u.opacity;
 }

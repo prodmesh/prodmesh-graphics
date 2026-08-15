@@ -807,3 +807,40 @@ scheduled and the card is happy, and the key buffer is built as the spec
 requires (alpha replicated to R, G and B, opaque, never through a colour
 matrix). Whether a downstream keyer produces clean edges from it needs a scope
 or a monitor on the key port, which needs the Evertz box at church.
+
+---
+
+## A bind group added to a shared pipeline layout breaks every other pipeline
+
+**2026-08-15, adding images (M3a).** Images need a texture per node rather than
+a shared atlas, so they got their own bind group at index 1. Adding it to the
+existing pipeline layout — which box, text and unknown all share — made every
+one of those draws fail validation:
+
+```
+The current set RenderPipeline with 'pmg-scene-box' label expects a
+BindGroup to be set at index 1
+```
+
+A pipeline layout is a **contract about what every draw using it must bind**,
+not a menu. A box has no image to bind and should not have to invent a dummy
+texture to satisfy one. There are two pipeline layouts now: the shared one
+declares group 0 only, and the image pipeline declares 0 and 1.
+
+Caught by `crates/pmg-render/tests/compositing.rs`, written in M2a for an
+entirely different reason — which is the argument for pixel-level tests over
+"it looked right when I ran it".
+
+## A 2×2 texture stretched large is almost entirely interpolation
+
+**2026-08-15.** The first image test built a 2×2 PNG — one texel per quadrant —
+stretched it to 64×64, and asserted the transparent corner was transparent. It
+read `[60, 0, 0, 60]`.
+
+That is bilinear filtering doing exactly its job: with a 2×2 source, only the
+four texel centres are pure and every other sample is a blend of all four. The
+test was measuring interpolation and calling it a renderer bug.
+
+Fixtures for sampling tests need quadrants **large enough that a sample sits far
+from any edge**. The rewritten test uses 32×32 blocks. The same trap is waiting
+for anyone testing video scaling later.

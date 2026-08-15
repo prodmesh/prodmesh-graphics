@@ -69,6 +69,10 @@ mdns-sd = { version = "0.15", default-features = false, features = ["async"] }
 # <img> renders multipart/x-mixed-replace natively — so M2 needs no client-side
 # decoder at all. WebCodecs is M3.
 jpeg-encoder = "0.6"
+# Image decode for M3a. Both are pure Rust with no IO of their own, so the same
+# decoder runs on a node and in the browser for Design.
+png = "0.18"
+jpeg-decoder = "0.3"
 
 [profile.release]
 # A late frame is a visible glitch. Optimise for consistent frame time rather

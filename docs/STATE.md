@@ -103,6 +103,8 @@ other than what they were.
 | S8 chaos harness | 🟢 **gating.** `npm run chaos` — 1000+ takes through five injections, zero fired twice |
 | `pmg-node` | 🟢 **the playout binary.** Link client, staging, durable assignment, layer engine, NDI out. Survives server loss; 10 cue-rule tests |
 | `pmg-cas` | 🟢 atomic writes, streaming put, verify. Agrees with `server/cas.js` |
+| `pmg-media` | 🟡 **stills only (M3a).** PNG and JPEG to premultiplied RGBA, format sniffed by magic bytes. Video, frame cache and A/V clock are M3d |
+| Images on air | 🟢 `kind: "image"` with `fit: cover \| contain \| stretch`, decoded once at assignment, soft alpha composites correctly over a key |
 | `pmg-preview` | 🟢 **MJPEG preview.** 480x270 over a checkerboard on port 8521, two viewers, **zero late frames** on the output |
 | `pmg-out-decklink` | 🟢 **SDI output.** Fill and key on two ordinary ports, 90 s at 1080p59.94, zero late frames. The key *picture* is unverified on a scope |
 | `pmg-out-ndi` | 🟢 the shared sender — one unpremultiply loop for the node and the CLI |

@@ -59,6 +59,9 @@ pub enum RenderContent {
     /// A filled box. Rounded corners are antialiased analytically.
     Box,
     Text(Vec<PlacedGlyph>),
+    /// A decoded still. Video is M3d and will reuse this, swapping the texture
+    /// per frame rather than rebuilding the instance.
+    Image(PlacedImage),
     /// A node kind this reader does not understand.
     ///
     /// Drawn as a magenta placeholder and marked [`SceneInstance::degraded`].
@@ -98,6 +101,8 @@ pub struct SceneInstance {
     /// Paint order, back to front.
     pub nodes: Vec<RenderNode>,
     pub atlas: CoverageAtlas,
+    /// Decoded images, uploaded once at arm and sampled per frame.
+    pub images: Vec<ImageData>,
     /// Set when the document contained something this reader could not draw.
     /// Surfaced to the operator rather than swallowed.
     pub degraded: bool,
@@ -108,6 +113,88 @@ pub struct SceneInstance {
 /// A trait so `pmg-render` never depends on a particular text stack — spike S2
 /// may yet move it, and the renderer must not notice (ADR 0016's reasoning,
 /// applied one layer up).
+/// Supplies decoded image pixels for `kind: "image"` nodes.
+///
+/// Mirrors [`GlyphSource`], and for the same reason: the renderer stays free of
+/// IO and of any decoder, so it still compiles to WASM unchanged. The node
+/// decodes from its CAS; Design decodes from the browser's fetch. Neither one
+/// leaks into here.
+pub trait ImageSource {
+    /// Premultiplied RGBA8 for an asset key, with its dimensions.
+    ///
+    /// **Premultiplied**, matching everything else in the compositing path —
+    /// `pmg-media` does the multiply at decode. Handing back straight alpha
+    /// would darken every soft edge, invisibly until it is over live video.
+    fn image(&mut self, asset_key: &str) -> Option<(u32, u32, std::sync::Arc<Vec<u8>>)>;
+}
+
+/// An image, sized and cropped for the box laid out for it.
+#[derive(Debug, Clone, PartialEq)]
+pub struct PlacedImage {
+    /// Index into [`SceneInstance::images`].
+    pub image: usize,
+    /// Sub-rectangle of the source to draw, normalised. `fit` is resolved here,
+    /// at build time, so a frame only ever samples a texture.
+    pub uv: [f32; 4],
+}
+
+/// A decoded image held by a scene instance.
+#[derive(Clone)]
+pub struct ImageData {
+    pub width: u32,
+    pub height: u32,
+    /// Shared, so cloning a SceneInstance does not copy a 4K still.
+    pub rgba: std::sync::Arc<Vec<u8>>,
+}
+
+impl std::fmt::Debug for ImageData {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        // Never print the pixels: a debug line for a 4K still is 33 MB of hex.
+        f.debug_struct("ImageData")
+            .field("width", &self.width)
+            .field("height", &self.height)
+            .field("bytes", &self.rgba.len())
+            .finish()
+    }
+}
+
+/// Resolve `fit` into the sub-rectangle of the source to sample.
+///
+/// Done once, at build, rather than per frame — and in normalised coordinates
+/// so the shader does one texture lookup and no arithmetic about aspect ratios.
+pub fn fit_uv(
+    fit: pmg_scene::doc::Fit,
+    img_w: u32,
+    img_h: u32,
+    box_w: f32,
+    box_h: f32,
+) -> [f32; 4] {
+    use pmg_scene::doc::Fit;
+    if img_w == 0 || img_h == 0 || box_w <= 0.0 || box_h <= 0.0 {
+        return [0.0, 0.0, 1.0, 1.0];
+    }
+    let img_aspect = img_w as f32 / img_h as f32;
+    let box_aspect = box_w / box_h;
+    match fit {
+        // Stretch samples the whole source and lets the quad distort it.
+        Fit::Stretch => [0.0, 0.0, 1.0, 1.0],
+        // Cover crops the overflowing axis, centred.
+        Fit::Cover => {
+            if img_aspect > box_aspect {
+                let w = box_aspect / img_aspect;
+                [(1.0 - w) * 0.5, 0.0, w, 1.0]
+            } else {
+                let h = img_aspect / box_aspect;
+                [0.0, (1.0 - h) * 0.5, 1.0, h]
+            }
+        }
+        // Contain samples the whole source; the LETTERBOX is produced by the
+        // quad being smaller than the box, which the caller handles. Sampling
+        // outside 0..1 to fake it would smear the edge pixels instead.
+        Fit::Contain => [0.0, 0.0, 1.0, 1.0],
+    }
+}
+
 pub trait GlyphSource {
     /// Shape and rasterize a run, returning glyphs placed relative to the run
     /// origin (baseline-left), plus the ascent used to position that baseline.
@@ -132,7 +219,23 @@ impl SceneInstance {
     /// Build from a document, its solved layout, and a glyph source.
     ///
     /// The expensive half. Called at arm, never per frame.
+    /// Build with no image source. Convenience for text-and-box documents.
     pub fn build(doc: &SceneDoc, solved: &Solved, glyphs: &mut dyn GlyphSource) -> Self {
+        struct NoImages;
+        impl ImageSource for NoImages {
+            fn image(&mut self, _k: &str) -> Option<(u32, u32, std::sync::Arc<Vec<u8>>)> {
+                None
+            }
+        }
+        Self::build_with(doc, solved, glyphs, &mut NoImages)
+    }
+
+    pub fn build_with(
+        doc: &SceneDoc,
+        solved: &Solved,
+        glyphs: &mut dyn GlyphSource,
+        images: &mut dyn ImageSource,
+    ) -> Self {
         let mut inst = SceneInstance {
             canvas_w: doc.canvas.width,
             canvas_h: doc.canvas.height,
@@ -143,17 +246,27 @@ impl SceneInstance {
         // packing incrementally would mean resizing the texture mid-build.
         let mut pending: Vec<(usize, Vec<RunGlyph>, f32)> = Vec::new();
 
-        flatten(&doc.root, None, solved, glyphs, &mut inst, &mut pending);
+        flatten(
+            &doc.root,
+            None,
+            solved,
+            glyphs,
+            images,
+            &mut inst,
+            &mut pending,
+        );
         pack_atlas(&mut inst, pending);
         inst
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn flatten(
     node: &Node,
     parent: Option<usize>,
     solved: &Solved,
     glyphs: &mut dyn GlyphSource,
+    images: &mut dyn ImageSource,
     inst: &mut SceneInstance,
     pending: &mut Vec<(usize, Vec<RunGlyph>, f32)>,
 ) {
@@ -180,6 +293,29 @@ fn flatten(
                 _ => RenderContent::Text(Vec::new()),
             }
         }
+        (true, Some(Content::Image { asset_key, fit })) => {
+            match images.image(asset_key) {
+                Some((w, h, rgba)) => {
+                    let idx = inst.images.len();
+                    inst.images.push(ImageData {
+                        width: w,
+                        height: h,
+                        rgba,
+                    });
+                    RenderContent::Image(PlacedImage {
+                        image: idx,
+                        uv: fit_uv(*fit, w, h, rect.w, rect.h),
+                    })
+                }
+                None => {
+                    // The asset is not staged. DEGRADED, not silently blank —
+                    // an empty rectangle where a background should be is the
+                    // failure that gets noticed on air rather than before it.
+                    inst.degraded = true;
+                    RenderContent::Unknown
+                }
+            }
+        }
         _ => RenderContent::Box,
     };
 
@@ -197,7 +333,7 @@ fn flatten(
     });
 
     for c in &node.children {
-        flatten(c, Some(me), solved, glyphs, inst, pending);
+        flatten(c, Some(me), solved, glyphs, images, inst, pending);
     }
 }
 

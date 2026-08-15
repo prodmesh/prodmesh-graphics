@@ -23,6 +23,9 @@ impl Library for Empty {
     fn text_engine(&self) -> anyhow::Result<pmg_text::TextEngine> {
         Ok(pmg_text::TextEngine::new(pmg_text::FontDb::new()))
     }
+    fn image(&self, _key: &str) -> Option<(u32, u32, std::sync::Arc<Vec<u8>>)> {
+        None
+    }
 }
 
 fn engine() -> LayerEngine {

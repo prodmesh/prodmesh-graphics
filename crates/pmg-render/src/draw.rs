@@ -27,9 +27,12 @@ struct NodeUniform {
     canvas: [f32; 2],
     px_per_unit: f32,
     _pad: f32,
+    /// Sub-rectangle of an image to sample: x, y, w, h, normalised. `fit` is
+    /// resolved at build time so a frame never reasons about aspect ratios.
+    uv: [f32; 4],
 }
 
-const UNIFORM_SIZE: u64 = 80;
+const UNIFORM_SIZE: u64 = 96;
 const _: () = assert!(std::mem::size_of::<NodeUniform>() as u64 == UNIFORM_SIZE);
 
 fn uniform_bytes(u: &NodeUniform) -> [u8; UNIFORM_SIZE as usize] {
@@ -55,6 +58,10 @@ fn uniform_bytes(u: &NodeUniform) -> [u8; UNIFORM_SIZE as usize] {
         u.canvas[1],
         u.px_per_unit,
         u._pad,
+        u.uv[0],
+        u.uv[1],
+        u.uv[2],
+        u.uv[3],
     ];
     for (i, v) in f.iter().enumerate() {
         buf[i * 4..i * 4 + 4].copy_from_slice(&v.to_le_bytes());
@@ -110,6 +117,9 @@ pub struct SceneRenderer {
     pipeline_box: wgpu::RenderPipeline,
     pipeline_text: wgpu::RenderPipeline,
     pipeline_unknown: wgpu::RenderPipeline,
+    pipeline_image: wgpu::RenderPipeline,
+    /// One bind group per decoded image, uploaded once at arm.
+    image_binds: Vec<wgpu::BindGroup>,
     bind_layout: wgpu::BindGroupLayout,
     sampler: wgpu::Sampler,
     atlas_view: wgpu::TextureView,
@@ -155,11 +165,49 @@ impl SceneRenderer {
             ],
         });
 
+        // Images get their own group so the per-node uniform group stays
+        // untouched: a still is one texture per node, not a shared atlas, and
+        // giving it group 1 means switching image only rebinds one group.
+        let image_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("pmg-scene-image-bind"),
+            entries: &[
+                wgpu::BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        multisampled: false,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 1,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                    count: None,
+                },
+            ],
+        });
+
+        // TWO pipeline layouts, not one shared one.
+        //
+        // A pipeline layout declares what every draw using it must bind. Adding
+        // the image group to the shared layout made box, text and unknown draws
+        // fail validation with "expects a BindGroup to be set at index 1" —
+        // they have no image to bind and should not have to invent one. Only
+        // the image pipeline declares group 1.
         let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("pmg-scene-layout"),
             bind_group_layouts: &[Some(&bind_layout)],
             immediate_size: 0,
         });
+        let image_pipeline_layout =
+            device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                label: Some("pmg-scene-image-layout"),
+                bind_group_layouts: &[Some(&bind_layout), Some(&image_layout)],
+                immediate_size: 0,
+            });
 
         // Premultiplied source-over. The shader already premultiplied, so the
         // source factor is One rather than SrcAlpha — using SrcAlpha here would
@@ -233,6 +281,31 @@ impl SceneRenderer {
 
         let pipeline_box = make("vs_box", "fs_box", &[], "pmg-scene-box");
         let pipeline_unknown = make("vs_box", "fs_unknown", &[], "pmg-scene-unknown");
+        let pipeline_image = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("pmg-scene-image"),
+            layout: Some(&image_pipeline_layout),
+            vertex: wgpu::VertexState {
+                module: &shader,
+                entry_point: Some("vs_box"),
+                buffers: &[],
+                compilation_options: Default::default(),
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: &shader,
+                entry_point: Some("fs_image"),
+                targets: &[Some(wgpu::ColorTargetState {
+                    format: TARGET_FORMAT,
+                    blend: Some(blend),
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+                compilation_options: Default::default(),
+            }),
+            primitive: wgpu::PrimitiveState::default(),
+            depth_stencil: None,
+            multisample: wgpu::MultisampleState::default(),
+            multiview_mask: None,
+            cache: None,
+        });
         let pipeline_text = make(
             "vs_text",
             "fs_text",
@@ -303,10 +376,85 @@ impl SceneRenderer {
             border_color: None,
         });
 
+        // Its own sampler, stated field by field like every other one — every
+        // sampler field is explicit so no default can differ between backends
+        // (parity rule 4).
+        let image_sampler = device.create_sampler(&wgpu::SamplerDescriptor {
+            label: Some("pmg-scene-image-sampler"),
+            address_mode_u: wgpu::AddressMode::ClampToEdge,
+            address_mode_v: wgpu::AddressMode::ClampToEdge,
+            address_mode_w: wgpu::AddressMode::ClampToEdge,
+            mag_filter: wgpu::FilterMode::Linear,
+            min_filter: wgpu::FilterMode::Linear,
+            mipmap_filter: wgpu::MipmapFilterMode::Nearest,
+            lod_min_clamp: 0.0,
+            lod_max_clamp: 0.0,
+            compare: None,
+            anisotropy_clamp: 1,
+            border_color: None,
+        });
+
         Self {
             pipeline_box,
             pipeline_text,
             pipeline_unknown,
+            pipeline_image,
+            image_binds: inst
+                .images
+                .iter()
+                .map(|img| {
+                    let tex = device.create_texture(&wgpu::TextureDescriptor {
+                        label: Some("pmg-scene-image"),
+                        size: wgpu::Extent3d {
+                            width: img.width,
+                            height: img.height,
+                            depth_or_array_layers: 1,
+                        },
+                        mip_level_count: 1,
+                        sample_count: 1,
+                        dimension: wgpu::TextureDimension::D2,
+                        // Rgba8Unorm, never Rgba8UnormSrgb: no automatic colour
+                        // conversion anywhere in this pipeline (parity rule 3).
+                        format: wgpu::TextureFormat::Rgba8Unorm,
+                        usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+                        view_formats: &[],
+                    });
+                    queue.write_texture(
+                        wgpu::TexelCopyTextureInfo {
+                            texture: &tex,
+                            mip_level: 0,
+                            origin: wgpu::Origin3d::ZERO,
+                            aspect: wgpu::TextureAspect::All,
+                        },
+                        &img.rgba,
+                        wgpu::TexelCopyBufferLayout {
+                            offset: 0,
+                            bytes_per_row: Some(img.width * 4),
+                            rows_per_image: Some(img.height),
+                        },
+                        wgpu::Extent3d {
+                            width: img.width,
+                            height: img.height,
+                            depth_or_array_layers: 1,
+                        },
+                    );
+                    let view = tex.create_view(&wgpu::TextureViewDescriptor::default());
+                    device.create_bind_group(&wgpu::BindGroupDescriptor {
+                        label: Some("pmg-scene-image-bind"),
+                        layout: &image_layout,
+                        entries: &[
+                            wgpu::BindGroupEntry {
+                                binding: 0,
+                                resource: wgpu::BindingResource::TextureView(&view),
+                            },
+                            wgpu::BindGroupEntry {
+                                binding: 1,
+                                resource: wgpu::BindingResource::Sampler(&image_sampler),
+                            },
+                        ],
+                    })
+                })
+                .collect(),
             bind_layout,
             sampler,
             atlas_view: tex.create_view(&wgpu::TextureViewDescriptor::default()),
@@ -399,6 +547,10 @@ impl SceneRenderer {
                 // and because it replaces fwidth().
                 px_per_unit: 1.0,
                 _pad: 0.0,
+                uv: match &n.content {
+                    RenderContent::Image(img) => img.uv,
+                    _ => [0.0, 0.0, 1.0, 1.0],
+                },
             };
             let off = (stride as usize) * i;
             ubytes[off..off + UNIFORM_SIZE as usize].copy_from_slice(&uniform_bytes(&u));
@@ -514,6 +666,14 @@ impl SceneRenderer {
                         if n.fill.is_some() {
                             pass.set_pipeline(&self.pipeline_box);
                             pass.set_bind_group(0, &bind, &[offset]);
+                            pass.draw(0..6, 0..1);
+                        }
+                    }
+                    RenderContent::Image(img) => {
+                        if let Some(b) = self.image_binds.get(img.image) {
+                            pass.set_pipeline(&self.pipeline_image);
+                            pass.set_bind_group(0, &bind, &[offset]);
+                            pass.set_bind_group(1, b, &[]);
                             pass.draw(0..6, 0..1);
                         }
                     }

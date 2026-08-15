@@ -1,35 +1,233 @@
-//! Image and video demux/decode, frame cache, and the A/V clock.
+//! Image and video decode.
 //!
-//! Not in the pure set. Risk R5, spike S5.
+//! M3a: still images only — PNG and JPEG to straight RGBA8. Video, its frame
+//! cache, and the A/V clock are M3d.
 //!
-//! # Two rules
+//! # Straight in, premultiplied at the boundary
 //!
-//! **The clock is always the video output.** Audio resamples to fit. The
-//! decoder is *pulled* by the output callback, never pushed. Any design where
-//! the decoder drives timing is wrong by construction.
+//! Decoders hand back **straight** alpha; the renderer composites in
+//! **premultiplied** (ADR 0012). The multiply happens here, once, at the point
+//! the pixels enter the system — the same rule as the output boundary, in the
+//! other direction. Compositing a straight-alpha image would put a dark fringe
+//! around every soft edge, which is the classic version of this bug and is
+//! invisible until it is over live video.
 //!
-//! **On decoder underrun: hold the last frame, log it, never stall the
-//! output.** A held frame is a glitch; a stalled output is a black picture.
+//! # No filesystem
 //!
-//! # Codec policy
-//!
-//! Cued media must be an all-intra intermediate — ProRes 4444, DNxHR, or HAP
-//! with alpha — because long-GOP H.264 with B-frames is where frame-accurate
-//! seek goes to die. The control server transcodes on ingest
-//! (`docs/specs/asset-cas.md` §3). H.264 is accepted for convenience playback.
-//!
-//! Variable-frame-rate sources are **rejected at ingest**, not accommodated.
-//!
-//! # Licensing
-//!
-//! ffmpeg **LGPL components only, dynamically linked, no GPL**. Linking
-//! `libx264` for convenience would quietly make the whole binary GPL and
-//! foreclose the posture in `docs/VISION.md` permanently (ADR 0003 §Seam).
-//!
-//! # M0 status
-//!
-//! Types only.
+//! Decoding takes bytes, not paths. The bytes come from the CAS, and keeping
+//! this dependency-light and IO-free is what lets the same decoder run in the
+//! browser for Design mode.
+
+use std::io::Cursor;
+
+#[derive(Debug, thiserror::Error)]
+pub enum MediaError {
+    #[error("unrecognised image format")]
+    UnknownFormat,
+    #[error("png: {0}")]
+    Png(String),
+    #[error("jpeg: {0}")]
+    Jpeg(String),
+    #[error("image is {w}x{h}, which exceeds the {limit}px limit for one texture")]
+    TooLarge { w: u32, h: u32, limit: u32 },
+}
+
+/// Decoded pixels, **premultiplied** RGBA8, ready for the renderer.
+pub struct Decoded {
+    pub width: u32,
+    pub height: u32,
+    pub rgba: Vec<u8>,
+}
+
+/// The largest edge we will hand to a texture.
+///
+/// The renderer asks for `downlevel_webgl2_defaults`, so 8192 is the tier a
+/// browser is guaranteed to grant. Refusing here, with the size in the message,
+/// beats a GPU validation error that names nothing an operator can act on.
+pub const MAX_EDGE: u32 = 8192;
+
+/// Sniff the format and decode.
+///
+/// Magic bytes rather than a filename: assets arrive from the CAS named by their
+/// hash, so there is no extension to trust — and trusting one would be worse
+/// than having none.
+pub fn decode_image(bytes: &[u8]) -> Result<Decoded, MediaError> {
+    if bytes.starts_with(&[0x89, b'P', b'N', b'G']) {
+        decode_png(bytes)
+    } else if bytes.starts_with(&[0xFF, 0xD8, 0xFF]) {
+        decode_jpeg(bytes)
+    } else {
+        Err(MediaError::UnknownFormat)
+    }
+}
+
+fn check_size(w: u32, h: u32) -> Result<(), MediaError> {
+    if w > MAX_EDGE || h > MAX_EDGE {
+        return Err(MediaError::TooLarge {
+            w,
+            h,
+            limit: MAX_EDGE,
+        });
+    }
+    Ok(())
+}
+
+fn decode_png(bytes: &[u8]) -> Result<Decoded, MediaError> {
+    let mut decoder = png::Decoder::new(Cursor::new(bytes));
+    // Normalise 16-bit down and expand palettes and low bit depths, so the rest
+    // of this function only ever sees 8-bit RGB or RGBA.
+    decoder.set_transformations(png::Transformations::normalize_to_color8());
+    let mut reader = decoder
+        .read_info()
+        .map_err(|e| MediaError::Png(e.to_string()))?;
+    let info = reader.info().clone();
+    check_size(info.width, info.height)?;
+
+    let mut buf = vec![0u8; reader.output_buffer_size().unwrap_or(0)];
+    let frame = reader
+        .next_frame(&mut buf)
+        .map_err(|e| MediaError::Png(e.to_string()))?;
+    buf.truncate(frame.buffer_size());
+
+    let px = (info.width * info.height) as usize;
+    let mut rgba = vec![0u8; px * 4];
+    match frame.color_type {
+        png::ColorType::Rgba => {
+            rgba.copy_from_slice(&buf[..px * 4]);
+            premultiply(&mut rgba);
+        }
+        png::ColorType::Rgb => {
+            for i in 0..px {
+                rgba[i * 4] = buf[i * 3];
+                rgba[i * 4 + 1] = buf[i * 3 + 1];
+                rgba[i * 4 + 2] = buf[i * 3 + 2];
+                rgba[i * 4 + 3] = 255;
+            }
+        }
+        png::ColorType::GrayscaleAlpha => {
+            for i in 0..px {
+                let (g, a) = (buf[i * 2], buf[i * 2 + 1]);
+                rgba[i * 4] = g;
+                rgba[i * 4 + 1] = g;
+                rgba[i * 4 + 2] = g;
+                rgba[i * 4 + 3] = a;
+            }
+            premultiply(&mut rgba);
+        }
+        png::ColorType::Grayscale => {
+            for i in 0..px {
+                let g = buf[i];
+                rgba[i * 4] = g;
+                rgba[i * 4 + 1] = g;
+                rgba[i * 4 + 2] = g;
+                rgba[i * 4 + 3] = 255;
+            }
+        }
+        other => {
+            return Err(MediaError::Png(format!(
+                "unsupported colour type {other:?}"
+            )))
+        }
+    }
+
+    Ok(Decoded {
+        width: info.width,
+        height: info.height,
+        rgba,
+    })
+}
+
+fn decode_jpeg(bytes: &[u8]) -> Result<Decoded, MediaError> {
+    let mut decoder = jpeg_decoder::Decoder::new(Cursor::new(bytes));
+    let pixels = decoder
+        .decode()
+        .map_err(|e| MediaError::Jpeg(e.to_string()))?;
+    let info = decoder
+        .info()
+        .ok_or_else(|| MediaError::Jpeg("no frame header".into()))?;
+    check_size(info.width as u32, info.height as u32)?;
+
+    let px = (info.width as usize) * (info.height as usize);
+    let mut rgba = vec![0u8; px * 4];
+    match info.pixel_format {
+        jpeg_decoder::PixelFormat::RGB24 => {
+            for i in 0..px {
+                rgba[i * 4] = pixels[i * 3];
+                rgba[i * 4 + 1] = pixels[i * 3 + 1];
+                rgba[i * 4 + 2] = pixels[i * 3 + 2];
+                rgba[i * 4 + 3] = 255;
+            }
+        }
+        jpeg_decoder::PixelFormat::L8 => {
+            for i in 0..px {
+                let g = pixels[i];
+                rgba[i * 4] = g;
+                rgba[i * 4 + 1] = g;
+                rgba[i * 4 + 2] = g;
+                rgba[i * 4 + 3] = 255;
+            }
+        }
+        other => {
+            return Err(MediaError::Jpeg(format!(
+                "unsupported pixel format {other:?}"
+            )))
+        }
+    }
+    // JPEG has no alpha, so there is nothing to premultiply — and a JPEG used
+    // as a keyed graphic will key as a solid rectangle, which is the format's
+    // limitation rather than ours.
+    Ok(Decoded {
+        width: info.width as u32,
+        height: info.height as u32,
+        rgba,
+    })
+}
+
+/// Straight → premultiplied, in place.
+fn premultiply(rgba: &mut [u8]) {
+    for px in rgba.chunks_exact_mut(4) {
+        let a = px[3] as u32;
+        if a == 255 {
+            continue;
+        }
+        // Rounded, not truncated: repeated truncation darkens midtones
+        // measurably over an image, and the cost is one add.
+        px[0] = ((px[0] as u32 * a + 127) / 255) as u8;
+        px[1] = ((px[1] as u32 * a + 127) / 255) as u8;
+        px[2] = ((px[2] as u32 * a + 127) / 255) as u8;
+    }
+}
 
 pub fn selftest() -> Result<(), String> {
+    // A 2x2 PNG with one half-transparent pixel, checked for the premultiply.
+    // Built here rather than read from disk so the selftest needs no fixtures.
+    let mut png_bytes = Vec::new();
+    {
+        let mut enc = png::Encoder::new(&mut png_bytes, 2, 2);
+        enc.set_color(png::ColorType::Rgba);
+        enc.set_depth(png::BitDepth::Eight);
+        let mut w = enc.write_header().map_err(|e| e.to_string())?;
+        // Opaque white, half-alpha white, transparent white, opaque black.
+        w.write_image_data(&[
+            255, 255, 255, 255, 255, 255, 255, 128, 255, 255, 255, 0, 0, 0, 0, 255,
+        ])
+        .map_err(|e| e.to_string())?;
+    }
+    let d = decode_image(&png_bytes).map_err(|e| e.to_string())?;
+    if (d.width, d.height) != (2, 2) {
+        return Err(format!("decoded {}x{}, expected 2x2", d.width, d.height));
+    }
+    if d.rgba[4] != 128 {
+        return Err(format!(
+            "half-alpha white should premultiply to 128, got {}",
+            d.rgba[4]
+        ));
+    }
+    if d.rgba[8] != 0 {
+        return Err(format!(
+            "transparent white should premultiply to 0, got {}",
+            d.rgba[8]
+        ));
+    }
     Ok(())
 }

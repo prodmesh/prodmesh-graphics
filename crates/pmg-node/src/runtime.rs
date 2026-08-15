@@ -34,6 +34,10 @@ pub struct Assigned {
     pub templates: BTreeMap<String, SceneDoc>,
     pub items: BTreeMap<String, (String, String, BTreeMap<String, DataValue>)>,
     pub font_bytes: Vec<Vec<u8>>,
+    /// Decoded stills, keyed by the asset KEY the document uses (not the hash).
+    /// Decoded once at assignment; arming a hundred items must not decode the
+    /// same background a hundred times.
+    pub images: BTreeMap<String, (u32, u32, std::sync::Arc<Vec<u8>>)>,
     /// A developer-supplied face, used only when the assignment carried no
     /// usable font. Named `--font` on the command line, and it exists so the
     /// slice can be driven before font assets are wired end to end.
@@ -49,6 +53,10 @@ impl Library for Assigned {
         self.items
             .get(item_id)
             .map(|(label, rev, data)| (label.as_str(), rev.as_str(), data))
+    }
+
+    fn image(&self, asset_key: &str) -> Option<(u32, u32, std::sync::Arc<Vec<u8>>)> {
+        self.images.get(asset_key).cloned()
     }
 
     fn text_engine(&self) -> Result<pmg_text::TextEngine> {
@@ -140,6 +148,7 @@ impl Runtime {
                 templates: BTreeMap::new(),
                 items: BTreeMap::new(),
                 font_bytes: Vec::new(),
+                images: BTreeMap::new(),
                 fallback_font: opts.fallback_font.clone(),
             },
             store,
@@ -229,6 +238,34 @@ impl Runtime {
             .filter_map(|h| self.store.cas.get(h).ok())
             .filter(|b| looks_like_a_font(b))
             .collect();
+
+        // Decode every image a staged template names. Once, here, rather than
+        // per arm.
+        self.assigned.images.clear();
+        for doc in self.assigned.templates.values() {
+            for asset in &doc.assets {
+                if self.assigned.images.contains_key(&asset.key) {
+                    continue;
+                }
+                let Ok(bytes) = self.store.cas.get(&asset.hash) else {
+                    continue;
+                };
+                match pmg_media::decode_image(&bytes) {
+                    Ok(d) => {
+                        self.assigned.images.insert(
+                            asset.key.clone(),
+                            (d.width, d.height, std::sync::Arc::new(d.rgba)),
+                        );
+                    }
+                    Err(e) => {
+                        // Named, with the key, because "the background did not
+                        // appear" is otherwise unattributable.
+                        tracing::warn!(key = %asset.key, hash = %asset.hash, error = %e,
+                                       "could not decode an image asset");
+                    }
+                }
+            }
+        }
 
         self.assigned.items.clear();
         let mut ready = Vec::new();

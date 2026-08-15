@@ -10,4 +10,6 @@ publish.workspace = true
 serde = { workspace = true }
 thiserror = { workspace = true }
 anyhow = { workspace = true }
+png = { workspace = true }
+jpeg-decoder = { workspace = true }
 tracing = { workspace = true }

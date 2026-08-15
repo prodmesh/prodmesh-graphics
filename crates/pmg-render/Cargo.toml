@@ -20,5 +20,8 @@ wgpu = { workspace = true }
 wgpu = { workspace = true, default-features = false, features = ["webgpu", "wgsl"] }
 
 [dev-dependencies]
+pmg-media = { path = "../pmg-media" }
+png = { workspace = true }
+pmg-layout = { path = "../pmg-layout" }
 pollster = "0.4"
 serde_json = { workspace = true }

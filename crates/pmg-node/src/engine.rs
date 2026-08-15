@@ -101,6 +101,13 @@ pub trait Library {
     fn item(&self, item_id: &str) -> Option<(&str, &str, &BTreeMap<String, DataValue>)>;
     /// A text engine primed with the fonts the assignment carried.
     fn text_engine(&self) -> Result<TextEngine>;
+
+    /// Decoded pixels for an asset key the document names, if it is staged.
+    ///
+    /// Returning `None` marks the scene degraded rather than drawing nothing:
+    /// an empty rectangle where a background should be is the failure that gets
+    /// noticed on air instead of before it.
+    fn image(&self, asset_key: &str) -> Option<(u32, u32, std::sync::Arc<Vec<u8>>)>;
 }
 
 pub struct LayerEngine {
@@ -369,7 +376,20 @@ impl LayerEngine {
         let solved = pmg_layout::solve(doc, &bound, &measurer)
             .map_err(|_| RejectReason::UnreadableTemplate)?;
         let mut engine = measurer.into_engine();
-        let instance = SceneInstance::build(doc, &solved, &mut TextEngineGlyphs::new(&mut engine));
+        // The library owns decoded pixels; this adapter just hands them over,
+        // so the renderer still knows nothing about decoding or the CAS.
+        struct Images<'a>(&'a dyn Library);
+        impl pmg_render::scene::ImageSource for Images<'_> {
+            fn image(&mut self, key: &str) -> Option<(u32, u32, std::sync::Arc<Vec<u8>>)> {
+                self.0.image(key)
+            }
+        }
+        let instance = SceneInstance::build_with(
+            doc,
+            &solved,
+            &mut TextEngineGlyphs::new(&mut engine),
+            &mut Images(lib),
+        );
 
         Ok(Armed {
             item_id: item_id.to_string(),

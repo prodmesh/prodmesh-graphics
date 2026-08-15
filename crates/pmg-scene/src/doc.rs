@@ -449,10 +449,33 @@ pub enum Content {
     },
     Image {
         asset_key: String,
+        #[serde(default)]
+        fit: Fit,
     },
     Shape {
         shape: String,
     },
+}
+
+/// How an image fills the box laid out for it.
+///
+/// The box's size comes from layout; this decides what happens when the image's
+/// aspect ratio disagrees with it. **`Cover` is the default** because a
+/// background that leaves gaps is the more obvious mistake on air — a letterbox
+/// on a full-frame graphic reads as broken, while a crop usually reads as
+/// intentional.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Fit {
+    /// Fill the box, cropping the overflowing axis. Aspect preserved.
+    #[default]
+    Cover,
+    /// Fit inside the box, leaving gaps. Aspect preserved.
+    Contain,
+    /// Stretch to the box. Aspect NOT preserved — rarely what anyone wants,
+    /// but a designer who asks for it should get it rather than be second
+    /// guessed.
+    Stretch,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
