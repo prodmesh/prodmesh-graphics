@@ -72,7 +72,10 @@ USAGE:
     --font <file.ttf>      A face to use when the assignment carries no font
                            asset. Provisional — see runtime.rs.
     --headless             Render and time frames, but send nothing.
-    --preview-port <n>     MJPEG preview. Default 8521; 0 disables it.
+    --preview-port <n>     Preview channel. Default 8521; 0 disables it.
+    --preview-mjpeg        Serve MJPEG over HTTP instead of H.264 over a
+                           WebSocket. Needs no decoder in the browser, so it is
+                           the fallback when H.264 shows nothing.
 ";
 
 /// Parse one `--output key=value,key=value` spec.
@@ -107,6 +110,7 @@ fn parse_output(
         // Silent unless asked. A lower-third key feed carrying audio would put
         // the same sound on a second SDI feed a plant may well sum.
         audio_channels: 0,
+        preview_mjpeg: false,
     };
 
     for pair in spec.split(',') {
@@ -291,6 +295,7 @@ fn main() -> Result<()> {
             audio_channels: arg(&args, "--audio-channels")
                 .and_then(|s| s.parse().ok())
                 .unwrap_or(0),
+            preview_mjpeg: args.iter().any(|a| a == "--preview-mjpeg"),
             preview_port: arg(&args, "--preview-port")
                 .and_then(|s| s.parse().ok())
                 .unwrap_or(pmg_preview::PREVIEW_PORT),

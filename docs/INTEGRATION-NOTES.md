@@ -1340,3 +1340,45 @@ audio: 48000 Hz, 2 ch, 801 samples, stride 3232 B, peak -12.0 dBFS
 the cadence survives the wire. Note the receive stride (3232 B = 808 floats)
 is **not** the send stride (801 × 4 = 3204): NDI repacks, and a reader that
 assumed `no_samples * 4` would walk off by seven samples a channel per frame.
+
+## WebCodecs preview: H.264 over a WebSocket, and a VideoFrame that lies after close()
+*2026-08-15 · Chrome via the in-app browser · M3f*
+
+MJPEG sent every frame whole. H.264 sends the difference: a static 480x270
+preview measured **0.05 Mbit/s** against MJPEG's several, and a moving one stays
+inside a 4 Mbit budget. Verified by decoding it in a real browser — 103 frames
+on a canvas, showing the checkerboard, which is the correct picture when nothing
+is on air.
+
+Stream shape, confirmed by reading the NALs off the wire:
+
+```
+msg 1: key=true  2977 B  NALs [7,8,6,5]   SPS, PPS, SEI, IDR
+msg 2: key=false   36 B  NALs [1]         P slice
+```
+
+Four things that had to be right, none of them guessable:
+
+- **SPS/PPS before every keyframe**, via `-bsf:v dump_extra=freq=keyframe`.
+  Without it a browser that connects one second in has no parameter sets and
+  shows nothing at all, forever, with no error anywhere.
+- **The server caches the last keyframe** and sends it on connect, so a joiner
+  paints in **4 ms** rather than waiting up to a GOP.
+- **Annex-B, not AVCC.** Configuring `VideoDecoder` with no `description` selects
+  Annex-B, which is what `-f h264` writes. AVCC would mean parsing SPS/PPS in
+  TypeScript to build an `avcC` — a second implementation of something that must
+  not disagree.
+- **A one-byte key/delta header per message.** `EncodedVideoChunk` needs the
+  type, and a decoder cannot start on a delta; dropping deltas until the first
+  key is what makes a mid-service connection paint instead of throw.
+
+**The trap: a `VideoFrame` reads as 0x0 after `close()`.** The test page reported
+`LIVE 0x0` while painting a perfectly good picture, because it read
+`displayWidth` in the same statement that had already closed the frame. Closing
+zeroes the metadata rather than throwing. Read the dimensions **before**
+`close()` — and `close()` must still always happen, because a leaked frame holds
+a GPU buffer and stalls the decoder within seconds.
+
+MJPEG is kept behind `--preview-mjpeg`. It needs no decoder in the browser at
+all, which makes it the instrument that answers "is ANY picture coming out of
+this node" when the answer for H.264 is no.

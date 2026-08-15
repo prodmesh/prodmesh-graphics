@@ -17,6 +17,8 @@
 //! one level down: a stalled consumer must not be able to reach back and slow
 //! the producer.
 
+pub mod h264;
+
 use std::io::Write;
 use std::net::TcpListener;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -119,6 +121,43 @@ impl Preview {
     /// immediately and counts a skip. Dropping preview frames under load is the
     /// correct behaviour — the alternative is holding up the render loop, which
     /// costs a frame on air.
+    /// Offer pixels that have ALREADY been downscaled and composited.
+    ///
+    /// Exists so a caller driving two transports pays for the checkerboard
+    /// composite once rather than per transport.
+    pub fn offer_rgb(&self, small: Vec<u8>) {
+        {
+            let mut busy = match self.encoding.try_lock() {
+                Ok(g) => g,
+                Err(_) => {
+                    self.skipped.fetch_add(1, Ordering::Relaxed);
+                    return;
+                }
+            };
+            if *busy {
+                self.skipped.fetch_add(1, Ordering::Relaxed);
+                return;
+            }
+            *busy = true;
+        }
+        let mut jpeg = Vec::with_capacity(48 * 1024);
+        let encoder = jpeg_encoder::Encoder::new(&mut jpeg, self.quality);
+        let ok = encoder
+            .encode(
+                &small,
+                self.width as u16,
+                self.height as u16,
+                jpeg_encoder::ColorType::Rgb,
+            )
+            .is_ok();
+        if ok {
+            *self.slot.jpeg.lock().unwrap() = Some(Arc::new(jpeg));
+            self.slot.seq.fetch_add(1, Ordering::Release);
+            self.slot.ready.notify_all();
+        }
+        *self.encoding.lock().unwrap() = false;
+    }
+
     pub fn offer(&self, rgba: &[u8]) {
         {
             let mut busy = match self.encoding.try_lock() {
@@ -162,6 +201,37 @@ impl Preview {
     /// composited over a checkerboard, an operator can see what will key rather
     /// than a black rectangle that might be a graphic or might be nothing.
     fn downscale(&self, rgba: &[u8]) -> Vec<u8> {
+        downscale_over_checkerboard(rgba, self.width, self.height, self.step)
+    }
+}
+
+/// Box-average down to `w`x`h`, composited over a checkerboard, as RGB.
+///
+/// Shared by both transports because both need exactly this: the output is a
+/// **key signal**, and alpha has to go somewhere visible or an operator is
+/// looking at a black rectangle that might be a graphic and might be nothing.
+/// Neither JPEG nor H.264 can carry the alpha, so the compositing happens here,
+/// once, before either encoder sees a pixel.
+pub fn downscale_over_checkerboard(rgba: &[u8], width: u32, height: u32, step: u32) -> Vec<u8> {
+    #[allow(clippy::needless_range_loop)]
+    {
+        let inner = InnerDownscale {
+            width,
+            height,
+            step,
+        };
+        inner.run(rgba)
+    }
+}
+
+struct InnerDownscale {
+    width: u32,
+    height: u32,
+    step: u32,
+}
+
+impl InnerDownscale {
+    fn run(&self, rgba: &[u8]) -> Vec<u8> {
         let (w, h, step) = (
             self.width as usize,
             self.height as usize,

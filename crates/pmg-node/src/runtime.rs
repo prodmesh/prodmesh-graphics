@@ -148,6 +148,12 @@ pub struct OutputSpec {
     /// lower-third key and to a wall feed needs its audio in different places or
     /// nowhere (`docs/specs/output-config.md` §7).
     pub audio_channels: i32,
+    /// Serve the old MJPEG preview instead of H.264.
+    ///
+    /// Kept because it needs no decoder in the browser at all, which makes it
+    /// the instrument that answers "is ANY picture coming out of this node" when
+    /// the answer for H.264 is no.
+    pub preview_mjpeg: bool,
 }
 
 pub struct Options {
@@ -689,6 +695,13 @@ fn render_group(
         backend: Backend,
         renderers: crate::render::RendererCache,
         preview: Option<pmg_preview::Preview>,
+        /// H.264 for `VideoDecoder`, which is what the browser actually uses.
+        /// MJPEG stays available because it needs no decoder at all and is
+        /// therefore the instrument that answers "is ANYTHING coming out".
+        preview_h264: Option<pmg_preview::h264::H264Preview>,
+        /// Preview size and the box-filter step, so the downscale is done once
+        /// and handed to whichever transports are up.
+        preview_dims: (u32, u32, u32),
         frame: u64,
         /// This frame's interleaved audio. Reused across frames so a service
         /// does not allocate a buffer per frame.
@@ -701,7 +714,32 @@ fn render_group(
     for spec in specs {
         let target = Target::new(&gpu, spec.width, spec.height)?;
         let backend = open_backend(spec)?;
-        let preview = if spec.preview_port == 0 {
+        // 480 across, whatever the output is. A confidence monitor, not a
+        // scaled copy of the programme feed.
+        let pstep = (spec.width / 480).max(1);
+        let preview_dims = (spec.width / pstep, spec.height / pstep, pstep);
+
+        let preview_h264 = if spec.preview_port == 0 || spec.preview_mjpeg {
+            None
+        } else {
+            match pmg_preview::h264::H264Preview::start(pmg_preview::h264::Config {
+                width: preview_dims.0,
+                height: preview_dims.1,
+                fps_num: spec.fps.0,
+                fps_den: spec.fps.1,
+                port: spec.preview_port,
+                bitrate: 4_000_000,
+            }) {
+                Ok(p) => Some(p),
+                Err(e) => {
+                    tracing::warn!(output = %spec.id, error = %e,
+                                   "H.264 preview unavailable; falling back to MJPEG");
+                    None
+                }
+            }
+        };
+
+        let preview = if spec.preview_port == 0 || preview_h264.is_some() {
             None
         } else {
             match pmg_preview::Preview::start(pmg_preview::Config {
@@ -738,6 +776,8 @@ fn render_group(
                 },
             },
             preview,
+            preview_h264,
+            preview_dims,
             frame: 0,
         });
     }
@@ -904,8 +944,17 @@ fn render_group(
                 Backend::Headless => std::thread::sleep(Duration::from_millis(budget_ms as u64)),
             }
 
-            if let Some(p) = &out.preview {
-                p.offer(&rgba);
+            // Downscale ONCE, then hand the same pixels to whichever transport
+            // is up. Doing it per transport would pay for the checkerboard
+            // composite twice for one picture.
+            if out.preview.is_some() || out.preview_h264.is_some() {
+                let (pw, ph, step) = out.preview_dims;
+                let small = pmg_preview::downscale_over_checkerboard(&rgba, pw, ph, step);
+                if let Some(p) = &out.preview_h264 {
+                    p.offer(small);
+                } else if let Some(p) = &out.preview {
+                    p.offer_rgb(small);
+                }
             }
         }
 

@@ -114,7 +114,7 @@ other than what they were.
 | `pmg-audio` | 🟢 the audio clock and layer→pair mixing. Sums and clips rather than averaging. 10 tests, two-hour non-drift in `--selftest` |
 | Genlock status | 🟡 read live from the card and surfaced in Configure; what `present: true` means with nothing plugged in is **unverified** — needs a reference generator |
 | Multi-output | 🟢 **1–N outputs per node**, a render thread per output GROUP (shared clock), independent content and resolutions per output. Two outputs at 59.94, zero late |
-| `pmg-preview` | 🟢 **MJPEG preview.** 480x270 over a checkerboard on port 8521, two viewers, **zero late frames** on the output |
+| `pmg-preview` | 🟢 **H.264 over a WebSocket, decoded with WebCodecs.** Verified in a real browser: 103 frames on a canvas, joiner paints in 4 ms from the cached keyframe, 0.05 Mbit/s on static content. MJPEG kept behind `--preview-mjpeg` as the no-decoder fallback |
 | `pmg-out-decklink` | 🟢 **SDI output.** Fill and key on two ordinary ports, 90 s at 1080p59.94, zero late frames. The key *picture* is unverified on a scope |
 | `pmg-out-ndi` | 🟢 the shared sender — one unpremultiply loop for the node and the CLI |
 | `streamHub` | ✅ ported from ProdMesh-Control — refcounted topics, conflation, snapshot-on-join |

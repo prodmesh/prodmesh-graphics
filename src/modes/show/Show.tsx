@@ -21,7 +21,8 @@
  * an operator ends up trusting a screen that disagrees with the programme feed.
  */
 
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
+import { startH264Preview, previewSocketUrl, type PreviewStatus } from '../../lib/previewH264'
 import { AlertTriangle, Radio, Square, X } from 'lucide-react'
 import { useTopic } from '../../lib/stream'
 import { useQuery } from '../../lib/useQuery'
@@ -99,7 +100,6 @@ function OnAir({
   previewUrl: string | null
 }) {
   const layers = useTopic<LayersSnapshot>(topics.outputLayers(outputId))
-  const [previewFailed, setPreviewFailed] = useState(false)
 
   return (
     <section className="show__onair" aria-label="On air">
@@ -110,24 +110,7 @@ function OnAir({
         {layers?.fps ? <span className="show__dim">{layers.fps.toFixed(2)} fps</span> : null}
       </header>
 
-      {previewUrl && !previewFailed ? (
-        // A plain <img>. multipart/x-mixed-replace renders natively, so the
-        // cheap preview needs no decoder in the browser at all (M2; WebCodecs
-        // is M3). The checkerboard is drawn INTO the frame by the node, because
-        // the output is a key signal and a black rectangle could be a graphic
-        // or could be nothing.
-        <img
-          className="show__preview"
-          src={previewUrl}
-          alt={`Preview of ${outputId}`}
-          onError={() => setPreviewFailed(true)}
-        />
-      ) : null}
-      {previewFailed ? (
-        <p className="show__dim show__pad">
-          No preview from {name}. What’s on air is unaffected.
-        </p>
-      ) : null}
+      {previewUrl ? <Preview url={previewUrl} name={name} outputId={outputId} /> : null}
 
       {!layers?.layers?.length ? (
         <p className="show__dim show__pad">Nothing on air.</p>
@@ -413,5 +396,44 @@ function TakeLog() {
         </ol>
       )}
     </section>
+  )
+}
+
+/**
+ * The preview canvas, fed by WebCodecs.
+ *
+ * The checkerboard is drawn INTO the frame by the node, because the output is a
+ * key signal and a black rectangle could be a graphic or could be nothing.
+ *
+ * Every failure says which one it is. "No preview" and "no graphic" need
+ * completely different responses from an operator, and a blank box says both.
+ */
+function Preview({ url, name, outputId }: { url: string; name: string; outputId: string }) {
+  const canvasRef = useRef<HTMLCanvasElement>(null)
+  const [status, setStatus] = useState<PreviewStatus>({ state: 'connecting' })
+
+  useEffect(() => {
+    const canvas = canvasRef.current
+    if (!canvas) return
+    const handle = startH264Preview(previewSocketUrl(url), canvas, setStatus)
+    return () => handle.close()
+  }, [url])
+
+  return (
+    <>
+      <canvas
+        ref={canvasRef}
+        className="show__preview"
+        aria-label={`Preview of ${outputId}`}
+        hidden={status.state !== 'live'}
+      />
+      {status.state !== 'live' ? (
+        <p className="show__dim show__pad">
+          {status.state === 'connecting' || status.state === 'waiting-for-key'
+            ? `Connecting to ${name}\u2019s preview\u2026`
+            : `No preview from ${name}. ${status.detail} What\u2019s on air is unaffected.`}
+        </p>
+      ) : null}
+    </>
   )
 }
