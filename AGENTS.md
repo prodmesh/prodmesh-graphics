@@ -16,9 +16,14 @@ patterns, SSE topic hub, auth model, design tokens, ADR format) and
 gating, the hand-written-header shim pattern, release ritual). Deviations from
 both are listed under **Conventions** and each has a reason.
 
-> **Status: M0.** Documents and scaffold only. No engine code exists yet. Read
-> `docs/ROADMAP.md` for what is being built and in what order, and
-> `docs/STATE.md` for what is actually real today.
+> **Status: M0.** No renderer, no scene format, no server beyond health — but
+> **both vendor boundaries are real**: `sys/ndi-sys` sends and receives frames,
+> and `sys/decklink-sys` enumerates and probes hardware. Drive them with
+> `pmgctl ndi` and `pmgctl decklink`.
+>
+> Read `docs/ROADMAP.md` for what is being built and in what order,
+> `docs/STATE.md` for what is actually real today, and
+> `docs/INTEGRATION-NOTES.md` before re-deriving anything about a vendor SDK.
 
 ## Architecture
 
