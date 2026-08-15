@@ -14,3 +14,7 @@ anyhow = { workspace = true }
 png = { workspace = true }
 jpeg-decoder = { workspace = true }
 tracing = { workspace = true }
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+# The audio clock lives there, and the decoder must not invent a second one.
+pmg-audio = { path = "../pmg-audio" }

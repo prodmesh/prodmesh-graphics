@@ -28,6 +28,8 @@
 use std::io::Cursor;
 
 #[cfg(not(target_arch = "wasm32"))]
+pub mod audio;
+#[cfg(not(target_arch = "wasm32"))]
 pub mod video;
 
 #[derive(Debug, thiserror::Error)]
