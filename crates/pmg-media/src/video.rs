@@ -610,6 +610,139 @@ mod tests {
         assert_eq!(c.media_frame(two_hours - 1), (two_hours - 1) / 2);
     }
 
+    /// Is there an ffmpeg to test against?
+    ///
+    /// The decode tests below build a real clip and play it. They are **skipped**
+    /// rather than failed when ffmpeg is absent, because a CI runner without it
+    /// is a missing tool and not a broken decoder — and a test that fails for the
+    /// wrong reason gets muted, which costs the coverage permanently.
+    fn have_ffmpeg() -> bool {
+        Command::new("ffmpeg")
+            .arg("-version")
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()
+            .is_ok_and(|s| s.success())
+    }
+
+    /// A tiny clip with a real alpha channel whose frames are **provably
+    /// different**: red is a function of the frame number.
+    ///
+    /// The first version used `testsrc2` and asserted consecutive frames
+    /// differed. At 64x48 they did not, and the test failed while the decoder
+    /// was working perfectly — a fixture that cannot distinguish "advanced" from
+    /// "stuck" is worse than no fixture, because it fails for a reason that has
+    /// nothing to do with the thing under test.
+    fn fixture(dir: &Path, frames: u32) -> Option<PathBuf> {
+        let out = dir.join("fixture.mov");
+        let ok = Command::new("ffmpeg")
+            .args([
+                "-hide_banner",
+                "-loglevel",
+                "error",
+                "-y",
+                "-f",
+                "lavfi",
+                "-i",
+                &format!("color=c=black:s=64x48:r=30:d={}", frames as f64 / 30.0),
+                "-vf",
+                // N is the frame index. Red steps 8 per frame, alpha is a flat
+                // half — which makes both "did it advance" and "was it
+                // premultiplied" answerable from one pixel.
+                "format=rgba,geq=r='mod(N*8,256)':g='64':b='192':a='128'",
+                "-c:v",
+                "prores_ks",
+                "-profile:v",
+                "4",
+                "-pix_fmt",
+                "yuva444p10le",
+            ])
+            .arg(&out)
+            .status()
+            .ok()?;
+        ok.success().then_some(out)
+    }
+
+    #[test]
+    fn a_real_clip_probes_decodes_and_advances() {
+        if !have_ffmpeg() {
+            eprintln!("skipped: no ffmpeg on PATH");
+            return;
+        }
+        let dir = std::env::temp_dir().join(format!("pmg-video-test-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let Some(path) = fixture(&dir, 30) else {
+            eprintln!("skipped: could not build a fixture clip");
+            return;
+        };
+
+        let spec = probe(&path).expect("probe");
+        assert_eq!((spec.width, spec.height), (64, 48));
+        assert_eq!((spec.fps_num, spec.fps_den), (30, 1));
+        assert!(spec.has_alpha, "the fixture is yuva444p10le");
+
+        let dec = Decoder::open(&path, &spec, 0, false).expect("open");
+        let mut p = VideoPlayer::new(dec, (60, 1), false);
+        assert!(
+            p.preroll(std::time::Duration::from_secs(20)),
+            "no first frame"
+        );
+
+        // 30p media on a 60p output: each media frame shows for exactly two
+        // output frames, and the picture must actually change on the second.
+        let a = p.frame_for(0).expect("frame at 0").rgba.clone();
+        let b = p.frame_for(1).expect("frame at 1").rgba.clone();
+        assert_eq!(a, b, "output frame 1 is still media frame 0");
+        assert_eq!(a.len(), spec.frame_bytes());
+
+        // Give the decoder room to produce; this is a test, not a frame budget.
+        let mut c = None;
+        for _ in 0..400 {
+            let f = p.frame_for(2).expect("frame at 2");
+            if f.index == 1 {
+                c = Some(f.rgba.clone());
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        let c = c.expect("media frame 1 never arrived");
+        assert_ne!(a, c, "output frame 2 must be a NEW media frame");
+
+        // Premultiplied on the way in (ADR 0012). The invariant is that no
+        // colour channel exceeds alpha — stated that way rather than against a
+        // literal, because a 10-bit YUVA round trip moves a flat 128 to 129 and
+        // an exact comparison would be testing the encoder, not the premultiply.
+        assert!(
+            c.chunks_exact(4)
+                .all(|px| px[0] <= px[3] && px[1] <= px[3] && px[2] <= px[3]),
+            "frames must arrive premultiplied: no channel may exceed alpha"
+        );
+        let alpha = c[3];
+        assert!(
+            (120..=136).contains(&alpha),
+            "the fixture is half-transparent; got alpha {alpha}"
+        );
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn a_file_that_is_not_media_is_refused_by_name() {
+        if !have_ffmpeg() {
+            eprintln!("skipped: no ffmpeg on PATH");
+            return;
+        }
+        let dir = std::env::temp_dir().join(format!("pmg-video-bad-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("notes.txt");
+        std::fs::write(&path, b"this is not a clip").unwrap();
+        assert!(matches!(
+            probe(&path),
+            Err(MediaError::Probe(_)) | Err(MediaError::NoVideoStream)
+        ));
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
     #[test]
     fn frame_bytes_is_rgba() {
         let s = VideoSpec {

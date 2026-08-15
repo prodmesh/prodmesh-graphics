@@ -31,6 +31,29 @@ use pmg_scene::doc::SceneDoc;
 use pmg_text::{Measurer, TextEngine};
 use std::collections::BTreeMap;
 
+/// The clips one armed item is playing, and where its clock started.
+///
+/// Behind a mutex because the players are **mutable per frame** while the
+/// instance beside them is immutable and shared. Exactly one thread ever touches
+/// a given set — a layer belongs to one output, an output to one group, a group
+/// to one render thread (ADR 0011) — so the lock is uncontended and exists to
+/// satisfy the borrow checker rather than to arbitrate anything.
+#[derive(Default)]
+pub struct PlayerSet {
+    /// One player per [`pmg_render::scene::VideoSlot`], with the image slot it
+    /// feeds.
+    pub players: Vec<(usize, pmg_media::video::VideoPlayer)>,
+    /// The output frame the clip's frame 0 was shown on.
+    ///
+    /// Deliberately **not** the frame of the take. ffmpeg needs ~120 ms to
+    /// produce its first picture, and starting the clock at the take would mean
+    /// arriving 7 frames behind and then discarding those 7 to catch up — the
+    /// clip would begin a fifth of a second in, having frozen on its first frame
+    /// to get there. Starting the clock when the first frame actually lands
+    /// costs the same wait and plays the whole clip.
+    pub start_frame: Option<u64>,
+}
+
 /// A template the node can read, plus its timelines.
 pub struct Armed {
     pub item_id: String,
@@ -42,6 +65,10 @@ pub struct Armed {
     /// into one — and arming under that same lock would stall every output for
     /// the 0.3–2 ms an arm costs.
     pub instance: std::sync::Arc<SceneInstance>,
+    /// The clips this item plays, or `None` when it has none — which is most
+    /// items, and the reason this is an `Option` rather than an empty `Vec`
+    /// behind a lock nobody needs to take.
+    pub players: Option<std::sync::Arc<std::sync::Mutex<PlayerSet>>>,
     pub in_ms: f64,
     pub out_ms: f64,
     pub doc: SceneDoc,
@@ -123,6 +150,16 @@ pub trait Library {
     /// an empty rectangle where a background should be is the failure that gets
     /// noticed on air instead of before it.
     fn image(&self, asset_key: &str) -> Option<(u32, u32, std::sync::Arc<Vec<u8>>)>;
+
+    /// Where a clip lives on disk, and what it is.
+    ///
+    /// A **path**, not bytes: a service-length clip is gigabytes, and the whole
+    /// point of decoding it a frame at a time is not to hold it in memory. The
+    /// default is `None` so a library that has no video — every test one — needs
+    /// to say nothing.
+    fn video(&self, _asset_key: &str) -> Option<(std::path::PathBuf, pmg_media::video::VideoSpec)> {
+        None
+    }
 }
 
 pub struct LayerEngine {
@@ -309,7 +346,17 @@ impl LayerEngine {
                 output,
                 layer,
             } => {
-                let armed = self.arm(item, lib)?;
+                // The output's rate is needed BEFORE arming, because a clip's
+                // clock is defined against it. Looked up first so a cue naming
+                // an output that does not exist is refused without having paid
+                // for a layout solve.
+                let out_fps = self
+                    .outputs
+                    .iter()
+                    .find(|o| &o.id == output)
+                    .map(|o| (o.fps_num, o.fps_den))
+                    .ok_or(RejectReason::NoSuchLayer)?;
+                let armed = self.arm(item, lib, Some(out_fps))?;
                 let taking = matches!(op, CueOp::Take { .. });
                 let out = self.output_mut(output).ok_or(RejectReason::NoSuchLayer)?;
                 let frame = out.frame;
@@ -394,7 +441,10 @@ impl LayerEngine {
             }
 
             CueOp::Preload { item } => {
-                self.arm(item, lib)?;
+                // `None` for the rate: a preload proves the item ARMS, and
+                // opening decoders for a clip nobody has taken would leave an
+                // ffmpeg running for every clip in the show.
+                self.arm(item, lib, None)?;
                 Ok(None)
             }
 
@@ -416,7 +466,12 @@ impl LayerEngine {
     }
 
     /// Build a `SceneInstance` for an item. This is the expensive half.
-    fn arm(&self, item_id: &str, lib: &dyn Library) -> Result<Armed, RejectReason> {
+    fn arm(
+        &self,
+        item_id: &str,
+        lib: &dyn Library,
+        out_fps: Option<(u32, u32)>,
+    ) -> Result<Armed, RejectReason> {
         let (label, template_rev, data) = lib.item(item_id).ok_or(RejectReason::NoSuchItem)?;
         let doc = lib.template(template_rev).ok_or(RejectReason::NotReady)?;
 
@@ -452,10 +507,46 @@ impl LayerEngine {
             &mut Images(lib),
         );
 
+        // Open a decoder per clip. `Decoder::open` spawns and returns — the
+        // ~120 ms is ffmpeg producing its first frame, and it elapses on the
+        // decoder's own thread while this one gets on with the take. Blocking
+        // here to pre-roll would hold the engine lock for a hundred times what
+        // an arm is supposed to cost, and stall every other output with it.
+        let players = out_fps.and_then(|fps| {
+            let set: Vec<(usize, pmg_media::video::VideoPlayer)> = instance
+                .videos
+                .iter()
+                .filter_map(|slot| {
+                    let (path, spec) = lib.video(&slot.asset_key)?;
+                    match pmg_media::video::Decoder::open(&path, &spec, 0, slot.looping) {
+                        Ok(dec) => Some((
+                            slot.image,
+                            pmg_media::video::VideoPlayer::new(dec, fps, slot.looping),
+                        )),
+                        Err(e) => {
+                            // Named and survivable: the poster frame is already
+                            // in the texture, so the graphic appears and holds
+                            // its first frame rather than the layer going empty.
+                            tracing::warn!(key = %slot.asset_key, error = %e,
+                                           "could not start a clip; it will hold its first frame");
+                            None
+                        }
+                    }
+                })
+                .collect();
+            (!set.is_empty()).then(|| {
+                std::sync::Arc::new(std::sync::Mutex::new(PlayerSet {
+                    players: set,
+                    start_frame: None,
+                }))
+            })
+        });
+
         Ok(Armed {
             item_id: item_id.to_string(),
             item_label: label.to_string(),
             template_rev: template_rev.to_string(),
+            players,
             in_ms: timeline::find(doc, "In")
                 .map(|t| t.duration_ms as f64)
                 .unwrap_or(0.0),

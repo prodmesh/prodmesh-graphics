@@ -1070,3 +1070,79 @@ there is nothing to be late for. The general form is worth keeping in mind:
 **a fixed cost at startup does not show up as a startup problem — it shows up
 smeared across everything that follows, wearing the costume of a capacity
 problem.**
+
+## Video is an image whose texture changes, and that was the whole renderer change
+
+**2026-08-15, M3d.** Playback needed exactly one new method in `pmg-render`:
+`SceneRenderer::update_image`. A clip draws through the image pipeline, with
+`fit` resolved to a `uv` rectangle at build time exactly as a still's is; the
+only difference is that something overwrites the texture between frames.
+
+What that bought: no new shader, no new pipeline, no new bind group layout, and
+no new way for a clip to differ from a still in how it composites, clips, or
+animates. The pure set still builds for `wasm32` unchanged, because a queue write
+is not I/O — and `pmg-media`'s video module is compiled out on wasm entirely, so
+the still decoder stays portable while the video path is frankly native.
+
+The one thing this required in the renderer was **keeping the `wgpu::Texture`
+handles**, not just their bind groups. A bind group gives no way to write through
+it.
+
+Measured, 1080p ProRes 4444 with alpha, looping under a lower third, 21 s at
+59.94 on an M3 Max:
+
+| | Worst frame | Over budget |
+|---|---|---|
+| with the clip | 15.17 ms | 0 of 1272 |
+| the same template, no clip | 12.47 ms | 0 of 1272 |
+
+So the per-frame texture upload costs about **2.7 ms of headroom** at 1080p,
+leaving ~1.5 ms of margin against 16.68 ms. That is the number to watch when a
+second clip or a 4K output arrives — it is also the measurement that would
+justify getting frames to the GPU without the trip through system RAM.
+
+**Two harness mistakes worth not repeating.** `pmgctl take` runs its render loop
+flat out, which is the point when measuring render cost — but asking a player for
+frames at 280 fps while its decoder produces 170 reported 247 held frames out of
+253, none of them real. It now paces to the output rate whenever a clip is bound,
+because playback is only measurable in real time. And the first decode test built
+its fixture from `testsrc2` at 64x48 and asserted consecutive frames differed;
+they did not, and the test failed while the decoder was working perfectly. The
+fixture now makes red a function of the frame number, so "advanced" and "stuck"
+are distinguishable by construction.
+
+## A clip starts up to 120 ms after the take, and holds its first frame until it does
+
+**2026-08-15, M3d.** `CueOp::Arm` still builds an instance and throws it away —
+there is no preview slot yet, and that is honest rather than accidental. So a
+clip's decoder is opened at **take**, not at arm, and ffmpeg's ~120 ms to first
+frame lands on air.
+
+What the operator sees is the clip's **first frame**, held, for about seven
+frames at 59.94. Not black, and not an empty layer: the poster frame is decoded
+at assignment time and is already in the texture before the take. The clock then
+starts when the first decoded frame actually arrives, so nothing is skipped — the
+clip plays from frame 0 in full, it simply begins a fifth of a second late.
+
+Starting the clock at the take instead would be worse in a way that is easy to
+miss: the player would be seven frames behind immediately and would discard those
+seven to catch up, so the clip would *begin a fifth of a second in* having frozen
+to get there. Same wait, less clip.
+
+**The fix is real pre-arm** — retaining the armed occupant so its decoder
+pre-rolls before the take — and it wants the preview slot that does not exist
+yet. Recorded here rather than worked around, because the workaround (opening
+decoders at assignment) would leave an ffmpeg running for every clip in the show.
+
+## An assignment says a hash, never what kind of file it is
+
+**2026-08-15, M3d.** The node decides what an asset *is* by reading its first four
+bytes, not by reading it and seeing what decodes. That distinction stopped being
+cosmetic the moment clips existed: the previous code did `cas.get(&hash)` — the
+whole file into memory — and tried `decode_image` on it. For a service-length
+ProRes clip that is gigabytes of RAM spent to discover the file is not a PNG,
+which would undo the entire reason video is decoded a frame at a time.
+
+Same reasoning as `looks_like_a_font`, which was already there for the same
+reason: a CAS filename is a hash, so there is no extension to trust, and trusting
+one would be worse than having none.

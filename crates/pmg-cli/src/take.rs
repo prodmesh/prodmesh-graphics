@@ -35,6 +35,7 @@ pmgctl take — render an Item on air (M1)
                 [--hold <seconds>]      Time on air between In and Out
                 [--png <dir>]           Also write frames as PNGs
                 [--frames-only]         Skip NDI; just render and report
+                [--clip key=<file>]     Bind a clip to an asset key (repeatable)
 
 Plays In, holds, then plays Out. Everything expensive happens once at arm;
 per frame only timelines are evaluated and transforms applied.
@@ -45,6 +46,105 @@ fn arg(args: &[String], flag: &str) -> Option<String> {
         .position(|a| a == flag)
         .and_then(|i| args.get(i + 1))
         .cloned()
+}
+
+/// Clips bound to asset keys, standing in for what a node gets from its CAS.
+///
+/// Serves poster frames as an [`pmg_render::scene::ImageSource`] at arm, then
+/// drives the players per frame — the same two jobs, in the same order, as
+/// `pmg-node`'s runtime. Keeping them side by side here is what makes this
+/// command a real test of playback rather than a separate implementation of it.
+struct Clips {
+    players: std::collections::BTreeMap<String, pmg_media::video::VideoPlayer>,
+    posters: std::collections::BTreeMap<String, (u32, u32, std::sync::Arc<Vec<u8>>)>,
+    start: Option<u64>,
+}
+
+impl Clips {
+    fn open(args: &[String], fps: (u32, u32)) -> Result<Self> {
+        let mut me = Self {
+            players: Default::default(),
+            posters: Default::default(),
+            start: None,
+        };
+        for (i, a) in args.iter().enumerate() {
+            if a != "--clip" {
+                continue;
+            }
+            let spec_arg = args.get(i + 1).context("--clip wants key=file")?;
+            let (key, file) = spec_arg
+                .split_once('=')
+                .context("--clip looks like key=path/to/clip.mov")?;
+
+            let spec = pmg_media::video::probe(file)?;
+            let dec = pmg_media::video::Decoder::open(file, &spec, 0, true)?;
+            let mut player = pmg_media::video::VideoPlayer::new(dec, fps, true);
+            if !player.preroll(std::time::Duration::from_secs(10)) {
+                bail!("{file}: no frame decoded within 10 s");
+            }
+            let poster = player
+                .frame_for(0)
+                .map(|f| f.rgba.clone())
+                .context("no first frame")?;
+            println!(
+                "clip {key}: {} {}x{} {:.3} fps, alpha {}",
+                spec.codec,
+                spec.width,
+                spec.height,
+                spec.fps(),
+                spec.has_alpha
+            );
+            me.posters
+                .insert(key.to_string(), (spec.width, spec.height, poster));
+            me.players.insert(key.to_string(), player);
+        }
+        Ok(me)
+    }
+
+    fn advance(
+        &mut self,
+        queue: &wgpu::Queue,
+        renderer: &SceneRenderer,
+        inst: &SceneInstance,
+        frame: u64,
+    ) {
+        if self.players.is_empty() {
+            return;
+        }
+        if self.start.is_none() {
+            self.start = Some(frame);
+        }
+        let n = frame - self.start.unwrap_or(frame);
+        for slot in &inst.videos {
+            let Some(p) = self.players.get_mut(&slot.asset_key) else {
+                continue;
+            };
+            let (w, h) = (p.spec().width, p.spec().height);
+            if let Some(f) = p.frame_for(n) {
+                let _ = renderer.update_image(queue, slot.image, w, h, &f.rgba);
+            }
+        }
+    }
+
+    fn is_empty(&self) -> bool {
+        self.players.is_empty()
+    }
+
+    fn report(&self) {
+        for (key, p) in &self.players {
+            println!(
+                "  clip {key}     {} held, {} dropped",
+                p.held(),
+                p.dropped()
+            );
+        }
+    }
+}
+
+impl pmg_render::scene::ImageSource for Clips {
+    fn image(&mut self, key: &str) -> Option<(u32, u32, std::sync::Arc<Vec<u8>>)> {
+        self.posters.get(key).cloned()
+    }
 }
 
 pub fn main(args: &[String]) -> Result<()> {
@@ -123,7 +223,16 @@ pub fn main(args: &[String]) -> Result<()> {
     let solved = pmg_layout::solve(&doc, &data, &measurer)?;
     let mut engine = measurer.into_engine();
 
-    let inst = SceneInstance::build(&doc, &solved, &mut TextEngineGlyphs::new(&mut engine));
+    // Clips named on the command line, each pre-rolled so its first frame is
+    // ready before the clock starts. The poster frame is what sizes the
+    // texture, exactly as it does on a node.
+    let mut clips = Clips::open(args, (fps_num, fps_den))?;
+    let inst = SceneInstance::build_with(
+        &doc,
+        &solved,
+        &mut TextEngineGlyphs::new(&mut engine),
+        &mut clips,
+    );
     let arm_ms = arm_start.elapsed().as_secs_f64() * 1000.0;
 
     println!("armed in {arm_ms:.1} ms");
@@ -227,13 +336,50 @@ pub fn main(args: &[String]) -> Result<()> {
         )?)
     };
 
+    // With no clip and no NDI this loop runs flat out, which is the point: the
+    // effective rate it reports is the render cost with nothing pacing it.
+    //
+    // A clip changes that. Asking a player for frames at 280 fps when its
+    // decoder produces 170 makes every reading meaningless — the first version
+    // of this reported 247 held frames out of 253 and none of them were real.
+    // When a clip is bound the loop runs at the OUTPUT rate, because that is
+    // the only rate at which "did playback keep up" is a question.
+    let pace = (!clips.is_empty() && ndi.is_none())
+        .then(|| std::time::Duration::from_secs_f64(fps_den as f64 / fps_num as f64));
+    if pace.is_some() {
+        println!("\npacing to {fps:.3} fps — a clip is bound, and playback is only measurable in real time");
+    }
+
     println!("\nrendering…");
     let start = std::time::Instant::now();
     let mut worst_ms = 0.0f64;
+    // A worst case is one number and hides its own frequency. One frame over
+    // budget in ten minutes is a shrug; one in ten is a fault, and the worst
+    // case reads the same either way.
+    let mut over_budget = 0u32;
+    let budget_ms = 1000.0 * fps_den as f64 / fps_num as f64;
     let mut phase_log = Vec::new();
 
     for frame in 0..total_frames {
         let t = timeline::frame_time_ms(frame, fps_num, fps_den) as f64;
+
+        if let Some(p) = pace {
+            // Sleep to this frame's DEADLINE, not for a fixed period: a fixed
+            // sleep lets our own overhead accumulate into fake held frames.
+            let deadline = start + p.mul_f64(frame as f64);
+            if let Some(d) = deadline.checked_duration_since(std::time::Instant::now()) {
+                std::thread::sleep(d);
+            }
+        }
+
+        // Timed from HERE, so the per-frame cost includes uploading the clip's
+        // texture. That upload is 8.3 MB at 1080p and is genuinely per frame;
+        // measuring the draw without it would flatter the budget.
+        let f0 = std::time::Instant::now();
+
+        // Clips advance against the OUTPUT frame counter, never wall time —
+        // the same rule the node's render loop obeys.
+        clips.advance(&queue, &renderer, &inst, frame);
 
         // Which timeline is driving, and at what local time.
         let (tl, local, phase) = if t < in_ms {
@@ -249,7 +395,6 @@ pub fn main(args: &[String]) -> Result<()> {
             phase_log.push((phase, frame));
         }
 
-        let f0 = std::time::Instant::now();
         let values = tl
             .map(|t| timeline::evaluate(t, local as f32))
             .unwrap_or_default();
@@ -293,6 +438,9 @@ pub fn main(args: &[String]) -> Result<()> {
 
         let ms = f0.elapsed().as_secs_f64() * 1000.0;
         worst_ms = worst_ms.max(ms);
+        if ms > budget_ms {
+            over_budget += 1;
+        }
 
         if let Some(s) = &ndi {
             s.send_rgba_premultiplied(&rgba)?;
@@ -312,12 +460,14 @@ pub fn main(args: &[String]) -> Result<()> {
 
     let elapsed = start.elapsed().as_secs_f64();
     println!("\n--- result ---");
+    clips.report();
     println!("  frames           {total_frames}");
     println!("  elapsed          {elapsed:.2}s");
     println!(
         "  effective rate   {:.3} fps (asked {fps:.3})",
         total_frames as f64 / elapsed
     );
+    println!("  over budget      {over_budget} of {total_frames} frames");
     println!(
         "  worst frame      {worst_ms:.2} ms  (budget {:.2} ms)",
         1000.0 / fps

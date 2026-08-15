@@ -39,6 +39,12 @@ pub struct Assigned {
     /// Decoded once at assignment; arming a hundred items must not decode the
     /// same background a hundred times.
     pub images: BTreeMap<String, (u32, u32, std::sync::Arc<Vec<u8>>)>,
+    /// Clips, by asset key: where the file is and what it is.
+    ///
+    /// A path and a spec, never pixels. The poster frame goes into `images` so
+    /// the scene builder can size the texture and an armed-but-unplayed clip has
+    /// something honest to show.
+    pub videos: BTreeMap<String, (std::path::PathBuf, pmg_media::video::VideoSpec)>,
     /// A developer-supplied face, used only when the assignment carried no
     /// usable font. Named `--font` on the command line, and it exists so the
     /// slice can be driven before font assets are wired end to end.
@@ -58,6 +64,10 @@ impl Library for Assigned {
 
     fn image(&self, asset_key: &str) -> Option<(u32, u32, std::sync::Arc<Vec<u8>>)> {
         self.images.get(asset_key).cloned()
+    }
+
+    fn video(&self, asset_key: &str) -> Option<(std::path::PathBuf, pmg_media::video::VideoSpec)> {
+        self.videos.get(asset_key).cloned()
     }
 
     fn text_engine(&self) -> Result<pmg_text::TextEngine> {
@@ -171,6 +181,7 @@ impl Runtime {
                 items: BTreeMap::new(),
                 font_bytes: Vec::new(),
                 images: BTreeMap::new(),
+                videos: BTreeMap::new(),
                 fallback_font: opts.fallback_font.clone(),
             },
             store,
@@ -273,31 +284,47 @@ impl Runtime {
             .filter(|b| looks_like_a_font(b))
             .collect();
 
-        // Decode every image a staged template names. Once, here, rather than
+        // Resolve every asset a staged template names. Once, here, rather than
         // per arm.
+        //
+        // Sniffed from the first few bytes, not read whole and tried: an
+        // assignment says a hash, never what kind of file it is, and a clip is
+        // gigabytes. Reading one into memory to discover it is not a PNG would
+        // undo the entire reason video is decoded a frame at a time.
         self.assigned.images.clear();
+        self.assigned.videos.clear();
+        let mut assets: Vec<(String, String)> = Vec::new();
         for doc in self.assigned.templates.values() {
             for asset in &doc.assets {
-                if self.assigned.images.contains_key(&asset.key) {
-                    continue;
-                }
-                let Ok(bytes) = self.store.cas.get(&asset.hash) else {
+                assets.push((asset.key.clone(), asset.hash.clone()));
+            }
+        }
+        for (key, hash) in assets {
+            if self.assigned.images.contains_key(&key) {
+                continue;
+            }
+            let Ok(path) = self.store.cas.path_of(&hash) else {
+                continue;
+            };
+            if looks_like_an_image(&path) {
+                let Ok(bytes) = self.store.cas.get(&hash) else {
                     continue;
                 };
                 match pmg_media::decode_image(&bytes) {
                     Ok(d) => {
                         self.assigned.images.insert(
-                            asset.key.clone(),
+                            key.clone(),
                             (d.width, d.height, std::sync::Arc::new(d.rgba)),
                         );
                     }
-                    Err(e) => {
-                        // Named, with the key, because "the background did not
-                        // appear" is otherwise unattributable.
-                        tracing::warn!(key = %asset.key, hash = %asset.hash, error = %e,
-                                       "could not decode an image asset");
-                    }
+                    // Named, with the key, because "the background did not
+                    // appear" is otherwise unattributable.
+                    Err(e) => tracing::warn!(key = %key, hash = %hash, error = %e,
+                                             "could not decode an image asset"),
                 }
+            } else if let Err(e) = self.register_clip(&key, &path) {
+                tracing::warn!(key = %key, hash = %hash, error = %e,
+                               "an asset is neither an image nor a playable clip");
             }
         }
 
@@ -457,6 +484,61 @@ impl Store {
     }
 }
 
+impl Runtime {
+    /// Probe a clip and decode its first frame.
+    ///
+    /// The first frame is what an armed clip shows before its decoder has
+    /// produced anything, and it is also what sizes the texture the player will
+    /// overwrite — so a clip that cannot be probed fails **here**, at assignment,
+    /// rather than as a blank rectangle at 10:15 on Sunday.
+    ///
+    /// Costs about 80 ms per clip, once, on the assignment path. That is the
+    /// same trade as decoding every still here rather than at each arm.
+    fn register_clip(&mut self, key: &str, path: &std::path::Path) -> Result<()> {
+        let spec = pmg_media::video::probe(path)?;
+        let dec = pmg_media::video::Decoder::open(path, &spec, 0, false)?;
+        let mut player =
+            pmg_media::video::VideoPlayer::new(dec, (spec.fps_num, spec.fps_den), false);
+        if !player.preroll(Duration::from_secs(10)) {
+            anyhow::bail!("no frame decoded within 10 s");
+        }
+        let poster = player
+            .frame_for(0)
+            .map(|f| f.rgba.clone())
+            .context("no first frame")?;
+
+        tracing::info!(
+            key = %key, codec = %spec.codec, w = spec.width, h = spec.height,
+            fps = %format!("{}/{}", spec.fps_num, spec.fps_den),
+            alpha = spec.has_alpha, frames = spec.frames,
+            "staged a clip"
+        );
+        self.assigned
+            .images
+            .insert(key.to_string(), (spec.width, spec.height, poster));
+        self.assigned
+            .videos
+            .insert(key.to_string(), (path.to_path_buf(), spec));
+        Ok(())
+    }
+}
+
+/// Is this file a still, by its magic bytes?
+///
+/// Reads a header, never the file. The alternative — read it all and see if it
+/// decodes — costs a gigabyte of RAM to learn that a clip is not a PNG.
+fn looks_like_an_image(path: &std::path::Path) -> bool {
+    use std::io::Read;
+    let mut head = [0u8; 4];
+    let Ok(mut f) = std::fs::File::open(path) else {
+        return false;
+    };
+    if f.read_exact(&mut head).is_err() {
+        return false;
+    }
+    head.starts_with(&[0x89, b'P', b'N', b'G']) || head.starts_with(&[0xFF, 0xD8, 0xFF])
+}
+
 /// A cheap sniff for the font formats swash reads.
 ///
 /// Assignments carry assets without saying what they are, and handing a PNG to
@@ -467,6 +549,65 @@ fn looks_like_a_font(b: &[u8]) -> bool {
         b.get(0..4),
         Some(b"\x00\x01\x00\x00") | Some(b"true") | Some(b"OTTO") | Some(b"ttcf") | Some(b"wOFF")
     )
+}
+
+/// What one layer needs drawn this frame, taken under the lock and used without
+/// it.
+struct LayerPlan {
+    layer: String,
+    key: String,
+    inst: Arc<pmg_render::scene::SceneInstance>,
+    values: std::collections::BTreeMap<String, f32>,
+    players: Option<Arc<std::sync::Mutex<engine::PlayerSet>>>,
+}
+
+/// Pull this frame's picture for every clip on a layer and upload it.
+///
+/// The three rules from `docs/RISKS.md` R5, in one function:
+///
+/// - **Never stall the output.** Every call here is non-blocking. A clip whose
+///   decoder has not kept up simply does not write, so the texture keeps the
+///   last picture — which is the definition of holding a frame.
+/// - **The output is the clock.** The media frame is derived from this output's
+///   own frame counter, not from wall time, so a clip stays locked to the signal
+///   it is going out on rather than to how the machine felt.
+/// - **The clock starts when the first frame lands**, not at the take. See
+///   [`engine::PlayerSet::start_frame`].
+fn advance_clips(
+    gpu: &crate::render::Gpu,
+    renderer: &pmg_render::SceneRenderer,
+    set: &Arc<std::sync::Mutex<engine::PlayerSet>>,
+    out_frame: u64,
+) {
+    // A poisoned lock here means a render thread panicked mid-frame. Skipping
+    // the clip beats propagating the panic and taking the whole output down.
+    let Ok(mut set) = set.lock() else { return };
+
+    if set.start_frame.is_none() {
+        // Zero timeout: this asks "has the first frame arrived", it does not
+        // wait for one. The waiting version of this call belongs at arm.
+        let ready = set
+            .players
+            .iter_mut()
+            .all(|(_, p)| p.preroll(std::time::Duration::ZERO));
+        if !ready {
+            return;
+        }
+        set.start_frame = Some(out_frame);
+    }
+    let n = out_frame.saturating_sub(set.start_frame.unwrap_or(out_frame));
+
+    for (slot, player) in &mut set.players {
+        let slot = *slot;
+        let (w, h) = (player.spec().width, player.spec().height);
+        if let Some(frame) = player.frame_for(n) {
+            // A refused write means the clip's size stopped matching the slot,
+            // which cannot happen without a bug upstream. It is dropped rather
+            // than stretched: a partially written frame looks like tearing and
+            // would hide the real fault.
+            let _ = renderer.update_image(&gpu.queue, slot, w, h, &frame.rgba);
+        }
+    }
 }
 
 /// One output group: its own GPU device, its own backends, its own clock.
@@ -537,17 +678,18 @@ fn render_group(
                 let Some(o) = e.outputs.iter().find(|o| o.id == out.spec.id) else {
                     continue;
                 };
-                let plan: Vec<(String, String, Arc<pmg_render::scene::SceneInstance>, _)> = o
+                let plan: Vec<LayerPlan> = o
                     .layers
                     .iter()
                     .filter_map(|l| {
-                        l.occupant.as_ref().map(|occ| {
-                            (
-                                l.name.clone(),
-                                format!("{}|{}", occ.armed.item_id, occ.armed.template_rev),
-                                occ.armed.instance.clone(),
-                                engine::frame_values(occ),
-                            )
+                        l.occupant.as_ref().map(|occ| LayerPlan {
+                            layer: l.name.clone(),
+                            key: format!("{}|{}", occ.armed.item_id, occ.armed.template_rev),
+                            inst: occ.armed.instance.clone(),
+                            values: engine::frame_values(occ),
+                            // An Arc clone, so the players come out of the lock
+                            // with everything else and are touched outside it.
+                            players: occ.armed.players.clone(),
                         })
                     })
                     .collect();
@@ -556,15 +698,21 @@ fn render_group(
 
             // --- draw, with the lock released -----------------------------
             let mut live = std::collections::HashSet::new();
-            for (i, (layer, key, inst, values)) in plan.iter().enumerate() {
-                live.insert(layer.clone());
-                let renderer = out.renderers.get(&gpu, layer, key, inst);
+            for (i, p) in plan.iter().enumerate() {
+                live.insert(p.layer.clone());
+                let renderer = out.renderers.get(&gpu, &p.layer, &p.key, &p.inst);
+                // Clips first: a frame that arrives after the draw is a frame
+                // late, and the texture write must be queued before the pass
+                // that samples it.
+                if let Some(set) = &p.players {
+                    advance_clips(&gpu, renderer, set, out.frame);
+                }
                 let load = if i == 0 {
                     pmg_render::Load::Clear
                 } else {
                     pmg_render::Load::Over
                 };
-                crate::render::draw(&gpu, renderer, inst, values, &out.target, load);
+                crate::render::draw(&gpu, renderer, &p.inst, &p.values, &out.target, load);
             }
             if plan.is_empty() {
                 out.target.clear(&gpu);
