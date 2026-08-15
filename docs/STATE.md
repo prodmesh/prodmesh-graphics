@@ -5,7 +5,7 @@ change that makes something real — not afterwards.
 
 `docs/ROADMAP.md` is where we are going. This is where we are.
 
-**Last updated: 2026-08-15 · M0 complete · M1a–M1e landed on the server and browser side. The one gap left in M1 is the Rust node's link client.**
+**Last updated: 2026-08-15 · M0 complete · M1 is end to end: browser → server → node → NDI. Design's canvas is the remaining M1 gap.**
 
 ---
 
@@ -41,12 +41,18 @@ end against a running server with a node speaking real CBOR: publish → CAS
 round-trip byte-identical → item → take → on-air state adopted from the node →
 take out → take log with the surface recorded.
 
-**The one thing M1 still lacks is the Rust node's own link client.** `pmg-node`
-prints its configuration and exits; everything above was exercised with a
-JavaScript node that speaks the protocol. So the protocol is proven and the
-render path is proven (`pmgctl take`), but **they have not yet been joined in
-the process that will actually run in a booth.** That is the next piece of work
-and nothing should be described as an end-to-end system until it is done.
+**M1 is end to end.** `pmg-node` dials PMG Link, stages assets over HTTP into
+its own CAS, persists its assignment, applies cues, and renders to NDI —
+verified against the real server at **59.94 fps with zero late frames** across
+three take/take-out cycles.
+
+**The autonomy invariant is tested, not asserted.** Killing the control server
+leaves the node rendering; a brand-new server process with no memory of any take
+adopts the graphic still in `hold` from the node's `StateReport`.
+
+**What M1 still lacks is Design's canvas.** Templates are compiled by `pmgctl`
+and published over the API; the browser cannot yet author one. That is the last
+M1 piece.
 
 **Spike S2 ran, and it failed on one criterion.** Fringing, tabular figures, and
 glyph-cache cost all measure clean, but sub-pixel motion deviates from linear by
@@ -78,7 +84,9 @@ other than what they were.
 | `POST /api/cue` | 🟢 synchronous — 503 `cue_not_acked` when the node stays silent, never a silent success |
 | `pmg-proto` | 🟢 the wire contract, with checked-in CBOR fixtures the JavaScript tests decode |
 | Design / Edit / Show | 🟡 Edit and Show are real; **Design is still a stub** — the canvas needs the WASM scene renderer |
-| `pmg-node` link client | ⬜ **not started.** Prints config and exits |
+| `pmg-node` | 🟢 **the playout binary.** Link client, staging, durable assignment, layer engine, NDI out. Survives server loss; 10 cue-rule tests |
+| `pmg-cas` | 🟢 atomic writes, streaming put, verify. Agrees with `server/cas.js` |
+| `pmg-out-ndi` | 🟢 the shared sender — one unpremultiply loop for the node and the CLI |
 | `streamHub` | ✅ ported from ProdMesh-Control — refcounted topics, conflation, snapshot-on-join |
 | `cueLog` | ✅ the log-tail bridge from ADR 0008, with gap recovery. 6 tests |
 | PMG Link | ⬜ spec only |
