@@ -962,3 +962,36 @@ the three states the card describes and does not editorialise.
 `None` is reserved for backends with **no reference concept at all** (NDI,
 headless) and is deliberately distinct from `present: false`. Showing them alike
 would tell an operator their card had lost reference when it never had one.
+
+## Ingest converts long-GOP, and says why in terms of the file
+
+**2026-08-15, M3d.** Media arriving at the server is probed and judged into three
+outcomes: **accept** all-intra untouched, **convert** anything long-GOP, or
+**reject** what has no video at all.
+
+Measured with ffmpeg 7.1.1:
+
+| In | Verdict |
+|---|---|
+| H.264, 250-frame GOP, yuv420p | converted → ProRes 422 HQ |
+| ProRes 4444, `yuva444p12le` | accepted as-is, **alpha intact** |
+| a text file | rejected |
+
+Two things this gets right on purpose. **All-intra media is not re-encoded** — a
+ProRes master run through ProRes again costs a generation of quality and a lot of
+disk for nothing. And **4444 is chosen only when there is alpha**, because it
+roughly doubles the file for a channel that does not exist; `pix_fmt` is the only
+reliable signal, since containers claim alpha they do not have.
+
+The rejection wording is the point of the feature as much as the conversion is:
+
+> *h264 is long-GOP, which cannot seek to an exact frame — a clip told to start
+> on a mark would start near it, after a pause. Converting to ProRes 422 HQ.*
+
+"Unsupported format" sends someone to a forum. That sentence tells them what is
+wrong with **their** file and what is about to happen to it.
+
+Ingest is a **job**, not a request: a service-length clip takes minutes, and an
+HTTP request held open that long is one something in the middle will drop.
+Conversions run one at a time, because parallel transcodes on a booth machine
+would compete with whatever is going on air.

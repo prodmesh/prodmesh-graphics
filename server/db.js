@@ -17,7 +17,7 @@ import Database from 'better-sqlite3'
 import fs from 'node:fs'
 import path from 'node:path'
 
-export const SCHEMA_VERSION = 6
+export const SCHEMA_VERSION = 7
 
 let db = null
 
@@ -275,6 +275,15 @@ const MIGRATIONS = [
       ALTER TABLE outputs ADD COLUMN key_range TEXT NOT NULL DEFAULT 'narrow';
       ALTER TABLE outputs ADD COLUMN key_mode  TEXT NOT NULL DEFAULT 'fill';
     `)
+  },
+
+  // 7 — media metadata on an asset.
+  //
+  // Kept as JSON rather than columns: it is descriptive, it varies by media
+  // type, and nothing queries across it. Columns would be a schema change every
+  // time ffprobe learns a new field.
+  (d) => {
+    d.exec(`ALTER TABLE assets ADD COLUMN media TEXT`)
   },
 ]
 

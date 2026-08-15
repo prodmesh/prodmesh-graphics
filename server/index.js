@@ -37,6 +37,7 @@ import * as rundown from './rundown.js'
 import * as nodeLink from './nodeLink.js'
 import { build as buildAssignment } from './assignment.js'
 import * as discovery from './discovery.js'
+import * as ingest from './ingest.js'
 import * as cas from './cas.js'
 import { open as openDb } from './db.js'
 import { SCENE_READER_MAJOR } from './manifest.js'
@@ -226,8 +227,44 @@ export function createApp() {
     },
   )
 
+  /**
+   * Ingest media: probe it, and convert it to an all-intra intermediate if it
+   * cannot seek frame by frame.
+   *
+   * Returns a JOB, not a result. A service-length clip takes minutes to
+   * convert, and holding an HTTP request open for that is a request that will
+   * be dropped by something in the middle.
+   */
+  app.post(
+    '/api/assets/ingest',
+    requirePermission('graphics.assets.manage'),
+    express.raw({ type: '*/*', limit: '8gb' }),
+    async (req, res) => {
+      if (!req.body?.length) {
+        return res.status(422).json({ error: 'validation_failed', label: 'That upload had no content.' })
+      }
+      const job = await ingest.start({
+        bytes: req.body,
+        filename: String(req.query.filename ?? 'upload'),
+      })
+      res.status(202).json(job)
+    },
+  )
+
+  app.get('/api/ingest', (_req, res) => res.json({ jobs: ingest.list() }))
+  app.get('/api/ingest/:id', (req, res) => {
+    const j = ingest.get(req.params.id)
+    if (!j) return res.status(404).json({ error: 'not_found', label: 'There is no ingest job with that id.' })
+    res.json(j)
+  })
+
   app.get('/api/assets', (_req, res) => {
-    res.json({ assets: openDb().prepare('SELECT * FROM assets ORDER BY first_seen DESC').all() })
+    res.json({
+      assets: openDb()
+        .prepare('SELECT * FROM assets ORDER BY first_seen DESC')
+        .all()
+        .map((a) => ({ ...a, media: a.media ? JSON.parse(a.media) : null })),
+    })
   })
   app.head('/cas/:hash', cas.handleGet)
 
