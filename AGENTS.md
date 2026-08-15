@@ -95,6 +95,22 @@ keeps `arrangeSlides()` a single expansion in ProdMesh-Control.
 
 ## Build & test
 
+### Vendor SDKs
+
+DeckLink and NDI are **licensed separately and never committed**
+(`sys/*/vendor/` is gitignored — ADR 0003). Keep them in `~/Code/3P_SDKs/` and
+symlink, so a cleared Downloads folder cannot turn into a confusing
+"driver not loaded" morning:
+
+```bash
+ln -sfn ~/Code/3P_SDKs/"Blackmagic DeckLink SDK 16.0" sys/decklink-sys/vendor
+```
+
+`build.rs` also honours `DECKLINK_SDK_DIR`, but a symlink survives a new shell
+and the env var does not. Without either, the shim builds a **stub** — a
+supported configuration that CI relies on, so check both: a change to
+`sys/decklink-sys` must compile with the vendor link moved aside.
+
 ```bash
 cargo build --workspace                                  # all crates
 cargo build -p pmg-render --target wasm32-unknown-unknown # proves the pure-set rule
