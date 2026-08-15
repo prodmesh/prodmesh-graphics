@@ -689,7 +689,7 @@ the stranger, so it says what to look at rather than that something is wrong.
 
 ---
 
-## mDNS fails with EHOSTUNREACH because macOS blocks it, not because the network is odd
+## mDNS on macOS: EHOSTUNREACH means Local Network permission, and it is cached per process
 
 **2026-08-15, corrected the same day.** The server advertises `_pmg-control._tcp`
 and `pmg-node` browses for it when `--server` is omitted. Neither works on this
@@ -725,10 +725,40 @@ use it. **`EHOSTUNREACH` on multicast with working unicast is an OS permission,
 not a routing problem** — and the five-line test above distinguishes them in
 seconds, which the route table never could.
 
-**Status: still unverified end to end.** `--server` works and is the supported
-path, which the spec has said all along: *mDNS is an aid, never an authority;
-manual host entry must work everywhere discovery appears.* The failure message
-names the flag rather than leaving an operator staring at "not found".
+**Resolved, and now verified end to end.** Granting Local Network to `node` in
+System Settings and **restarting the processes** made both halves work: macOS's
+own `dns-sd -B` sees our advertisement, and `pmg-node` with no `--server` finds
+the server and links.
+
+**The permission is cached for a process's lifetime.** After granting, a
+still-running process keeps failing exactly as before — which is what made this
+look unfixed for a while, and produced a second wrong claim ("zero errors now")
+from grepping a log that was three seconds old. Grant, then restart, then test.
+
+`--server` remains the supported path and always wins: *mDNS is an aid, never an
+authority.*
+
+## Discovery must not hand back a link-local address
+
+**2026-08-15.** The first working discovery returned
+`fe80::5cc2:f8ff:fef3:498e%en0:8519` — a link-local IPv6 address with a zone
+index, chosen because the code took whichever address the responder listed
+first.
+
+That address does not just dial the control socket. It becomes the **base URL
+for CAS fetches** and the host in the **preview URL handed to a browser**. A
+percent sign and an interface name in a URL is a poor thing to hand to an HTTP
+client, and on a multi-homed machine the zone is the wrong interface half the
+time.
+
+`best_address` now prefers **IPv4, then routable IPv6, and link-local only as a
+last resort**, and brackets IPv6 literals because the CAS base URL is built by
+formatting straight into one.
+
+Related, found in the same run: the browse returned on the **first** responder,
+so the "two control servers answered" warning could never fire. It collects for
+a short grace period now and names every server it saw — a node cannot arbitrate
+between two control servers, but the operator can, and only if they are told.
 
 **The part that matters more than the feature.** `bonjour-service`'s default
 error handler is `function (err) { throw err }`, called from inside a socket
