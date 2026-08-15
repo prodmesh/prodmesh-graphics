@@ -17,6 +17,9 @@ pmgctl scene — the SceneDoc compiler (M1)
     pmgctl scene fmt <file>       Round-trip through the JSON mirror
     pmgctl scene inspect <file>   Structure, warnings, and template_rev
     pmgctl scene fixture [out]    Write the reference lower third as JSON
+    pmgctl scene layout <file> [--set k=v ...]
+                                  Solve layout and print resolved rectangles.
+                                  Omit --set to use each field's sample value.
 
 Accepts .json (the mirror) or .pmgscene (canonical CBOR) anywhere a file is
 taken — the extension decides.
@@ -37,6 +40,7 @@ pub fn main(args: &[String]) -> Result<()> {
         Some("inspect") => inspect(Path::new(
             args.get(1).map(String::as_str).unwrap_or_default(),
         )),
+        Some("layout") => layout(args),
         Some("fixture") => {
             let out = args
                 .get(1)
@@ -182,4 +186,73 @@ fn print_node(n: &pmg_scene::doc::Node, indent: usize) {
     for c in &n.children {
         print_node(c, indent + 2);
     }
+}
+
+/// `pmgctl scene layout` — solve and print rectangles.
+///
+/// Layout is verifiable as NUMBERS, before any pixels exist. That is the point
+/// of doing it this way round: a layout regression shows up here as a moved
+/// rectangle rather than as a subtly different image nobody looks at closely.
+fn layout(args: &[String]) -> Result<()> {
+    let path = Path::new(args.get(1).map(String::as_str).unwrap_or_default());
+    let doc = load(path)?;
+
+    // Default to each field's sample, so `layout` on a bare file does something
+    // useful — samples are what Design previews with and what goldens render.
+    let mut data: pmg_scene::bind::Data = doc
+        .fields
+        .iter()
+        .filter_map(|f| f.sample.clone().map(|s| (f.key.clone(), s)))
+        .collect();
+    let mut i = 2;
+    while i < args.len() {
+        if args[i] == "--set" {
+            if let Some(kv) = args.get(i + 1) {
+                if let Some((k, v)) = kv.split_once('=') {
+                    data.insert(k.to_string(), v.to_string());
+                }
+            }
+            i += 2;
+        } else {
+            i += 1;
+        }
+    }
+
+    let measure = pmg_layout::StubMeasure::default();
+    let solved = pmg_layout::solve(&doc, &data, &measure)?;
+
+    println!("data");
+    for (k, v) in &data {
+        println!("  {k:<8} {v:?}");
+    }
+
+    println!("\nresolved rectangles  (design space, absolute)");
+    println!(
+        "  {:<12} {:>8} {:>8} {:>8} {:>8}",
+        "node", "x", "y", "w", "h"
+    );
+    for (id, r) in &solved.rects {
+        println!(
+            "  {id:<12} {:>8.1} {:>8.1} {:>8.1} {:>8.1}",
+            r.x, r.y, r.w, r.h
+        );
+    }
+
+    if !solved.omitted.is_empty() {
+        println!("\nomitted by visible_if  (REMOVED from layout, not hidden)");
+        for id in &solved.omitted {
+            println!("  {id}");
+        }
+    }
+
+    if !solved.text.is_empty() {
+        println!("\nresolved text");
+        for (id, t) in &solved.text {
+            println!("  {id:<12} {t:?}");
+        }
+    }
+
+    println!("\nMeasured with StubMeasure — a fixed function of character count, not");
+    println!("real shaping. Real metrics arrive with pmg-text in M1c.");
+    Ok(())
 }

@@ -5,7 +5,7 @@ change that makes something real — not afterwards.
 
 `docs/ROADMAP.md` is where we are going. This is where we are.
 
-**Last updated: 2026-08-14 · M0 complete · M1a (the scene format) landed.**
+**Last updated: 2026-08-14 · M0 complete · M1a (format) and M1b (layout) landed.**
 
 ---
 
@@ -51,9 +51,10 @@ something other than what they were.
 | `pmg-wasm` | 🟡 the parity harness — renders the corpus in-browser and posts raw RGBA back. 244 KB |
 | Design canvas | ⬜ not started |
 | `pmg-render` | 🟡 the S1 parity corpus only — 3 figures on wgpu 30, native **and** wasm32. No scene rendering |
-| Text stack | ⬜ not started |
+
 | `pmg-scene` | 🟢 **full document model**, canonical CBOR + JSON mirror, `template_rev`, validation, manifest, total binding evaluation. 25 tests |
-| `pmg-layout` | ⬜ types only, no solver — **M1b, next** |
+| `pmg-layout` | 🟢 **flexbox solver** over `TextMeasure` (taffy, ADR 0016). Shrink-and-grow and `visible_if` removal verified as numbers. 12 tests |
+| `pmg-text` | ⬜ not started — **M1c, next, and the riskiest remaining piece (R3)** |
 | `pmg-out-ndi` / `pmg-out-decklink` | ⬜ not started — `pmgctl` drives `sys/` directly for now |
 | CI | 🟡 workflows written and green locally; **never run on GitHub Actions** — no remote yet |
 | Rust toolchain on the dev box | ✅ 1.90.0 + `wasm32-unknown-unknown` |
