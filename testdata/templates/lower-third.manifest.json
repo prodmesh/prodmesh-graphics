@@ -1,0 +1,34 @@
+{
+  "template_rev": "blake3:44dbd44c3bdc19e4d40d8affc35d225aa86fb6560a4639c1488756a4c183de6a",
+  "template_id": "01J8ZKLOWERTHIRDBASIC0001",
+  "name": "Lower Third — Speaker",
+  "format_version": {
+    "major": 1,
+    "minor": 0
+  },
+  "min_reader": 1,
+  "fields": [
+    {
+      "key": "name",
+      "type": "text",
+      "label": "Name",
+      "required": true,
+      "max_len": 40,
+      "sample": "Pastor Dan Whitfield"
+    },
+    {
+      "key": "title",
+      "type": "text",
+      "label": "Title",
+      "sample": "Lead Pastor"
+    }
+  ],
+  "timelines": [
+    "In",
+    "Out"
+  ],
+  "assets": [
+    "blake3:0000000000000000000000000000000000000000000000000000000000000000"
+  ],
+  "warnings": []
+}

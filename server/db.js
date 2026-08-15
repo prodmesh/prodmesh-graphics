@@ -3,31 +3,149 @@
  *
  * NOT the store of record for what is on air. The node is authoritative there,
  * and the server adopts its StateReport rather than overwriting it (ADR 0009).
- * Nothing in this schema should tempt anyone to believe otherwise: there is no
- * `on_air` column, and there will not be one.
+ * Nothing in this schema should tempt anyone to believe otherwise: **there is
+ * no `on_air` column, and there will not be one.** If you find yourself wanting
+ * to add one, what you actually want is to read `output:<id>:layers`, which the
+ * node publishes.
  *
  * SceneDocs are NOT stored here. They are opaque CAS blobs; this holds the
  * compiler-emitted manifest sidecar, which is all the server ever validates
  * (ADR 0004).
- *
- * M0: schema sketched, not created. Lands in M1 with the real routes.
  */
 
-export const SCHEMA_VERSION = 0
+import Database from 'better-sqlite3'
+import fs from 'node:fs'
+import path from 'node:path'
 
-export const PLANNED_TABLES = [
-  'templates',          // id, name, created_at
-  'template_revisions', // template_rev (blake3, PK), template_id, manifest JSON, published_at
-  'items',              // id, template_id, template_rev (PINNED), data JSON, destination JSON
-  'playlists', 'playlist_items',
-  'rundowns', 'rundown_playlists',
-  'nodes',              // node_id, name, adopted, last_seen, capabilities JSON
-  'outputs',            // node_id, output_id, config JSON (mode, colour, key_mode, layers)
-  'assets',             // hash (PK), size, kind, colour tags, first_seen
-  'assignments',        // node_id, gen, payload, digest, acked_at
-  'users', 'groups', 'group_permissions', 'stations', 'sessions', 'audit_log',
+export const SCHEMA_VERSION = 1
+
+let db = null
+
+/**
+ * Migrations, applied in order, each exactly once. `user_version` is the
+ * counter — the same mechanism ProdMesh-Control uses, for the same reason: it
+ * is a single integer in the database file itself, so it cannot get out of step
+ * with the file the way a separate table can if a restore goes sideways.
+ */
+const MIGRATIONS = [
+  // 1 — the M1 content model.
+  (d) => {
+    d.exec(`
+      CREATE TABLE templates (
+        id          TEXT PRIMARY KEY,
+        name        TEXT NOT NULL,
+        created_at  INTEGER NOT NULL,
+        updated_at  INTEGER NOT NULL,
+        -- The newest published revision. NULL means authored but never
+        -- published, which is a normal state: Design saves drafts.
+        --
+        -- Deliberately NOT a foreign key. Pairing it with
+        -- template_revisions.template_id would make a reference CYCLE, and
+        -- SQLite cannot break a cycle without deferred constraints — so
+        -- deleting a template becomes impossible in any single statement order.
+        -- The integrity that actually matters (no orphan revisions) is the
+        -- other direction's cascade, and head_rev has exactly one writer: the
+        -- publish transaction, which just inserted the row it points at.
+        head_rev    TEXT
+      );
+
+      -- Immutable. A revision is named by the hash of its own bytes, so
+      -- "updating" one is a contradiction in terms (ADR 0006).
+      CREATE TABLE template_revisions (
+        template_rev  TEXT PRIMARY KEY,
+        template_id   TEXT NOT NULL REFERENCES templates(id) ON DELETE CASCADE,
+        name          TEXT NOT NULL,
+        min_reader    INTEGER NOT NULL,
+        -- The compiler's manifest, verbatim. The server validates THIS and
+        -- never the SceneDoc.
+        manifest      TEXT NOT NULL,
+        published_at  INTEGER NOT NULL,
+        published_by  TEXT
+      );
+      CREATE INDEX template_revisions_by_template
+        ON template_revisions(template_id, published_at DESC);
+
+      CREATE TABLE items (
+        id           TEXT PRIMARY KEY,
+        -- The broadcast-facing alias (ADR 0015). Stable, integrator-visible,
+        -- never shown in our own UI.
+        take_id      TEXT UNIQUE,
+        label        TEXT NOT NULL,
+        template_id  TEXT NOT NULL REFERENCES templates(id),
+        -- PINNED, not a pointer to head. Publishing a new revision must never
+        -- silently change what an existing Item renders — that is how a
+        -- rundown quietly breaks between Thursday and Sunday.
+        template_rev TEXT NOT NULL REFERENCES template_revisions(template_rev),
+        data         TEXT NOT NULL,
+        destination  TEXT NOT NULL,
+        created_at   INTEGER NOT NULL,
+        updated_at   INTEGER NOT NULL
+      );
+      CREATE INDEX items_by_template ON items(template_id);
+
+      CREATE TABLE assets (
+        hash        TEXT PRIMARY KEY,
+        size        INTEGER NOT NULL,
+        kind        TEXT NOT NULL,
+        first_seen  INTEGER NOT NULL
+      );
+
+      CREATE TABLE nodes (
+        node_id       TEXT PRIMARY KEY,
+        name          TEXT NOT NULL,
+        adopted       INTEGER NOT NULL DEFAULT 0,
+        last_seen     INTEGER,
+        capabilities  TEXT
+      );
+
+      -- What the server has told a node to be able to play. Not what IS
+      -- playing (see the header).
+      CREATE TABLE assignments (
+        node_id   TEXT PRIMARY KEY REFERENCES nodes(node_id) ON DELETE CASCADE,
+        gen       INTEGER NOT NULL,
+        payload   TEXT NOT NULL,
+        digest    TEXT NOT NULL,
+        sent_at   INTEGER NOT NULL,
+        acked_at  INTEGER
+      );
+    `)
+  },
 ]
 
-export function open(_path) {
-  throw new Error('server/db.js is an M0 stub — see docs/ROADMAP.md M1')
+/**
+ * Open (and migrate) the database.
+ *
+ * `:memory:` is supported and is what the tests use — WAL is meaningless there
+ * and better-sqlite3 ignores the pragma, which is fine.
+ */
+export function open(file = process.env.PMG_DB ?? 'var/pmg.db') {
+  if (db) return db
+
+  if (file !== ':memory:') fs.mkdirSync(path.dirname(path.resolve(file)), { recursive: true })
+  db = new Database(file)
+  db.pragma('journal_mode = WAL')
+  // Content lives in the CAS, not here, so this database stays small enough
+  // that NORMAL synchronous is the right trade: a crash can lose the last
+  // transaction, and the last transaction is never a frame on air.
+  db.pragma('synchronous = NORMAL')
+  db.pragma('foreign_keys = ON')
+
+  const at = db.pragma('user_version', { simple: true })
+  for (let v = at; v < MIGRATIONS.length; v++) {
+    db.transaction(() => {
+      MIGRATIONS[v](db)
+      db.pragma(`user_version = ${v + 1}`)
+    })()
+  }
+  return db
+}
+
+export function handle() {
+  return db ?? open()
+}
+
+/** Test seam. */
+export function _reset() {
+  if (db) db.close()
+  db = null
 }

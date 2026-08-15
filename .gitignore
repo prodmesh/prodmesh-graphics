@@ -37,3 +37,7 @@ config.local.json
 web/pkg/
 /tmp/corpus-*
 testdata/golden/wasm/
+
+# Server runtime state: SQLite and the CAS. Content-addressed blobs are
+# reproducible from their sources; the database is per-installation.
+var/
