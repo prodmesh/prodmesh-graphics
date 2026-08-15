@@ -16,10 +16,13 @@ patterns, SSE topic hub, auth model, design tokens, ADR format) and
 gating, the hand-written-header shim pattern, release ritual). Deviations from
 both are listed under **Conventions** and each has a reason.
 
-> **Status: M0.** No renderer, no scene format, no server beyond health — but
+> **Status: M0, and its three gating spikes have all passed.** S1 (render parity)
+> is bit-identical on Metal, S3 (DeckLink output) held 1080p59.94 for ten minutes
+> with zero late frames, and S6 (WebGPU in the browser) works. No scene format
+> and no server beyond health yet — but the renderer runs on both targets and
 > **both vendor boundaries are real**: `sys/ndi-sys` sends and receives frames,
-> and `sys/decklink-sys` enumerates and probes hardware. Drive them with
-> `pmgctl ndi` and `pmgctl decklink`.
+> `sys/decklink-sys` drives scheduled SDI output. Drive them with `pmgctl ndi`,
+> `pmgctl decklink`, and `pmgctl render-golden`.
 >
 > Read `docs/ROADMAP.md` for what is being built and in what order,
 > `docs/STATE.md` for what is actually real today, and
@@ -114,12 +117,20 @@ npm run dev                                              # server :8519 + Vite
 Each of these has burned real time somewhere, or is a trap the design is
 specifically shaped to avoid. Do not re-derive them.
 
-- **Shared code does not mean identical pixels.** Native wgpu (Metal) and the
-  browser's WebGPU (Dawn) differ in MSAA patterns, shader float precision, and
-  sRGB handling. What sharing guarantees is identical *layout, glyph
-  rasterization, binding evaluation, and timeline math*. Never enable MSAA, do
-  all antialiasing yourself, and pin one wgpu version across both targets. The
-  parity promise is measured (spike S1), not asserted.
+- **Shared code gives identical pixels — measured on Metal, and only there so
+  far.** Spike S1 (2026-08-14) found native wgpu and browser WebGPU
+  **bit-identical** across the parity corpus: 0/255 max delta, zero geometric
+  displacement. But Chrome reported `vendor: apple, architecture: metal-3`, so
+  that was two WGSL frontends over *one* driver. **D3D12 and Vulkan are
+  untested** — a Windows designer against a Mac node is the open case. The rules
+  that made it come out clean are not optional: **never MSAA** (sample patterns
+  are unspecified), **never `fwidth`/`dpdx`/`dpdy`** for antialiasing (derivative
+  granularity is implementation-defined — pass pixel scale as a uniform),
+  **`Rgba8Unorm` not `Rgba8UnormSrgb`**, every sampler field stated, and one
+  pinned wgpu version across both targets.
+- **Never read pixels back through a canvas.** `toDataURL` may apply a colour
+  profile, which turns a renderer comparison into a measurement of the browser's
+  colour pipeline. The parity harness posts raw RGBA.
 - **Genlock gives phase, not frame numbering.** Two nodes on the same reference
   output in lockstep but do not agree on which frame is number 1841944. v1
   promises phase-locked outputs *within* a node and does **not** promise

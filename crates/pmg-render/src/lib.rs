@@ -4,35 +4,24 @@
 //!
 //! # The invariant
 //!
-//! **No I/O. No platform.** This crate takes a `SceneInstance`, a
-//! `wgpu::Device`, and a target texture. Nothing else. That signature is what
-//! lets it compile to `wasm32-unknown-unknown` unchanged and run in the Design
-//! canvas, and it is enforced by a required CI job rather than by review —
-//! a lint would drift, a failing build cannot (ADR 0004).
+//! **No I/O. No platform.** This crate takes geometry, a `wgpu::Device`, and a
+//! target texture. Nothing else. That signature is what lets it compile to
+//! `wasm32-unknown-unknown` unchanged and run in the Design canvas, and it is
+//! enforced by a required CI job rather than by review (ADR 0004).
 //!
-//! If you find yourself wanting a file handle, a `tokio::spawn`, or a vendor
-//! SDK in here, the thing you want belongs in `pmg-node` or `pmg-wasm`.
-//!
-//! # Rules that keep native and browser output the same
-//!
-//! - **Never enable MSAA.** Sample patterns are unspecified across backends,
-//!   which makes it a parity hazard. All antialiasing is done in-shader,
-//!   analytically or with deterministic ordered supersampling.
-//! - Never rely on sampler filtering defaults.
-//! - One pinned wgpu version across both targets. **A wgpu bump is a
-//!   release-gated change requiring a full golden-image re-run** (risk R11).
-//!
-//! Even with all of that, native and browser output will not be bit-identical —
-//! see risk R1. What is guaranteed is identical layout, glyphs, bindings, and
-//! timing. Spike S1 measures the rest and bounds it.
+//! Note what is *absent*: there is no readback function here. Mapping a buffer
+//! is async, and how you wait differs by platform — native polls, wasm awaits.
+//! Putting that boundary in the caller is what keeps this crate platform-free.
 //!
 //! # M0 status
 //!
-//! Types only. `wgpu` is deliberately not a dependency yet: adding it before
-//! spike S1 has run would be committing to a version before we know the
-//! approach holds.
+//! The parity corpus for spike S1, and nothing else. Three figures that between
+//! them cover what a GPU actually does differently: fill, our own antialiasing
+//! math, and texture sampling.
 
 #![forbid(unsafe_code)]
+
+pub mod parity;
 
 /// Set on a rendered instance when the document contained something this
 /// reader did not understand.
@@ -43,6 +32,14 @@
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct Degraded(pub bool);
 
+/// The colour format every parity render targets.
+///
+/// **`Rgba8Unorm`, deliberately not `Rgba8UnormSrgb`.** Automatic sRGB
+/// conversion on write is one more thing that could differ between a native
+/// backend and a browser's; keeping it out of the pipeline means any encode is
+/// ours, in-shader, identical on both sides. See `parity.wgsl`.
+pub const TARGET_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
+
 pub fn selftest() -> Result<(), String> {
-    Ok(())
+    parity::selftest()
 }

@@ -9,3 +9,8 @@ publish.workspace = true
 [dependencies]
 serde = { workspace = true }
 thiserror = { workspace = true }
+wgpu = { workspace = true }
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+# The browser backend. Native picks Metal/Vulkan/D3D12 from wgpu's defaults.
+wgpu = { workspace = true, default-features = false, features = ["webgpu", "wgsl"] }

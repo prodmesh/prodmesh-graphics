@@ -268,6 +268,66 @@ at church — there is none at the house):
    below), and Configure must not describe a pair as phase-locked until someone
    has seen it on a scope.
 
+### Native wgpu and browser WebGPU are BIT-IDENTICAL on Metal — and that claim is narrower than it sounds
+*2026-08-14 · MacBook Pro M3 Max, macOS 26.3 · wgpu 30.0.0 · Chrome 148 (Electron 42) · adapter reports `vendor: apple, architecture: metal-3`*
+
+Spike S1, all three corpus figures:
+
+```
+                    within 1/255   max delta   centroid shift   alpha mass
+triangle              100.0000%      0/255      0.000000 px      0.0000%
+rounded-rect          100.0000%      0/255      0.000000 px      0.0000%
+alpha-atlas           100.0000%      0/255      0.000000 px      0.0000%
+```
+
+Not "within tolerance" — **identical**. Every byte.
+
+**What this actually establishes.** Chrome's WebGPU on this machine reports
+`vendor: apple, architecture: metal-3`: Dawn is going to **the same Metal driver
+on the same GPU** that wgpu-native uses. So this is *not* evidence that wgpu and
+Dawn agree across backends. It is evidence that **two independent WGSL compiler
+frontends — naga and Dawn's — emit shaders that produce identical results on one
+driver**, and that nothing in our pipeline accidentally depends on backend-defined
+behaviour.
+
+That second half is the part worth having. It confirms the determinism rules in
+`parity.wgsl` are doing their job:
+
+- No `fwidth`/`dpdx`/`dpdy` — derivative granularity is implementation-defined,
+  so AA built on it would differ *by specification*. Pixel scale is a uniform.
+- No MSAA — sample patterns are unspecified across backends.
+- `Rgba8Unorm`, never `Rgba8UnormSrgb` — no automatic colour conversion in the
+  pipeline.
+- Every sampler field stated explicitly; no filtering defaults.
+
+**What it does NOT establish**, and must not be quoted as if it did:
+
+- Cross-vendor behaviour (NVIDIA, AMD, Intel).
+- Cross-backend behaviour (D3D12, Vulkan). **A Windows designer against a Mac
+  node is the untested case**, and it is a real deployment shape.
+- Anything about text. Glyphs are rasterized on the CPU in `pmg-text`, so they
+  are identical by construction; the atlas figure covers the GPU's contribution
+  (sampling). Typography *quality* is spike S2's problem, not this one.
+
+For this project the tested case is arguably the important one — booth machines
+are Macs — but ADR 0001's promise should still be quoted as **measured on Metal**
+until someone runs the corpus on Windows.
+
+**The harness was validated by making it fail.** A perfect score on first run is
+a reason for suspicion, not celebration, so the corpus was perturbed deliberately:
+
+| Perturbation | Channel delta | Centroid shift | Diagnosed as |
+|---|---|---|---|
+| Triangle, +3/255 on red | **3/255 FAIL** | 0.000000 | colour differs, geometry did not |
+| Rect, shifted 1 px left | 252/255 | **1.000000 px FAIL** | geometry moved |
+
+That separation is the whole reason the two metrics are reported independently.
+A combined score would have called both "a failure" and hidden which one matters.
+
+Browser-side timings, which also serve spike S6: **221.6 ms** for the first
+figure (including adapter and device acquisition), then **5.1 ms** and **5.7 ms**.
+The wasm bundle is **244 KB** — before any text stack.
+
 ### The NDI runtime exports flat C symbols, not just the v5_load table
 *2026-08-14 · MacBook Pro arm64, macOS 26.3 · NDI **6.3.2.0** (SDK APPLE, Apr 13 2026)*
 

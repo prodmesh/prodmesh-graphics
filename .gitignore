@@ -34,3 +34,6 @@ config.local.json
 
 # TypeScript incremental build state
 *.tsbuildinfo
+web/pkg/
+/tmp/corpus-*
+testdata/golden/wasm/

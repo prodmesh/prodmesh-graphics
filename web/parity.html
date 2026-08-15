@@ -1,0 +1,50 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>PMG parity harness — spike S1</title>
+<style>
+  body { font: 13px/1.5 ui-monospace, monospace; padding: 16px; background:#090d11; color:#edf2f7 }
+  pre { white-space: pre-wrap }
+  .ok { color:#43d17d } .bad { color:#ff6b6b }
+</style>
+<h1>PMG parity harness</h1>
+<pre id="log">starting…</pre>
+<script type="module">
+import init, { render_figure } from './pkg/pmg_wasm.js';
+
+const log = document.getElementById('log');
+const say = (m, cls) => {
+  log.innerHTML += `\n${cls ? `<span class="${cls}">${m}</span>` : m}`;
+};
+
+const FIGURES = ['triangle', 'rounded-rect', 'alpha-atlas'];
+const results = {};
+
+try {
+  await init();
+  say('wasm loaded');
+
+  const adapter = await navigator.gpu.requestAdapter();
+  say(`adapter: ${JSON.stringify(adapter.info ?? {})}`);
+  say(`maxTextureDimension2D: ${adapter.limits.maxTextureDimension2D}`);
+
+  for (const name of FIGURES) {
+    const t0 = performance.now();
+    // RAW RGBA8 — never through a canvas. toDataURL is entitled to apply a
+    // colour profile, and that would make this measure Chrome's colour
+    // pipeline instead of our renderer.
+    const bytes = await render_figure(name);
+    const ms = (performance.now() - t0).toFixed(1);
+    say(`${name}: ${bytes.length} bytes in ${ms} ms`);
+
+    const res = await fetch(`/put/${name}`, { method: 'POST', body: bytes });
+    if (!res.ok) throw new Error(`POST ${name} failed: ${res.status}`);
+    results[name] = bytes.length;
+  }
+
+  say('\nALL FIGURES RENDERED AND POSTED', 'ok');
+  window.__parity = { done: true, results };
+} catch (e) {
+  say(`\nFAILED: ${e}`, 'bad');
+  window.__parity = { done: false, error: String(e) };
+}
+</script>

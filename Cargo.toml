@@ -37,6 +37,9 @@ publish = false
 #     Enforced by the required wasm32-unknown-unknown CI job (ADR 0004).
 serde = { version = "1", features = ["derive"] }
 thiserror = "2"
+# Pinned deliberately and identically for both targets. A wgpu bump is a
+# release-gated change requiring a full golden re-run (risk R11).
+wgpu = "30"
 
 # --- Everything else. Available to non-pure crates only.
 anyhow = "1"

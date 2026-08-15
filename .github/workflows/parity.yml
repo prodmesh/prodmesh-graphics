@@ -2,41 +2,34 @@ name: parity
 
 # Spike S1's success bar, as a permanent gate (docs/spikes/S1-render-parity.md).
 #
+# S1 passed bit-identically on Metal 2026-08-14. This job exists so it STAYS
+# that way: the corpus grows with pmg-render, and a wgpu bump or a shader edit
+# that reintroduces backend-defined behaviour must fail here rather than in M4.
+#
 # Two INDEPENDENT numbers, reported separately on purpose:
 #
-#   - channel delta       a shade one step off is a GPU backend difference we
-#                         have already accepted (risk R1)
+#   - channel delta            a shade one step off is a GPU backend difference
+#                              we have already accepted (risk R1)
 #   - geometric displacement   a glyph two pixels to the left is a failure of the
-#                         design promise itself, and the bar is ZERO
+#                              design promise itself, and the bar is ZERO
 #
-# Combining them into one score would hide the one that matters.
-#
-# Disabled until pmg-render can draw something. Enabling it is part of M0's
-# spike S1.
+# Combining them would hide the one that matters. Validated by deliberately
+# perturbing the corpus: a +3/255 shade change trips only the channel metric, a
+# 1px shift trips only the centroid metric.
 
 on:
   push:
     branches: [main]
-    paths:
-      - 'crates/pmg-render/**'
-      - 'crates/pmg-layout/**'
-      - 'crates/pmg-text/**'
-      - 'crates/pmg-scene/**'
-      - 'crates/pmg-wasm/**'
-      - 'testdata/**'
+    paths: ['crates/pmg-render/**', 'crates/pmg-layout/**', 'crates/pmg-text/**',
+            'crates/pmg-scene/**', 'crates/pmg-wasm/**', 'testdata/**', 'Cargo.toml']
   pull_request:
-    paths:
-      - 'crates/pmg-render/**'
-      - 'crates/pmg-layout/**'
-      - 'crates/pmg-text/**'
-      - 'crates/pmg-scene/**'
-      - 'crates/pmg-wasm/**'
-      - 'testdata/**'
+    paths: ['crates/pmg-render/**', 'crates/pmg-layout/**', 'crates/pmg-text/**',
+            'crates/pmg-scene/**', 'crates/pmg-wasm/**', 'testdata/**', 'Cargo.toml']
   workflow_dispatch:
 
 jobs:
-  golden:
-    name: native vs wasm golden diff
+  native:
+    name: native corpus renders and is stable
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
@@ -46,14 +39,31 @@ jobs:
           targets: wasm32-unknown-unknown
       - uses: Swatinem/rust-cache@v2
 
-      - name: not yet enabled
-        run: |
-          echo "Spike S1 has not run — see docs/spikes/S1-render-parity.md."
-          echo "This job turns on when pmg-render can draw a triangle and a text block."
-          exit 0
+      - name: render the corpus
+        run: cargo run --release -p pmg-cli -- render-golden /tmp/corpus-a
 
-      # - run: cargo run -p pmg-cli -- render-golden testdata/templates --out /tmp/native
-      # - run: wasm-pack build crates/pmg-wasm --target web --out-dir ../../web/pkg
-      # - run: node tools/render-wasm-golden.mjs testdata/templates /tmp/wasm
-      # - run: cargo run -p pmg-cli -- golden-diff /tmp/native /tmp/wasm \
-      #          --max-channel-delta 2 --min-within-1-255 99.9 --max-displacement 0
+      # Determinism check that needs no browser: render twice and require the
+      # bytes to match. A renderer that is not stable against itself cannot be
+      # stable against another backend, and this catches it in CI on every push.
+      - name: render again and require identical output
+        run: |
+          cargo run --release -p pmg-cli -- render-golden /tmp/corpus-b
+          cargo run --release -p pmg-cli -- golden-diff /tmp/corpus-a /tmp/corpus-b | tee /tmp/self.txt
+          grep -q "^PASS" /tmp/self.txt
+
+      - name: the wasm harness must at least build
+        run: cargo build --release --target wasm32-unknown-unknown -p pmg-wasm
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: parity-corpus-native
+          path: /tmp/corpus-a
+
+  # The browser half needs a WebGPU-capable browser driven headlessly, which
+  # GitHub's runners do not provide reliably. It is run by hand for now —
+  # tools/parity-server.py plus web/parity.html — and its results are recorded,
+  # dated and hardware-attributed, in docs/INTEGRATION-NOTES.md.
+  #
+  # Wiring it here needs a runner with a real GPU. Until then the native
+  # self-consistency job above is the automated guard, and the cross-target
+  # comparison is a release-time manual step in docs/TESTING.md.

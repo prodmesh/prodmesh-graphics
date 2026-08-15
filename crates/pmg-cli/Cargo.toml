@@ -24,3 +24,6 @@ pmg-cas = { path = "../pmg-cas" }
 pmg-proto = { path = "../pmg-proto" }
 ndi-sys = { path = "../../sys/ndi-sys" }
 decklink-sys = { path = "../../sys/decklink-sys" }
+wgpu = { workspace = true }
+pollster = "0.4"
+png = "0.18"

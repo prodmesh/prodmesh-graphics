@@ -5,7 +5,7 @@ change that makes something real — not afterwards.
 
 `docs/ROADMAP.md` is where we are going. This is where we are.
 
-**Last updated: 2026-08-14 · milestone M0 · S3's internal-clock leg passed.**
+**Last updated: 2026-08-14 · milestone M0 · S1, S3, and most of S6 passed.**
 
 ---
 
@@ -48,8 +48,9 @@ something other than what they were.
 | PMG Link | ⬜ spec only |
 | CAS | ⬜ spec only |
 | Web app | 🟡 four-mode shell, routing, tokens, `useTopic` + `useQuery`. 6 tests. No functionality |
+| `pmg-wasm` | 🟡 the parity harness — renders the corpus in-browser and posts raw RGBA back. 244 KB |
 | Design canvas | ⬜ not started |
-| Renderer | ⬜ not started |
+| `pmg-render` | 🟡 the S1 parity corpus only — 3 figures on wgpu 30, native **and** wasm32. No scene rendering |
 | Text stack | ⬜ not started |
 | Layout | ⬜ types only, no solver |
 | `pmg-out-ndi` / `pmg-out-decklink` | ⬜ not started — `pmgctl` drives `sys/` directly for now |
@@ -84,15 +85,19 @@ hardware-attributed findings when it runs.
 
 | Spike | Status | Gates |
 |---|---|---|
-| S1 render parity | not started | M1 |
+| S1 render parity | **PASSED on Metal** 2026-08-14 — bit-identical; cross-backend untested | M1 |
 | S3 DeckLink output | **internal-clock leg PASSED** 2026-08-14; reference leg blocked on a generator | M2 |
-| S6 WebGPU in browser | not started | M1 |
+| S6 WebGPU in browser | **largely answered** 2026-08-14 — real adapter/device, 16384 texture limit, 244 KB bundle, 5 ms/figure. Not yet on the booth Macs | M1 |
 | S2, S4, S5, S7, S8, S9 | not started | M3–M5 |
 
-**S3 has now largely returned, and it passed** — ADR 0003's hand-written-shim
-approach sustains broadcast output from Rust with zero late frames. **S1 is now
-the one outstanding decision-invalidating spike**: until it runs, treat ADRs 0001
-and 0002 as well-reasoned bets rather than settled facts.
+**All three M0 spikes have now returned, and all three passed.** ADR 0003's
+hand-written-shim approach sustains broadcast output with zero late frames; ADR
+0001's shared renderer produces bit-identical output native and in-browser; and
+WebGPU is comfortably available in the browser.
+
+**None of the foundational ADRs is a bet any more** — with one honest
+qualification: S1 measured Dawn-on-Metal against wgpu-on-Metal, so the
+cross-backend case (a Windows designer against a Mac node) is still untested.
 
 ---
 
@@ -122,15 +127,15 @@ for a decision:
 
 The next three things that matter:
 
-1. **S1 run**, with numbers written into `docs/spikes/S1-render-parity.md` and
-   `docs/INTEGRATION-NOTES.md`. Needs `pmg-render` to draw a triangle and a text
-   block — the smallest amount of renderer that can answer the question, and
-   deliberately so. **This is now the one outstanding spike that could
-   invalidate a foundational ADR.**
-2. **S6 run** on the actual booth Macs, not a dev laptop.
+1. **Start M1.** The foundational bets have all returned green, so the scene
+   format, layout solver, and text stack are now the critical path rather than
+   the risk.
+2. **Run the parity corpus on Windows (D3D12)**, so ADR 0001's promise can be
+   stated without the "measured on Metal" qualification.
 3. **S3's remaining legs at church**, where there is a reference generator: the
    soak locked to blackburst or tri-level, and scope confirmation that a fill+key
    pair genuinely shares a clock.
 
-ADR 0003 is no longer a bet. ADRs 0001 and 0002 still are, and this page says so
-on purpose.
+M0's spikes were scheduled so the project would be allowed to fail early. It
+didn't. That is a good outcome and not a reason to stop writing down what is
+still untested.

@@ -8,6 +8,7 @@
 //! Run it after touching `pmg-scene`, `pmg-layout`, `pmg-anim`, or `pmg-color`.
 
 mod decklink;
+mod golden;
 mod ndi;
 
 use anyhow::{bail, Result};
@@ -26,6 +27,9 @@ USAGE:
     pmgctl decklink list           Devices and probed capabilities
     pmgctl decklink modes [i]      Display modes a device reports
     pmgctl decklink ref [i]        Reference (genlock) status
+
+    pmgctl render-golden <dir>     Spike S1: render the parity corpus natively
+    pmgctl golden-diff <a> <b>     Spike S1: compare native against browser
 
 PLANNED (see docs/ROADMAP.md):
     pmgctl scene compile <in> <out>    M1
@@ -94,6 +98,22 @@ fn main() -> Result<()> {
         Some("--selftest") => selftest(),
         Some("ndi") => ndi::main(&args[1..]),
         Some("decklink") => decklink::main(&args[1..]),
+        Some("render-golden") => {
+            let dir = args
+                .get(1)
+                .map(String::as_str)
+                .unwrap_or("testdata/golden/native");
+            golden::render_golden(std::path::Path::new(dir))
+        }
+        Some("golden-diff") => match (args.get(1), args.get(2)) {
+            (Some(a), Some(b)) => {
+                golden::golden_diff(std::path::Path::new(a), std::path::Path::new(b))
+            }
+            _ => {
+                print!("{}", golden::USAGE);
+                Ok(())
+            }
+        },
         Some("--version") => {
             println!("pmgctl {}", env!("CARGO_PKG_VERSION"));
             Ok(())

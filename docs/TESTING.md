@@ -42,6 +42,30 @@ glyph two pixels to the left is a bug in the design promise; a shade one step of
 is a GPU backend difference we have already accepted. Reporting them as one
 number hides the one that matters.
 
+**Measured 2026-08-14: bit-identical on Metal**, 0/255 and 0.000000 px across
+the whole corpus — see spike S1. The separation of the two metrics was validated
+by deliberately perturbing the corpus, and each failure mode tripped only its own
+metric.
+
+### Running the cross-target comparison by hand
+
+CI runs the *native self-consistency* half (render twice, require identical
+bytes). The browser half needs a WebGPU-capable browser with a real GPU, which
+hosted runners do not provide, so it is a **release-time manual step**:
+
+```bash
+cargo run --release -p pmg-cli -- render-golden testdata/golden/native
+cargo build --release --target wasm32-unknown-unknown -p pmg-wasm
+wasm-bindgen --target web --out-dir web/pkg --no-typescript \
+  target/wasm32-unknown-unknown/release/pmg_wasm.wasm
+python3 tools/parity-server.py web testdata/golden/wasm     # then open :8532/parity.html
+cargo run --release -p pmg-cli -- golden-diff testdata/golden/native testdata/golden/wasm
+```
+
+The browser posts **raw RGBA** back, never a canvas encode — `toDataURL` may
+apply a colour profile, which would measure the browser's colour pipeline
+instead of our renderer.
+
 **A wgpu version bump is a release-gated change requiring a full golden re-run.**
 Not a routine dependency update.
 

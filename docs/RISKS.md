@@ -13,7 +13,18 @@ going to fix).
 
 ## R1 — Native and browser rendering will not be bit-identical
 
-**Status:** open · **Spike:** [S1](spikes/S1-render-parity.md) · **ADRs:** 0001, 0002
+**Status:** **refuted on Metal** (2026-08-14) — they are bit-identical, 0/255 max
+delta and zero geometric displacement across the whole corpus. **Still open for
+cross-backend**: Chrome was targeting the same Metal driver, so D3D12 and Vulkan
+remain untested ·
+**Spike:** [S1](spikes/S1-render-parity.md) · **ADRs:** 0001, 0002
+
+> **The belief in this risk was wrong, in the good direction — but read the
+> caveat.** The measurement was Dawn-on-Metal against wgpu-on-Metal, i.e. two
+> WGSL frontends over one driver. That is a genuine result (it proves nothing in
+> the pipeline depends on backend-defined behaviour) and it is *not* the
+> cross-backend claim. Quote ADR 0001's promise as **measured on Metal** until
+> the corpus runs on Windows.
 
 ADR 0001 rests on "one renderer, so the designer and the node agree." That is
 true of the code and not automatically true of the pixels. Native wgpu goes to
