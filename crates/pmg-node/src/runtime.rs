@@ -864,6 +864,29 @@ fn render_group(
             // The card's own buffer level is the only instrument, so a node
             // carrying audio says it out loud every five seconds: FLAT is
             // correct, a trend in either direction is not.
+            // Clip health, from the players themselves. `late` says the OUTPUT
+            // kept up; `held` says the DECODER did, and they fail separately:
+            // a held frame is a repeated picture on a perfectly timed output.
+            if out.frame.is_multiple_of(300) {
+                let (mut held, mut dropped) = (0u64, 0u64);
+                for p in &plan {
+                    if let Some(set) = &p.players {
+                        if let Ok(s) = set.lock() {
+                            for (_, pl) in &s.players {
+                                held += pl.held();
+                                dropped += pl.dropped();
+                            }
+                        }
+                    }
+                }
+                if !plan.is_empty() {
+                    tracing::info!(
+                        output = %out.spec.id, frame = out.frame,
+                        held, dropped, "clips"
+                    );
+                }
+            }
+
             if out.spec.audio_channels > 0 && out.frame.is_multiple_of(300) {
                 // NDI has no card buffer to read — the SDK owns the pacing —
                 // so there is one fewer instrument here, and the peak is the

@@ -397,7 +397,14 @@ fn tracing_subscriber_init() {
     // process that must run unattended has to be able to say what happened to
     // it — that is not a nicety, it is the difference between a diagnosable
     // Sunday and a mystery.
+    // No colour when nobody is watching a terminal. An unattended node's log is
+    // a FILE, read later by a person or a harness, and escape codes in it break
+    // every regex written against it — a soak once reported PASS on four
+    // metrics it had found no data for, because `late=` never appeared
+    // literally between the colour codes.
+    let ansi = std::io::IsTerminal::is_terminal(&std::io::stdout());
     tracing_subscriber::fmt()
+        .with_ansi(ansi)
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env()
                 .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("pmg_node=info,warn")),

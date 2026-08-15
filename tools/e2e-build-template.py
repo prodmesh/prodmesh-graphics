@@ -10,12 +10,15 @@ import sys
 
 REPO = "/Users/jbeale/Code/prodmesh-graphics"
 asset_hash = sys.argv[1]
+# Second argument is where to write, so a harness does not litter whatever
+# directory it happened to be run from.
+outdir = sys.argv[2] if len(sys.argv) > 2 else "."
 
 subprocess.run(
-    [f"{REPO}/target/release/pmgctl", "scene", "fixture", "e2e-base.json"],
+    [f"{REPO}/target/release/pmgctl", "scene", "fixture", f"{outdir}/e2e-base.json"],
     check=True, capture_output=True,
 )
-d = json.load(open("e2e-base.json"))
+d = json.load(open(f"{outdir}/e2e-base.json"))
 d["name"] = "Clip with sound"
 # The manifest carries the document's own id and the server checks it against
 # the template being published to, so the two must be decided together.
@@ -45,5 +48,5 @@ d["root"]["children"].insert(0, {
     "children": [],
 })
 
-json.dump(d, open("e2e-template.json", "w"), indent=2)
-print("wrote e2e-template.json")
+json.dump(d, open(f"{outdir}/e2e-template.json", "w"), indent=2)
+print(f"wrote {outdir}/e2e-template.json")
