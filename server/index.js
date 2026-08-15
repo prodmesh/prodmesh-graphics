@@ -30,6 +30,7 @@ import { router as templatesRouter } from './routes/templates.js'
 import { router as itemsRouter } from './routes/items.js'
 import { router as cueRouter } from './routes/cue.js'
 import * as nodeLink from './nodeLink.js'
+import { build as buildAssignment } from './assignment.js'
 import * as cas from './cas.js'
 import { open as openDb } from './db.js'
 import { SCENE_READER_MAJOR } from './manifest.js'
@@ -65,6 +66,62 @@ export function createApp() {
   app.use(cueRouter)
 
   app.get('/api/nodes', (_req, res) => res.json({ nodes: nodeLink.list() }))
+
+  app.get('/api/nodes/:id/outputs', (req, res) => {
+    const rows = openDb()
+      .prepare('SELECT * FROM outputs WHERE node_id = ? ORDER BY output_id')
+      .all(req.params.id)
+    res.json({
+      outputs: rows.map((o) => ({ ...o, layers: JSON.parse(o.layers) })),
+      // What the node is actually running right now, which is the node's
+      // answer and not ours.
+      live: nodeLink.get(req.params.id)?.state?.outputs ?? [],
+    })
+  })
+
+  /**
+   * Configure an output's layer stack.
+   *
+   * The array is ORDERED, bottom first, and that order is the compositing
+   * order. Reordering it changes what covers what; renaming a layer is a
+   * different operation entirely, because items address layers by name and a
+   * rename would orphan them silently.
+   */
+  app.put('/api/nodes/:id/outputs/:out', (req, res) => {
+    const layers = req.body?.layers
+    if (!Array.isArray(layers) || layers.some((l) => typeof l !== 'string' || !l.trim())) {
+      return res.status(422).json({
+        error: 'validation_failed',
+        label: 'An output needs an ordered list of layer names.',
+      })
+    }
+    if (new Set(layers).size !== layers.length) {
+      // Two layers with one name make "take to Lower Third" ambiguous, and the
+      // node would resolve it to whichever came first.
+      return res.status(422).json({
+        error: 'validation_failed',
+        label: 'Two layers on the same output can’t share a name.',
+      })
+    }
+    openDb()
+      .prepare(
+        `INSERT INTO outputs (node_id, output_id, mode, layers, updated_at)
+         VALUES (?, ?, ?, ?, ?)
+         ON CONFLICT(node_id, output_id) DO UPDATE SET
+           mode = excluded.mode, layers = excluded.layers, updated_at = excluded.updated_at`,
+      )
+      .run(
+        req.params.id,
+        req.params.out,
+        String(req.body?.mode ?? '1920x1080'),
+        JSON.stringify(layers),
+        Date.now(),
+      )
+    // Push it immediately. A layer stack the operator just set must be live
+    // before they try to take to it, not after the next reconnect.
+    nodeLink.offerAssignment(req.params.id, buildAssignment({ nodeId: req.params.id }))
+    res.json({ node: req.params.id, output: req.params.out, layers })
+  })
   app.get('/api/nodes/:id', (req, res) => {
     const n = nodeLink.get(req.params.id)
     if (!n) return res.status(404).json({ error: 'not_found', label: 'No node with that id has connected.' })
@@ -116,7 +173,7 @@ export function createApp() {
       server: '0.1.0',
       proto_ver: 1,
       scene_reader_major: SCENE_READER_MAJOR,
-      milestone: 'M1',
+      milestone: 'M2',
     })
   })
 

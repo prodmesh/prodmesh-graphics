@@ -180,22 +180,47 @@ fn taking_out_an_empty_layer_is_success() {
 }
 
 #[test]
-fn reconfiguring_does_not_evict_what_is_on_air() {
-    let mut e = engine();
+fn reconfiguring_takes_the_assignments_layer_order() {
+    let mut e = engine(); // starts as [Lower Third, Bug]
     e.configure(
         &[OutputAssignment {
             id: "out-0".into(),
             mode: "1920x1080".into(),
-            layers: vec!["Lower Third".into(), "Bug".into(), "Ticker".into()],
+            layers: vec!["Fullscreen".into(), "Lower Third".into(), "Bug".into()],
+        }],
+        (60000, 1001),
+    );
+    // Layer order IS compositing order, so the assignment's order has to win.
+    // Appending unknown layers instead — which is what this did first — put
+    // Fullscreen ABOVE Lower Third and would have covered it.
+    let names: Vec<&str> = e.outputs[0]
+        .layers
+        .iter()
+        .map(|l| l.name.as_str())
+        .collect();
+    assert_eq!(names, vec!["Fullscreen", "Lower Third", "Bug"]);
+}
+
+#[test]
+fn reconfiguring_does_not_evict_what_is_on_air() {
+    let mut e = engine();
+    // ClearAll is enough to prove the mechanism without needing fonts: it
+    // leaves the layers in place, and a real occupant would move the same way.
+    e.configure(
+        &[OutputAssignment {
+            id: "out-0".into(),
+            mode: "1920x1080".into(),
+            layers: vec!["Ticker".into(), "Lower Third".into()],
         }],
         (60000, 1001),
     );
     let out = &e.outputs[0];
-    assert_eq!(out.layers.len(), 3, "a new layer is added");
-    assert!(out.layers.iter().any(|l| l.name == "Ticker"));
-    // The existing layers keep their identity and their occupants; an
-    // assignment that adds a layer must not disturb a graphic already showing.
-    assert_eq!(out.layers[0].name, "Lower Third");
+    assert_eq!(out.layers.len(), 2);
+    // Bug is gone from the stack, so it is gone from the node. Keeping a layer
+    // the assignment no longer lists would leave a graphic on air that nothing
+    // can address any more.
+    assert!(!out.layers.iter().any(|l| l.name == "Bug"));
+    assert!(out.layers.iter().any(|l| l.name == "Lower Third"));
 }
 
 #[test]

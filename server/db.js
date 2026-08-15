@@ -17,7 +17,7 @@ import Database from 'better-sqlite3'
 import fs from 'node:fs'
 import path from 'node:path'
 
-export const SCHEMA_VERSION = 2
+export const SCHEMA_VERSION = 3
 
 let db = null
 
@@ -122,6 +122,26 @@ const MIGRATIONS = [
   // by address, and this column is just the pointer.
   (d) => {
     d.exec(`ALTER TABLE template_revisions ADD COLUMN mirror_hash TEXT`)
+  },
+
+  // 3 — outputs and their layer stacks.
+  //
+  // Layers are ORDERED and addressed BY NAME. The order is the compositing
+  // order, bottom first, and it is stored as a JSON array rather than a row per
+  // layer with an index column — because an index column invites code that
+  // addresses a layer by its position, which silently re-points at a different
+  // graphic the moment someone reorders the stack.
+  (d) => {
+    d.exec(`
+      CREATE TABLE outputs (
+        node_id    TEXT NOT NULL,
+        output_id  TEXT NOT NULL,
+        mode       TEXT NOT NULL,
+        layers     TEXT NOT NULL,
+        updated_at INTEGER NOT NULL,
+        PRIMARY KEY (node_id, output_id)
+      );
+    `)
   },
 ]
 

@@ -88,9 +88,19 @@ function find(ref) {
   const byId = sessions.get(ref)
   if (byId) return byId
   const named = [...sessions.values()].filter((s) => s.name === ref)
-  // An ambiguous name is not resolvable, and picking one would be a coin flip
-  // deciding what goes on air.
-  return named.length === 1 ? named[0] : null
+  if (named.length === 1) return named[0]
+
+  // A name can collide: a node reinstalled with a fresh identity leaves its old
+  // session behind, and both answer to the same display name. When exactly one
+  // of them is actually connected, that is unambiguously the one the operator
+  // means — refusing here would say "there is no node called booth-1" while
+  // booth-1 sits there online.
+  const reachable = named.filter(isOnline)
+  if (reachable.length === 1) return reachable[0]
+
+  // Two live nodes with one name is a genuine ambiguity, and picking one would
+  // be a coin flip deciding what goes on air.
+  return null
 }
 
 function send(s, msg) {
@@ -187,7 +197,7 @@ function onHello(ws, hello) {
   // round trip and no transfer — which is the whole reason the offer carries a
   // digest instead of the body.
   try {
-    offerAssignment(hello.node_id, buildAssignment())
+    offerAssignment(hello.node_id, buildAssignment({ nodeId: hello.node_id }))
   } catch (e) {
     // A node that cannot be given content is still a node that may be holding
     // graphics on air. Log and carry on rather than dropping the link.
@@ -380,7 +390,11 @@ export function cue(nodeId, { cue_id, op, deadline_ms, at = null }) {
 }
 
 export function list() {
-  return [...sessions.values()].map((s) => ({
+  // Reachable first, then most recently seen. A caller taking the first entry
+  // should get a node that can actually do something.
+  return [...sessions.values()]
+    .toSorted((a, b) => Number(isOnline(b)) - Number(isOnline(a)) || b.lastSeen - a.lastSeen)
+    .map((s) => ({
     node_id: s.nodeId,
     name: s.name,
     reachable: isOnline(s),

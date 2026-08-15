@@ -1041,7 +1041,9 @@ dependencies = [
  "pmg-layout",
  "pmg-scene",
  "pmg-text",
+ "pollster",
  "serde",
+ "serde_json",
  "thiserror",
  "wgpu",
 ]

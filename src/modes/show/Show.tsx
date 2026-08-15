@@ -93,7 +93,10 @@ function OnAir({ name, outputId }: { name: string; outputId: string }) {
         <p className="show__dim show__pad">Nothing on air.</p>
       ) : (
         <ul className="show__layers">
-          {layers.layers.map((l) => (
+          {/* Top of the stack first. The wire order is compositing order,
+              bottom-first, but an operator reads a stack the way they see it:
+              what is in front is at the top of the list. */}
+          {layers.layers.toReversed().map((l) => (
             <li key={l.name} className={l.occupant ? 'show__layer show__layer--live' : 'show__layer'}>
               <span className="show__layer-name">{l.name}</span>
               {l.occupant ? (
@@ -170,19 +173,47 @@ function Rack({
       {items.length === 0 ? (
         <p className="show__dim show__pad">No items yet. Build one in Edit.</p>
       ) : (
-        <ul className="show__items">
-          {items.map((it) => (
-            <ItemRow
-              key={it.id}
-              item={it}
-              nodeId={nodeId}
-              outputId={outputId}
-              busy={busy}
-              onFire={fire}
-              disabled={!reachable}
-            />
-          ))}
-        </ul>
+        // Grouped by destination, so the rack reads the same way the stack
+        // does: everything that can go on a layer, under that layer's name.
+        [...new Set(items.map((it) => it.destination?.layer ?? 'Lower Third'))].map((layer) => (
+          <div key={layer} className="show__group">
+            <div className="show__group-head">
+              <h3>{layer}</h3>
+              <button
+                type="button"
+                className="btn btn--ghost btn--small"
+                disabled={!reachable || busy !== null}
+                onClick={() =>
+                  fire(`clear:${layer}`, {
+                    cue_id: newCueId(),
+                    node: nodeId,
+                    output: outputId,
+                    layer,
+                    op: 'clear_layer',
+                    show: SHOW,
+                  })
+                }
+              >
+                Clear
+              </button>
+            </div>
+            <ul className="show__items">
+              {items
+                .filter((it) => (it.destination?.layer ?? 'Lower Third') === layer)
+                .map((it) => (
+                  <ItemRow
+                    key={it.id}
+                    item={it}
+                    nodeId={nodeId}
+                    outputId={outputId}
+                    busy={busy}
+                    onFire={fire}
+                    disabled={!reachable}
+                  />
+                ))}
+            </ul>
+          </div>
+        ))
       )}
 
       <div className="show__clear">

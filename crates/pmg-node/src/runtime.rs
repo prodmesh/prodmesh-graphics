@@ -264,10 +264,10 @@ impl Runtime {
             )?)
         };
 
-        // The renderer owns the glyph atlas, so it is rebuilt when the occupant
-        // changes and reused for every frame in between. Rebuilding per frame
-        // would be the 17.55 ms mistake in another costume.
-        let mut renderer: Option<(String, pmg_render::SceneRenderer)> = None;
+        // One renderer per occupied layer, kept across frames. See RendererCache
+        // — a single shared renderer would be rebuilt once per layer per frame
+        // the moment two layers are occupied.
+        let mut renderers = crate::render::RendererCache::default();
         let mut last_state = Instant::now();
         let mut worst_ms = 0.0f64;
         let budget_ms = 1000.0 / (self.opts.fps.0 as f64 / self.opts.fps.1 as f64);
@@ -320,35 +320,47 @@ impl Runtime {
 
             // --- one frame -------------------------------------------------
             let t0 = Instant::now();
-            target.clear(&gpu);
 
-            // M1 draws a single layer. The loop is written over all of them so
-            // that M2's compositing is an addition rather than a rewrite.
-            let mut key: Option<String> = None;
+            // Composite the stack bottom to top. The FIRST occupied layer
+            // clears; every layer above it composites over the result. Drawing
+            // each with a clear — which is what the single-layer path did —
+            // means only the topmost layer survives, and the symptom is a Bug
+            // silently erasing the Lower Third beneath it.
+            let mut live: std::collections::HashSet<String> = std::collections::HashSet::new();
+            let mut drawn = 0usize;
+
             if let Some(out) = self.engine.outputs.iter().find(|o| o.id == output_id) {
                 for layer in &out.layers {
                     let Some(occ) = &layer.occupant else { continue };
-                    let this = format!("{}|{}", layer.name, occ.armed.item_id);
-                    if renderer.as_ref().map(|(k, _)| k.as_str()) != Some(this.as_str()) {
-                        renderer = Some((
-                            this.clone(),
-                            pmg_render::SceneRenderer::new(
-                                &gpu.device,
-                                &gpu.queue,
-                                &occ.armed.instance,
-                            ),
-                        ));
-                    }
-                    key = Some(this);
-                    if let Some((_, r)) = &renderer {
-                        let values = engine::frame_values(occ);
-                        crate::render::draw(&gpu, r, &occ.armed.instance, &values, &target);
-                    }
+                    live.insert(layer.name.clone());
+                    let key = format!("{}|{}", occ.armed.item_id, occ.armed.template_rev);
+                    let renderer = renderers.get(&gpu, &layer.name, &key, &occ.armed.instance);
+                    let values = engine::frame_values(occ);
+                    let load = if drawn == 0 {
+                        pmg_render::Load::Clear
+                    } else {
+                        pmg_render::Load::Over
+                    };
+                    crate::render::draw(
+                        &gpu,
+                        renderer,
+                        &occ.armed.instance,
+                        &values,
+                        &target,
+                        load,
+                    );
+                    drawn += 1;
                 }
             }
-            if key.is_none() {
-                renderer = None;
+
+            // Nothing on air: the output must still be transparent black rather
+            // than the last frame that was drawn into it.
+            if drawn == 0 {
+                target.clear(&gpu);
             }
+            // A cleared layer must not hold its atlas for the rest of the
+            // service.
+            renderers.retain(&live);
 
             let rgba = target.read(&gpu)?;
             let ms = t0.elapsed().as_secs_f64() * 1000.0;

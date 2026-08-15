@@ -602,3 +602,46 @@ It is not a development-only bug: the same thing happens in production whenever
 a component remounts inside the 5 s stale window. Fixed by attaching to
 `entry.promise` when the entry is fresh but unsettled, and pinned by a test that
 renders under `StrictMode` against a fetch with a real delay.
+
+---
+
+## A layer stack needs three things the single-layer path did not
+
+**2026-08-15, building M2a.** Adding a second layer surfaced three defects that
+were invisible with one, and none of them reported an error.
+
+**1. The renderer always cleared its target.** `SceneRenderer::render` began its
+pass with `LoadOp::Clear`, so drawing layer 2 erased layer 1. The `StateReport`
+said both layers were occupied — because they were. Only the pixels disagreed,
+and the symptom would have been a Bug silently wiping the Lower Third under it.
+Fixed with an explicit `Load::{Clear, Over}`: the bottom layer clears, every
+layer above composites. `crates/pmg-render/tests/compositing.rs` asserts both
+the fix and the old behaviour, so the bug is a pinned fact rather than a memory.
+
+**2. One renderer, rebuilt per layer per frame.** The node held a single
+`SceneRenderer` and rebuilt it whenever the layer being drawn changed — which is
+every layer, every frame, the moment two are occupied. That is the 17.55 ms
+regenerate-per-frame mistake in a different costume. Now a `RendererCache` keyed
+by layer name, rebuilt only when the occupant changes and dropped when the layer
+clears. Measured with two layers live: **59.94 fps, 1 late frame**.
+
+**3. `configure` appended unknown layers instead of taking the assignment's
+order — and a test had baked that in.** Layer order IS compositing order. A node
+booted with `Lower Third` and then assigned `Fullscreen, Lower Third, Bug` ended
+up compositing `Lower Third, Fullscreen, Bug`, so a fullscreen graphic would
+have covered the lower third meant to sit on top of it. The existing test
+asserted `layers[0] == "Lower Third"` after reconfiguration, which is exactly
+the wrong expectation written down as a requirement. The assignment's order is
+authoritative now; occupants are carried across by name rather than left in
+place.
+
+## A dead session must not shadow a live one with the same name
+
+**2026-08-15.** Reinstalling a node gives it a fresh `node_id`, so the server
+holds two sessions with the same display name — one dead, one live. `find()`
+treated that as ambiguous and refused, answering *"There is no node called
+booth-1"* while booth-1 sat there connected.
+
+Name lookup now prefers the reachable session when exactly one match is online.
+Two *live* nodes sharing a name is still ambiguous and still refused, because
+picking one would be a coin flip deciding what goes on air.

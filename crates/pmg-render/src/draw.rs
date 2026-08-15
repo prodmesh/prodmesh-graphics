@@ -10,6 +10,7 @@
 //! a handful of nodes, not a scene graph worth sorting.
 
 use crate::scene::{FrameNode, RenderContent, SceneInstance};
+use crate::Load;
 use crate::TARGET_FORMAT;
 use pmg_scene::doc::Transform2D;
 
@@ -317,6 +318,9 @@ impl SceneRenderer {
     ///
     /// `frame` is `apply_tracks`' output — one entry per node, in the same
     /// order. Records and submits; does not read back.
+    ///
+    /// Clears the target first. Equivalent to [`render_with`] with
+    /// [`Load::Clear`], and correct only for a single-layer output.
     pub fn render(
         &self,
         device: &wgpu::Device,
@@ -324,6 +328,27 @@ impl SceneRenderer {
         inst: &SceneInstance,
         frame: &[FrameNode],
         target: &wgpu::TextureView,
+    ) {
+        self.render_with(device, queue, inst, frame, target, Load::Clear)
+    }
+
+    /// Draw one frame, choosing whether to clear the target or composite over
+    /// what is already there.
+    ///
+    /// **A layer stack needs this.** The bottom layer clears; every layer above
+    /// it uses [`Load::Over`]. Clearing unconditionally — which this renderer
+    /// did until layers existed — means the last layer drawn is the only one
+    /// visible, and the symptom is a Bug that silently erases the Lower Third
+    /// under it rather than any kind of error.
+    #[allow(clippy::too_many_arguments)]
+    pub fn render_with(
+        &self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        inst: &SceneInstance,
+        frame: &[FrameNode],
+        target: &wgpu::TextureView,
+        load: Load,
     ) {
         let align = device.limits().min_uniform_buffer_offset_alignment as u64;
         let stride = UNIFORM_SIZE.div_ceil(align) * align;
@@ -454,10 +479,15 @@ impl SceneRenderer {
                     resolve_target: None,
                     depth_slice: None,
                     ops: wgpu::Operations {
-                        // Transparent black. A keyed graphic is alpha over
-                        // nothing; anything else would fold a background into
-                        // the key.
-                        load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
+                        load: match load {
+                            // Transparent black. A keyed graphic is alpha over
+                            // nothing; anything else would fold a background
+                            // into the key.
+                            Load::Clear => wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
+                            // Premultiplied source-over against what is already
+                            // in the target — the layer below.
+                            Load::Over => wgpu::LoadOp::Load,
+                        },
                         store: wgpu::StoreOp::Store,
                     },
                 })],

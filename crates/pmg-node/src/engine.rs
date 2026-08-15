@@ -134,23 +134,42 @@ impl LayerEngine {
         }
     }
 
+    /// Apply an output/layer configuration.
+    ///
+    /// **The assignment's order is authoritative**, because layer order IS
+    /// compositing order — bottom first. But reconfiguring must not evict: a
+    /// graphic already on air stays on air, it just ends up at its new position
+    /// in the stack.
+    ///
+    /// The first version of this appended unknown layers to whatever the node
+    /// already had, which preserved occupants and silently produced the wrong
+    /// stack order. A node booted with `Lower Third` and then told
+    /// `Fullscreen, Lower Third, Bug` ended up compositing
+    /// `Lower Third, Fullscreen, Bug` — so a fullscreen graphic would have
+    /// covered the lower third that was supposed to be on top of it.
     pub fn configure(&mut self, outputs: &[pmg_proto::OutputAssignment], fps: (u32, u32)) {
         for oa in outputs {
-            if let Some(existing) = self.outputs.iter_mut().find(|o| o.id == oa.id) {
-                // Reconfiguring must not evict. An assignment change that adds
-                // a layer should leave the graphic that is currently on air
-                // exactly where it is.
-                for name in &oa.layers {
-                    if !existing.layers.iter().any(|l| &l.name == name) {
-                        existing.layers.push(Layer {
+            match self.outputs.iter_mut().find(|o| o.id == oa.id) {
+                Some(existing) => {
+                    // Rebuild in the assignment's order, carrying occupants
+                    // across by NAME. A layer that disappears from the stack
+                    // takes its occupant with it, which is the honest reading
+                    // of "this output no longer has that layer".
+                    let mut carried: std::collections::HashMap<String, Option<Occupant>> = existing
+                        .layers
+                        .drain(..)
+                        .map(|l| (l.name, l.occupant))
+                        .collect();
+                    existing.layers = oa
+                        .layers
+                        .iter()
+                        .map(|name| Layer {
                             name: name.clone(),
-                            occupant: None,
-                        });
-                    }
+                            occupant: carried.remove(name).flatten(),
+                        })
+                        .collect();
                 }
-                existing.layers.retain(|l| oa.layers.contains(&l.name));
-            } else {
-                self.outputs.push(Output {
+                None => self.outputs.push(Output {
                     id: oa.id.clone(),
                     layers: oa
                         .layers
@@ -164,7 +183,7 @@ impl LayerEngine {
                     fps_den: fps.1,
                     frame: 0,
                     late_frames: 0,
-                });
+                }),
             }
         }
     }

@@ -182,13 +182,78 @@ impl Target {
 }
 
 /// Draw one occupant's current frame into the target.
+///
+/// `load` decides whether this draw starts from nothing or composites over the
+/// layer below it, which is what makes a layer STACK rather than a sequence of
+/// mutually erasing pictures.
 pub fn draw(
     gpu: &Gpu,
     renderer: &SceneRenderer,
     inst: &SceneInstance,
     values: &std::collections::BTreeMap<String, f32>,
     target: &Target,
+    load: pmg_render::Load,
 ) {
     let frame_nodes = pmg_render::scene::apply_tracks(inst, values);
-    renderer.render(&gpu.device, &gpu.queue, inst, &frame_nodes, target.view());
+    renderer.render_with(
+        &gpu.device,
+        &gpu.queue,
+        inst,
+        &frame_nodes,
+        target.view(),
+        load,
+    );
+}
+
+/// A renderer per occupied layer, kept across frames.
+///
+/// The renderer owns the glyph atlas and the pipelines, so building one is
+/// expensive and building one PER LAYER PER FRAME is the 17.55 ms mistake from
+/// `docs/INTEGRATION-NOTES.md` wearing a different hat. The first version of the
+/// node's frame loop held a single renderer and rebuilt it whenever the layer
+/// being drawn changed — which is every layer, every frame, the moment a second
+/// layer is occupied.
+#[derive(Default)]
+pub struct RendererCache {
+    /// layer name -> (what it was built for, the renderer)
+    entries: std::collections::HashMap<String, (String, SceneRenderer)>,
+}
+
+impl RendererCache {
+    /// Get the renderer for a layer, rebuilding only if the occupant changed.
+    pub fn get(
+        &mut self,
+        gpu: &Gpu,
+        layer: &str,
+        key: &str,
+        inst: &SceneInstance,
+    ) -> &SceneRenderer {
+        let slot = self.entries.entry(layer.to_string()).or_insert_with(|| {
+            (
+                key.to_string(),
+                SceneRenderer::new(&gpu.device, &gpu.queue, inst),
+            )
+        });
+        if slot.0 != key {
+            *slot = (
+                key.to_string(),
+                SceneRenderer::new(&gpu.device, &gpu.queue, inst),
+            );
+        }
+        &slot.1
+    }
+
+    /// Drop renderers for layers that are no longer occupied, so a cleared
+    /// layer does not hold its atlas for the rest of the service.
+    pub fn retain(&mut self, live: &std::collections::HashSet<String>) {
+        self.entries.retain(|k, _| live.contains(k));
+    }
+
+    pub fn len(&self) -> usize {
+        self.entries.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.entries.is_empty()
+    }
 }

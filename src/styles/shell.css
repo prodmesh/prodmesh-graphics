@@ -231,3 +231,11 @@
   font-size: 0.85rem; display: flex; align-items: center; gap: 0.4rem;
 }
 .design__panel .field input[type="file"] { font-size: 0.8rem; }
+
+.show__group { display: grid; gap: 0.4rem; margin-bottom: 0.9rem; }
+.show__group-head { display: flex; align-items: center; justify-content: space-between; gap: 1rem; }
+.show__group-head h3 {
+  margin: 0; font-size: 0.8rem; text-transform: uppercase;
+  letter-spacing: 0.06em; color: var(--text-dim);
+}
+.btn--small { padding: 0.3rem 0.6rem; font-size: 0.78rem; }

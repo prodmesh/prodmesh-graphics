@@ -53,3 +53,16 @@ pub const TARGET_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
 pub fn selftest() -> Result<(), String> {
     parity::selftest()
 }
+
+/// What a draw does to whatever is already in the target.
+///
+/// The distinction exists because an output is a **stack of layers**, not one
+/// picture: the bottom layer starts from nothing and every layer above it
+/// composites over the result.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Load {
+    /// Start from transparent black.
+    Clear,
+    /// Keep what is there and composite over it, premultiplied source-over.
+    Over,
+}

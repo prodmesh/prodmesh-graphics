@@ -24,6 +24,14 @@
 import { createHash } from 'node:crypto'
 import { handle } from './db.js'
 
+/**
+ * The stack a node gets before anyone has configured it.
+ *
+ * Bottom to top, which is also compositing order: a Bug sits over a Lower
+ * Third, and a Fullscreen covers both.
+ */
+export const DEFAULT_LAYERS = ['Fullscreen', 'Lower Third', 'Bug']
+
 /** Field values → the protocol's closed DataValue set. */
 function toWireData(data) {
   const out = {}
@@ -52,8 +60,18 @@ function canonical(value) {
  * @param {object} opts
  * @param {string[]} opts.layers Layer names, in order. **By name, never index.**
  */
-export function build({ outputId = 'out-0', mode = '1920x1080', layers = ['Lower Third'] } = {}) {
+export function build({ nodeId = null, outputId = 'out-0', mode = '1920x1080', layers = DEFAULT_LAYERS } = {}) {
   const db = handle()
+
+  // Configured outputs win. A node with none yet gets the default stack, so it
+  // is usable the moment it connects rather than needing a trip to Configure
+  // before anything can go on air.
+  const configured = nodeId
+    ? db.prepare('SELECT * FROM outputs WHERE node_id = ? ORDER BY output_id').all(nodeId)
+    : []
+  const outputs = configured.length
+    ? configured.map((o) => ({ id: o.output_id, mode: o.mode, layers: JSON.parse(o.layers) }))
+    : [{ id: outputId, mode, layers }]
 
   const items = db
     .prepare(
@@ -82,7 +100,7 @@ export function build({ outputId = 'out-0', mode = '1920x1080', layers = ['Lower
   const payload = {
     gen: 0, // set by nodeLink, which owns the counter per node
     digest: '',
-    outputs: [{ id: outputId, mode, layers }],
+    outputs,
     templates: templates.map((t) => ({
       template_rev: t.template_rev,
       name: t.name,
@@ -90,13 +108,16 @@ export function build({ outputId = 'out-0', mode = '1920x1080', layers = ['Lower
     })),
     items: items.map((i) => {
       const dest = JSON.parse(i.destination)
+      // An item names its destination; falling back to the first output and
+      // its bottom layer keeps a half-configured rundown usable.
+      const out = outputs.find((o) => o.id === dest.output) ?? outputs[0]
       return {
         id: i.id,
         label: i.label,
         template_rev: i.template_rev,
         data: toWireData(JSON.parse(i.data)),
-        output: dest.output ?? outputId,
-        layer: dest.layer ?? layers[0] ?? null,
+        output: out?.id ?? outputId,
+        layer: dest.layer ?? out?.layers[0] ?? null,
       }
     }),
     assets,
