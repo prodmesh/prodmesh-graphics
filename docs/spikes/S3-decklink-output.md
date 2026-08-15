@@ -1,7 +1,7 @@
 # S3 — DeckLink output from Rust
 
 **Gates:** M0 → M2 · **Risk:** [R4](../RISKS.md#r4) · **ADR:** 0003
-**Status:** output path implemented (2026-08-14); soak blocked on a driver-extension approval + reboot · **Highest-risk spike in M0**
+**Status:** internal-clock leg **PASSED** 2026-08-14 · reference leg and scope confirmation still blocked on a generator · **Highest-risk spike in M0**
 
 ## Question
 
@@ -80,7 +80,44 @@ worth more than the pass/fail:
 Note that M1 outputs NDI specifically so this spike's outcome does not block the
 vertical slice.
 
-## Result — enumeration half, 2026-08-14
+## Result — internal-clock leg PASSED, 2026-08-14
+
+```
+Date:                     2026-08-14
+Hardware:                 DeckLink Quad 2, connector [1], Echo Express SE-I TB3 (Thunderbolt)
+OS / Desktop Video:       macOS 26.3 arm64 / Desktop Video 16.3, SDK 16.0
+Mode tested:              1920x1080p60000/1001, 8-bit BGRA, internal clock
+Late frames in 10 min:    0
+Dropped frames in 10 min: 0
+Frames:                   35964 scheduled, 35964 completed, 599.89s
+Effective rate:           59.951 fps vs 59.940 asked (~0.02%)
+Preroll depth required:   3 frames (header guessed 3-5)
+Buffered depth observed:  steady 7-8 against a pool of 8
+Reference lock behaviour: input present, NOT locked — nothing feeding it
+Key+fill CONFIRMED ON A SCOPE:  no — still outstanding
+Callback thread:          no allocation, no locks, no I/O; counters are relaxed
+                          atomics and the freed pool slot is published through a
+                          single-producer ring with acquire/release
+```
+
+**ADR 0003 is validated for output.** A hand-written C shim over the COM-alike,
+driven from safe Rust, sustains broadcast output without dropping a frame.
+
+Two observations that matter downstream:
+
+- **The frame pool was the limiting resource, not DeckLink.** Buffered depth sat
+  at 7–8 of 8 throughout, meaning the scheduler was always ahead. A render path
+  slower than a memcpy eats into exactly that headroom.
+- **The SDK's `clock_video` pacing is trustworthy** — 0.02% over ten minutes — so
+  the node does not need a timer of its own on this path.
+
+Still outstanding, both needing the reference generator at church:
+
+1. The same soak **locked to blackburst or tri-level**.
+2. **Scope confirmation that a fill+key pair really shares a clock**, before
+   Configure describes one as phase-locked.
+
+## How the output path came to be — notes from writing it
 
 The scheduled-output path is now written (`pmg_dl_output_*` in the shim,
 `decklink_sys::Output` in Rust, `pmgctl decklink out` to drive it). **The soak

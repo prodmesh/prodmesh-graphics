@@ -5,7 +5,7 @@ change that makes something real — not afterwards.
 
 `docs/ROADMAP.md` is where we are going. This is where we are.
 
-**Last updated: 2026-08-14 · milestone M0 · first hardware contact made.**
+**Last updated: 2026-08-14 · milestone M0 · S3's internal-clock leg passed.**
 
 ---
 
@@ -15,13 +15,18 @@ There is no engine, and nothing has rendered a scene. There is a repository with
 a complete design written down, a Cargo workspace of mostly-stub crates, and a
 web app serving an empty four-mode shell.
 
-**But the two vendor boundaries are now real and measured.** NDI sends and
-receives frames with a hand-written, offset-verified binding, and DeckLink
-enumerates and probes actual hardware. Both produced findings that changed the
-code — see `docs/INTEGRATION-NOTES.md`, which is no longer empty.
+**But both vendor boundaries are real, measured, and one of them is proven.** NDI
+sends and receives frames through a hand-written, offset-verified binding.
+DeckLink enumerates, probes, and — as of today — **sustains 1080p59.94 for ten
+minutes with zero late and zero dropped frames**, which validates ADR 0003's
+hand-written-shim approach for output.
 
-The three M0 spikes that would validate ADRs 0001–0003 (S1 render parity, S3
-DeckLink *output*, S6 WebGPU) have still not been run.
+`docs/INTEGRATION-NOTES.md` is no longer empty; six entries came out of one
+afternoon, and three of them were version-skew failures that each presented as
+something other than what they were.
+
+**S1 (render parity) and S6 (WebGPU in the booth) have still not run**, so ADRs
+0001 and 0002 remain bets.
 
 ---
 
@@ -32,7 +37,7 @@ DeckLink *output*, S6 WebGPU) have still not been run.
 | Documentation set | ✅ complete — 15 ADRs, 7 specs, 9 spike briefs |
 | Cargo workspace | 🟡 stubs — all 19 crates compile; `fmt`, `clippy -D warnings`, and the wasm32 pure-set job are green |
 | `pmgctl --selftest` | 🟡 prints `PASS` with **real** assertions in three crates (below); the rest are placeholders |
-| `sys/decklink-sys` | 🟢 enumeration, capability probing, modes, reference — **working against real hardware**. Output is spike S3 |
+| `sys/decklink-sys` | 🟢 enumeration, probing, modes, reference, **and scheduled output — 10 min at 1080p59.94, zero late, zero dropped** |
 | `sys/ndi-sys` | 🟢 runtime loading, find, receive, send — **frames verified in both directions**. ABI asserted statically and at runtime |
 | `pmg-color::patterns` | 🟢 ramp, bars, soft-edge, alpha staircase, moving line — the diagnostic instruments from `output-config.md` §8 |
 | `pmgctl ndi` / `pmgctl decklink` | 🟢 info, probe, send / list, modes, ref |
@@ -74,18 +79,20 @@ assertions is a one-line change rather than a question of where they go.
 
 ## Spike results
 
-None yet. Each brief in `docs/spikes/` has an empty results section that gets
-filled in with dated, hardware-attributed findings when it runs.
+Each brief in `docs/spikes/` carries a results section, filled in with dated,
+hardware-attributed findings when it runs.
 
 | Spike | Status | Gates |
 |---|---|---|
 | S1 render parity | not started | M1 |
-| S3 DeckLink output | not started | M2 |
+| S3 DeckLink output | **internal-clock leg PASSED** 2026-08-14; reference leg blocked on a generator | M2 |
 | S6 WebGPU in browser | not started | M1 |
 | S2, S4, S5, S7, S8, S9 | not started | M3–M5 |
 
-**S1 and S3 are the ones that could invalidate ADRs 0001, 0002, and 0003.** Until
-they run, treat those three decisions as well-reasoned bets, not settled facts.
+**S3 has now largely returned, and it passed** — ADR 0003's hand-written-shim
+approach sustains broadcast output from Rust with zero late frames. **S1 is now
+the one outstanding decision-invalidating spike**: until it runs, treat ADRs 0001
+and 0002 as well-reasoned bets rather than settled facts.
 
 ---
 
@@ -117,11 +124,13 @@ The next three things that matter:
 
 1. **S1 run**, with numbers written into `docs/spikes/S1-render-parity.md` and
    `docs/INTEGRATION-NOTES.md`. Needs `pmg-render` to draw a triangle and a text
-   block — which is the smallest amount of renderer that can answer the
-   question, and deliberately so.
-2. **S3 run** on real DeckLink hardware, with the ten-minute zero-late-frame
-   result confirmed or refuted.
-3. **S6 run** on the actual booth Macs, not a dev laptop.
+   block — the smallest amount of renderer that can answer the question, and
+   deliberately so. **This is now the one outstanding spike that could
+   invalidate a foundational ADR.**
+2. **S6 run** on the actual booth Macs, not a dev laptop.
+3. **S3's remaining legs at church**, where there is a reference generator: the
+   soak locked to blackburst or tri-level, and scope confirmation that a fill+key
+   pair genuinely shares a clock.
 
-Until then ADRs 0001, 0002, and 0003 are well-reasoned bets, and this page says
-so on purpose.
+ADR 0003 is no longer a bet. ADRs 0001 and 0002 still are, and this page says so
+on purpose.

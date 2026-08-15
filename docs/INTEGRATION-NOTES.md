@@ -225,6 +225,49 @@ that silently spans two cards would look completely fine and be out of phase.
 Reference input is **present but not locked** — nothing is feeding it today, so
 outputs would free-run. Spike S4 needs a generator before it can say anything.
 
+### DeckLink scheduled output from Rust holds 1080p59.94 for ten minutes with zero late frames
+*2026-08-14 · MacBook Pro arm64, macOS 26.3 · **Desktop Video 16.3** · DeckLink SDK 16.0 · DeckLink Quad 2, connector [1], Echo Express SE-I TB3*
+
+Spike S3's success bar, met on the internal clock:
+
+```
+scheduled          35964      (10 min at 1920x1080p60000/1001)
+completed          35964
+DISPLAYED LATE     0
+dropped            0
+effective rate     59.951 fps (asked 59.940)
+```
+
+**This is the result that validates ADR 0003.** A hand-written C shim over the
+DeckLink COM-alike, driven from safe Rust, sustains broadcast output without
+dropping a frame. The fallback path was not involved — with 16.3 installed the
+interfaces matched the SDK exactly (`attrs=16.0 status=16.0 output=16.0`).
+
+Measured facts worth keeping:
+
+- **Preroll of 3 frames is sufficient** at 1080p59.94 on this hardware. The
+  header suggested 3–5; 3 held for ten minutes.
+- **Buffered depth sat steady at 7–8** against a pool of 8 for the whole run.
+  The scheduler was always ahead of the hardware, so **the frame pool was the
+  limiting resource, not DeckLink**. If a future render path is slower than a
+  memcpy, that headroom is what it eats into.
+- **Rate accuracy is excellent**: 59.951 vs 59.940 over ten minutes, ~0.02%.
+  With `clock_video` the SDK's pacing is trustworthy and we do not need a timer
+  of our own.
+- The scheduling loop backed off 89,754 times over 35,964 frames — roughly 2.5
+  waits per frame — which is the correct shape: it means we were always waiting
+  on the hardware rather than the hardware waiting on us.
+
+**What this does NOT establish**, and both need a reference generator (the Evertz
+at church — there is none at the house):
+
+1. The same soak **locked to blackburst or tri-level**. The card reports a
+   reference input present but unlocked, so this run was free-running.
+2. **Scope confirmation that a fill+key pair genuinely shares a clock.** The
+   connector-to-card grouping is still a measured heuristic (see the entry
+   below), and Configure must not describe a pair as phase-locked until someone
+   has seen it on a scope.
+
 ### The NDI runtime exports flat C symbols, not just the v5_load table
 *2026-08-14 · MacBook Pro arm64, macOS 26.3 · NDI **6.3.2.0** (SDK APPLE, Apr 13 2026)*
 

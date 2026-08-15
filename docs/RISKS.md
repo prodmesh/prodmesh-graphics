@@ -98,9 +98,11 @@ What will actually break, in order of how much it will hurt:
 
 ## R4 — DeckLink from Rust is a C++ COM-alike, not a C API
 
-**Status:** partially confirmed (2026-08-14) — enumeration and capability probing
-work through the hand-written shim against a real Quad 2; the output path is
-untouched · **Spike:** [S3](spikes/S3-decklink-output.md) · **ADR:** 0003
+**Status:** **largely retired** (2026-08-14) — the shim sustains 1080p59.94 for
+ten minutes with zero late and zero dropped frames on a real Quad 2. ADR 0003 is
+validated for output. What remains is the reference leg and scope confirmation of
+a fill+key pair, both blocked on a generator ·
+**Spike:** [S3](spikes/S3-decklink-output.md) · **ADR:** 0003
 
 > **Found in the doing, and worse than the risk as originally written:** the SDK
 > and the installed *driver* are different versions, and a newer SDK's IIDs are
