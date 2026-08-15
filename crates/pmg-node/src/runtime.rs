@@ -20,6 +20,7 @@ use pmg_proto::DataValue;
 use pmg_scene::doc::SceneDoc;
 use std::collections::BTreeMap;
 use std::sync::mpsc::{Receiver, Sender};
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use crate::engine::{self, LayerEngine, Library};
@@ -102,28 +103,41 @@ pub enum Backend {
     DeckLink(Box<pmg_out_decklink::Sender>),
 }
 
-pub struct Options {
-    pub output_id: String,
+/// One physical output this node drives.
+#[derive(Clone)]
+pub struct OutputSpec {
+    pub id: String,
     pub layers: Vec<String>,
     pub fps: (u32, u32),
-    pub ndi_name: String,
-    /// `ndi` | `decklink`
+    pub width: u32,
+    pub height: u32,
+    /// `ndi` | `decklink` | `headless`
     pub backend: String,
+    pub ndi_name: String,
     pub decklink_device: usize,
     /// Second port for the key half of a fill+key pair.
     pub decklink_key_device: Option<usize>,
     pub decklink_mode: String,
-    pub width: u32,
-    pub height: u32,
+    /// 0 disables this output's preview channel.
+    pub preview_port: u16,
+    /// Which **clock** this output runs on. Outputs naming the same group share
+    /// a render thread, because that is what "phase-locked together" means in
+    /// practice (ADR 0011).
+    ///
+    /// Two outputs on a genlocked card belong in one group. Two outputs on
+    /// unrelated references do not, and pretending otherwise would produce a
+    /// thread pacing itself against a clock half its outputs do not follow.
+    pub group: String,
+}
+
+pub struct Options {
+    pub outputs: Vec<OutputSpec>,
     pub server_http: String,
     pub fallback_font: Option<Vec<u8>>,
-    pub headless: bool,
-    /// 0 disables the preview channel entirely.
-    pub preview_port: u16,
 }
 
 pub struct Runtime {
-    engine: LayerEngine,
+    engine: Arc<Mutex<LayerEngine>>,
     assigned: Assigned,
     store: Store,
     fetcher: Fetcher,
@@ -134,17 +148,24 @@ impl Runtime {
     pub fn new(store: Store, opts: Options) -> Self {
         let fetcher = Fetcher::new(&opts.server_http);
         let mut engine = LayerEngine::new();
-        engine.configure(
-            &[pmg_proto::OutputAssignment {
-                id: opts.output_id.clone(),
-                mode: format!("{}x{}", opts.width, opts.height),
-                color: Default::default(),
-                layers: opts.layers.clone(),
-            }],
-            opts.fps,
-        );
+        // Seed from the command line so the node is usable before a server has
+        // said anything. The assignment overrides this the moment one arrives.
+        for o in &opts.outputs {
+            engine.configure(
+                &[pmg_proto::OutputAssignment {
+                    id: o.id.clone(),
+                    mode: format!("{}x{}", o.width, o.height),
+                    color: Default::default(),
+                    layers: o.layers.clone(),
+                }],
+                o.fps,
+            );
+        }
+        // From here on the assignment may configure these outputs but not add
+        // to them: the node knows its own wiring, the server does not.
+        engine.seal_outputs();
         Self {
-            engine,
+            engine: Arc::new(Mutex::new(engine)),
             assigned: Assigned {
                 templates: BTreeMap::new(),
                 items: BTreeMap::new(),
@@ -166,8 +187,20 @@ impl Runtime {
     /// only runs during an outage, which is the worst possible time to find a
     /// bug in it.
     pub fn adopt(&mut self, a: &pmg_proto::Assignment, tx: Option<&Sender<ToLink>>) {
-        self.engine.gen = a.gen;
-        self.engine.configure(&a.outputs, self.opts.fps);
+        {
+            let mut e = self.engine.lock().unwrap();
+            e.gen = a.gen;
+            // Each output keeps the frame rate its own spec named; the
+            // assignment says which LAYERS an output has, not what clock it
+            // runs on — that is a property of the wiring, not of the content.
+            let fps = self
+                .opts
+                .outputs
+                .first()
+                .map(|o| o.fps)
+                .unwrap_or((60000, 1001));
+            e.configure(&a.outputs, fps);
+        }
 
         // Stage what is missing. Over HTTP, never the control socket.
         let missing: Vec<String> = a
@@ -305,240 +338,115 @@ impl Runtime {
         Ok(pmg_scene::cbor::from_canonical(&bytes)?)
     }
 
-    /// The frame loop. Runs until the link channel closes.
+    /// Run the node: a render thread per output group, and this thread owning
+    /// the engine and the link.
+    ///
+    /// # Why a thread per GROUP and not per output
+    ///
+    /// An output group is a set of outputs sharing a clock (ADR 0011), so one
+    /// thread pumped by that clock drives all of them in step. Giving each
+    /// output its own thread would mean two threads pacing themselves against
+    /// the same hardware clock and drifting apart in software for no reason;
+    /// giving every output ONE thread would mean an output on a different
+    /// reference waiting for a clock it does not follow.
+    ///
+    /// The threading model is therefore decided by the plant's wiring, not by
+    /// how many outputs there happen to be.
     pub fn run(&mut self, rx: Receiver<FromLink>, tx: Sender<ToLink>) -> Result<()> {
-        let gpu = Gpu::open()?;
-        tracing::info!(adapter = %gpu.adapter_name, backend = %gpu.backend, "gpu");
-        let target = Target::new(&gpu, self.opts.width, self.opts.height)?;
+        let mut groups: BTreeMap<String, Vec<OutputSpec>> = BTreeMap::new();
+        for o in &self.opts.outputs {
+            groups.entry(o.group.clone()).or_default().push(o.clone());
+        }
+        tracing::info!(
+            outputs = self.opts.outputs.len(),
+            groups = groups.len(),
+            "starting render threads"
+        );
 
-        let backend = if self.opts.headless {
-            Backend::Headless
-        } else if self.opts.backend == "decklink" {
-            let s = pmg_out_decklink::Sender::open(&pmg_out_decklink::Config {
-                device_index: self.opts.decklink_device,
-                key_device_index: self.opts.decklink_key_device,
-                mode: self.opts.decklink_mode.clone(),
-                // Two ordinary outputs, driven in step by us — not the card's
-                // hardware pairing. Works on any two SDI outs.
-                key_mode: pmg_out_decklink::KeyMode::FillOnly,
-                preroll: 3,
-            })?;
-            let (w, h) = s.size();
-            if (w, h) != (self.opts.width, self.opts.height) {
-                // Refuse rather than scale. A silently letterboxed graphic is a
-                // worse discovery than a node that would not start.
-                anyhow::bail!(
-                    "the display mode is {w}x{h} but this node renders {}x{}. Set --size to match.",
-                    self.opts.width,
-                    self.opts.height
-                );
-            }
-            tracing::info!(
-                device = self.opts.decklink_device,
-                mode = %self.opts.decklink_mode,
-                key = ?self.opts.decklink_key_device,
-                "DeckLink output open"
+        let engine = self.engine.clone();
+        let stop = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let mut handles = Vec::new();
+
+        for (name, specs) in groups {
+            let engine = engine.clone();
+            let stop = stop.clone();
+            let group_name = name.clone();
+            handles.push(
+                std::thread::Builder::new()
+                    .name(format!("pmg-out-{name}"))
+                    .spawn(move || {
+                        if let Err(e) = render_group(&group_name, &specs, engine, stop) {
+                            // A dead output must be loud. It is also not a
+                            // reason to take the others down.
+                            tracing::error!(group = %group_name, error = %e, "render group stopped");
+                        }
+                    })?,
             );
-            Backend::DeckLink(Box::new(s))
-        } else {
-            Backend::Ndi(pmg_out_ndi::Sender::open(
-                &self.opts.ndi_name,
-                self.opts.width,
-                self.opts.height,
-                self.opts.fps.0 as i32,
-                self.opts.fps.1 as i32,
-            )?)
-        };
+        }
 
-        // One renderer per occupied layer, kept across frames. See RendererCache
-        // — a single shared renderer would be rebuilt once per layer per frame
-        // the moment two layers are occupied.
-        let mut renderers = crate::render::RendererCache::default();
-
-        // The preview channel: its own thread, its own port, its own
-        // connection. `offer` never blocks — a stalled viewer must not be able
-        // to reach back and cost a frame on air.
-        let preview = if self.opts.preview_port == 0 {
-            None
-        } else {
-            match pmg_preview::Preview::start(pmg_preview::Config {
-                source_width: self.opts.width,
-                source_height: self.opts.height,
-                port: self.opts.preview_port,
-                ..Default::default()
-            }) {
-                Ok(p) => {
-                    let (w, h) = p.size();
-                    tracing::info!(port = self.opts.preview_port, w, h, "preview channel open");
-                    Some(p)
-                }
-                Err(e) => {
-                    // A preview that cannot start is not a reason to refuse to
-                    // play. It is a monitoring feature.
-                    tracing::warn!(error = %e, "preview channel unavailable");
-                    None
-                }
-            }
-        };
         let mut last_state = Instant::now();
-        let mut frame_counter: u64 = 0;
-        let mut worst_ms = 0.0f64;
-        let budget_ms = 1000.0 / (self.opts.fps.0 as f64 / self.opts.fps.1 as f64);
-        let output_id = self.opts.output_id.clone();
-
         loop {
-            // --- messages -------------------------------------------------
-            loop {
-                match rx.try_recv() {
-                    Ok(FromLink::Connected { epoch }) => {
-                        self.engine.set_epoch(epoch);
-                        let _ = tx.send(ToLink::State(self.engine.state_report()));
-                    }
-                    Ok(FromLink::Tick) => {
-                        let _ = tx.send(ToLink::State(self.engine.state_report()));
-                    }
-                    Ok(FromLink::Disconnected) => {
-                        // Deliberately nothing. What is on air stays on air.
-                        tracing::warn!("link down — still playing");
-                    }
-                    Ok(FromLink::Assignment(a)) => {
-                        // Persist FIRST, then adopt, then ack. Acking before
-                        // the fsync would mean claiming durability we do not
-                        // have (ADR 0009).
-                        match self.store.save_assignment(&a) {
-                            Ok(()) => {
-                                self.adopt(&a, Some(&tx));
-                                let _ = tx.send(ToLink::AssignmentSaved { gen: a.gen });
-                            }
-                            Err(e) => {
-                                tracing::error!(error = %e, "could not persist assignment; NOT acking")
-                            }
+            match rx.recv_timeout(Duration::from_millis(200)) {
+                Ok(FromLink::Connected { epoch }) => {
+                    self.engine.lock().unwrap().set_epoch(epoch);
+                    let _ = tx.send(ToLink::State(self.engine.lock().unwrap().state_report()));
+                }
+                Ok(FromLink::Tick) => {
+                    let _ = tx.send(ToLink::State(self.engine.lock().unwrap().state_report()));
+                }
+                Ok(FromLink::Disconnected) => {
+                    // Deliberately nothing. What is on air stays on air.
+                    tracing::warn!("link down — still playing");
+                }
+                Ok(FromLink::Assignment(a)) => {
+                    // Persist FIRST, then adopt, then ack. Acking before the
+                    // fsync would claim durability we do not have (ADR 0009).
+                    match self.store.save_assignment(&a) {
+                        Ok(()) => {
+                            self.adopt(&a, Some(&tx));
+                            let _ = tx.send(ToLink::AssignmentSaved { gen: a.gen });
+                        }
+                        Err(e) => {
+                            tracing::error!(error = %e, "could not persist assignment; NOT acking")
                         }
                     }
-                    Ok(FromLink::Cue(c)) => {
-                        let ack =
-                            self.engine
-                                .apply(&c, &self.assigned, crate::link::now_ms(), false);
-                        tracing::info!(cue = %c.cue_id, result = ?ack.result, reason = ?ack.reason, "cue");
-                        let _ = tx.send(ToLink::Ack(ack));
-                        let _ = tx.send(ToLink::State(self.engine.state_report()));
-                    }
-                    Ok(FromLink::Resync(reason)) => {
-                        tracing::warn!(%reason, "server asked for a resync");
-                    }
-                    Err(std::sync::mpsc::TryRecvError::Empty) => break,
-                    Err(std::sync::mpsc::TryRecvError::Disconnected) => return Ok(()),
                 }
-            }
-
-            // --- one frame -------------------------------------------------
-            let t0 = Instant::now();
-
-            // Composite the stack bottom to top. The FIRST occupied layer
-            // clears; every layer above it composites over the result. Drawing
-            // each with a clear — which is what the single-layer path did —
-            // means only the topmost layer survives, and the symptom is a Bug
-            // silently erasing the Lower Third beneath it.
-            let mut live: std::collections::HashSet<String> = std::collections::HashSet::new();
-            let mut drawn = 0usize;
-
-            if let Some(out) = self.engine.outputs.iter().find(|o| o.id == output_id) {
-                for layer in &out.layers {
-                    let Some(occ) = &layer.occupant else { continue };
-                    live.insert(layer.name.clone());
-                    let key = format!("{}|{}", occ.armed.item_id, occ.armed.template_rev);
-                    let renderer = renderers.get(&gpu, &layer.name, &key, &occ.armed.instance);
-                    let values = engine::frame_values(occ);
-                    let load = if drawn == 0 {
-                        pmg_render::Load::Clear
-                    } else {
-                        pmg_render::Load::Over
+                Ok(FromLink::Cue(c)) => {
+                    // Arming happens under the engine lock, which briefly stalls
+                    // every render thread. An arm is 0.3–2 ms against a 16.68 ms
+                    // budget and a take is a few times a minute, so it costs at
+                    // most one late frame on a take — measured, not assumed, in
+                    // the M3c notes. Moving the arm outside the lock is the
+                    // obvious next step if that ever shows up on air.
+                    let ack = {
+                        let mut e = self.engine.lock().unwrap();
+                        e.apply(&c, &self.assigned, crate::link::now_ms(), false)
                     };
-                    crate::render::draw(
-                        &gpu,
-                        renderer,
-                        &occ.armed.instance,
-                        &values,
-                        &target,
-                        load,
-                    );
-                    drawn += 1;
+                    tracing::info!(cue = %c.cue_id, result = ?ack.result, reason = ?ack.reason, "cue");
+                    let _ = tx.send(ToLink::Ack(ack));
+                    let _ = tx.send(ToLink::State(self.engine.lock().unwrap().state_report()));
                 }
-            }
-
-            // Nothing on air: the output must still be transparent black rather
-            // than the last frame that was drawn into it.
-            if drawn == 0 {
-                target.clear(&gpu);
-            }
-
-            // A test pattern replaces the whole output, above the stack. It is
-            // generated on the CPU and uploaded rather than rendered as a
-            // scene: these are instruments, and they must be exactly the values
-            // the spec names rather than whatever the render path does to them.
-            let pattern = self
-                .engine
-                .outputs
-                .iter()
-                .find(|o| o.id == output_id)
-                .and_then(|o| o.test_pattern.clone());
-            // A cleared layer must not hold its atlas for the rest of the
-            // service.
-            renderers.retain(&live);
-
-            let mut rgba = target.read(&gpu)?;
-            if let Some(name) = &pattern {
-                if let Some(p) = pmg_color::patterns::Pattern::parse(name) {
-                    let f = pmg_color::patterns::render(
-                        p,
-                        self.opts.width,
-                        self.opts.height,
-                        frame_counter,
-                    );
-                    // The pattern generator produces STRAIGHT values, which is
-                    // what the alpha-staircase pattern needs to mean anything;
-                    // the output boundary expects premultiplied like everything
-                    // else, so it is converted here rather than special-cased
-                    // downstream.
-                    rgba = pmg_color::patterns::to_rgba8_premultiplied(&f);
+                Ok(FromLink::Resync(reason)) => {
+                    tracing::warn!(%reason, "server asked for a resync");
                 }
+                Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
+                Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break,
             }
-            frame_counter += 1;
-            let ms = t0.elapsed().as_secs_f64() * 1000.0;
-            if ms > worst_ms {
-                worst_ms = ms;
-            }
-            if ms > budget_ms {
-                if let Some(o) = self.engine.outputs.iter_mut().find(|o| o.id == output_id) {
-                    o.late_frames += 1;
-                }
-            }
-
-            match &backend {
-                // NDI was opened with clock_video, so this call is what paces
-                // the loop. No timer of our own, and none wanted here.
-                Backend::Ndi(n) => n.send_rgba_premultiplied(&rgba)?,
-                // DeckLink schedules against its own clock and blocks when the
-                // queue is full, which paces the loop the same way — but for a
-                // different reason, and against a clock that can be genlocked.
-                Backend::DeckLink(d) => d.send_rgba_premultiplied(&rgba)?,
-                Backend::Headless => std::thread::sleep(Duration::from_millis(budget_ms as u64)),
-            }
-
-            if let Some(p) = &preview {
-                p.offer(&rgba);
-            }
-
-            self.engine.tick(&output_id);
 
             if last_state.elapsed() >= Duration::from_millis(500) {
                 last_state = Instant::now();
-                let _ = tx.send(ToLink::State(self.engine.state_report()));
+                let _ = tx.send(ToLink::State(self.engine.lock().unwrap().state_report()));
             }
         }
+
+        stop.store(true, std::sync::atomic::Ordering::Relaxed);
+        for h in handles {
+            let _ = h.join();
+        }
+        Ok(())
     }
 
-    pub fn engine(&self) -> &LayerEngine {
+    pub fn engine(&self) -> &Arc<Mutex<LayerEngine>> {
         &self.engine
     }
 }
@@ -559,4 +467,190 @@ fn looks_like_a_font(b: &[u8]) -> bool {
         b.get(0..4),
         Some(b"\x00\x01\x00\x00") | Some(b"true") | Some(b"OTTO") | Some(b"ttcf") | Some(b"wOFF")
     )
+}
+
+/// One output group: its own GPU device, its own backends, its own clock.
+///
+/// Locks the engine only long enough to take a **snapshot** of what each of its
+/// outputs should be showing — an `Arc<SceneInstance>` plus this frame's
+/// timeline values — and then draws with the lock released. Holding it across a
+/// draw would serialise every group into one thread wearing several hats.
+fn render_group(
+    group: &str,
+    specs: &[OutputSpec],
+    engine: Arc<Mutex<LayerEngine>>,
+    stop: Arc<std::sync::atomic::AtomicBool>,
+) -> Result<()> {
+    let gpu = Gpu::open()?;
+    tracing::info!(group, adapter = %gpu.adapter_name, outputs = specs.len(), "render group up");
+
+    struct Live {
+        spec: OutputSpec,
+        target: Target,
+        backend: Backend,
+        renderers: crate::render::RendererCache,
+        preview: Option<pmg_preview::Preview>,
+        frame: u64,
+    }
+
+    let mut outputs = Vec::new();
+    for spec in specs {
+        let target = Target::new(&gpu, spec.width, spec.height)?;
+        let backend = open_backend(spec)?;
+        let preview = if spec.preview_port == 0 {
+            None
+        } else {
+            match pmg_preview::Preview::start(pmg_preview::Config {
+                source_width: spec.width,
+                source_height: spec.height,
+                port: spec.preview_port,
+                ..Default::default()
+            }) {
+                Ok(p) => Some(p),
+                Err(e) => {
+                    // A preview that cannot start is not a reason to refuse to
+                    // play. It is a monitoring feature.
+                    tracing::warn!(output = %spec.id, error = %e, "preview unavailable");
+                    None
+                }
+            }
+        };
+        outputs.push(Live {
+            spec: spec.clone(),
+            target,
+            backend,
+            renderers: crate::render::RendererCache::default(),
+            preview,
+            frame: 0,
+        });
+    }
+
+    while !stop.load(std::sync::atomic::Ordering::Relaxed) {
+        for out in &mut outputs {
+            let budget_ms = 1000.0 / (out.spec.fps.0 as f64 / out.spec.fps.1 as f64);
+            let t0 = Instant::now();
+
+            // --- snapshot, under the lock, briefly ------------------------
+            let (plan, pattern) = {
+                let e = engine.lock().unwrap();
+                let Some(o) = e.outputs.iter().find(|o| o.id == out.spec.id) else {
+                    continue;
+                };
+                let plan: Vec<(String, String, Arc<pmg_render::scene::SceneInstance>, _)> = o
+                    .layers
+                    .iter()
+                    .filter_map(|l| {
+                        l.occupant.as_ref().map(|occ| {
+                            (
+                                l.name.clone(),
+                                format!("{}|{}", occ.armed.item_id, occ.armed.template_rev),
+                                occ.armed.instance.clone(),
+                                engine::frame_values(occ),
+                            )
+                        })
+                    })
+                    .collect();
+                (plan, o.test_pattern.clone())
+            };
+
+            // --- draw, with the lock released -----------------------------
+            let mut live = std::collections::HashSet::new();
+            for (i, (layer, key, inst, values)) in plan.iter().enumerate() {
+                live.insert(layer.clone());
+                let renderer = out.renderers.get(&gpu, layer, key, inst);
+                let load = if i == 0 {
+                    pmg_render::Load::Clear
+                } else {
+                    pmg_render::Load::Over
+                };
+                crate::render::draw(&gpu, renderer, inst, values, &out.target, load);
+            }
+            if plan.is_empty() {
+                out.target.clear(&gpu);
+            }
+            out.renderers.retain(&live);
+
+            let mut rgba = out.target.read(&gpu)?;
+            if let Some(name) = &pattern {
+                if let Some(p) = pmg_color::patterns::Pattern::parse(name) {
+                    let f =
+                        pmg_color::patterns::render(p, out.spec.width, out.spec.height, out.frame);
+                    // The generator works in STRAIGHT alpha, which is the only
+                    // way the alpha staircase means anything; the boundary
+                    // wants premultiplied like every other frame.
+                    rgba = pmg_color::patterns::to_rgba8_premultiplied(&f);
+                }
+            }
+            out.frame += 1;
+
+            let ms = t0.elapsed().as_secs_f64() * 1000.0;
+            if ms > budget_ms {
+                if let Ok(mut e) = engine.lock() {
+                    if let Some(o) = e.outputs.iter_mut().find(|o| o.id == out.spec.id) {
+                        o.late_frames += 1;
+                    }
+                }
+            }
+
+            match &out.backend {
+                // NDI is opened with clock_video, so this call paces the loop.
+                Backend::Ndi(n) => n.send_rgba_premultiplied(&rgba)?,
+                // DeckLink schedules against its own clock and blocks when the
+                // queue is full — the same pacing, against a clock that can be
+                // genlocked.
+                Backend::DeckLink(d) => d.send_rgba_premultiplied(&rgba)?,
+                Backend::Headless => std::thread::sleep(Duration::from_millis(budget_ms as u64)),
+            }
+
+            if let Some(p) = &out.preview {
+                p.offer(&rgba);
+            }
+        }
+
+        // Tick every output in this group together, which is what sharing a
+        // clock means: their timelines advance on the same beat.
+        if let Ok(mut e) = engine.lock() {
+            for out in &outputs {
+                e.tick(&out.spec.id);
+            }
+        }
+    }
+    Ok(())
+}
+
+fn open_backend(spec: &OutputSpec) -> Result<Backend> {
+    match spec.backend.as_str() {
+        "headless" => Ok(Backend::Headless),
+        "decklink" => {
+            let s = pmg_out_decklink::Sender::open(&pmg_out_decklink::Config {
+                device_index: spec.decklink_device,
+                key_device_index: spec.decklink_key_device,
+                mode: spec.decklink_mode.clone(),
+                key_mode: pmg_out_decklink::KeyMode::FillOnly,
+                preroll: 3,
+            })?;
+            let (w, h) = s.size();
+            if (w, h) != (spec.width, spec.height) {
+                // Refuse rather than scale. A silently letterboxed graphic is a
+                // worse discovery than an output that would not start.
+                anyhow::bail!(
+                    "{}: the display mode is {w}x{h} but this output renders {}x{}",
+                    spec.id,
+                    spec.width,
+                    spec.height
+                );
+            }
+            tracing::info!(output = %spec.id, device = spec.decklink_device,
+                           mode = %spec.decklink_mode, key = ?spec.decklink_key_device,
+                           "DeckLink output open");
+            Ok(Backend::DeckLink(Box::new(s)))
+        }
+        _ => Ok(Backend::Ndi(pmg_out_ndi::Sender::open(
+            &spec.ndi_name,
+            spec.width,
+            spec.height,
+            spec.fps.0 as i32,
+            spec.fps.1 as i32,
+        )?)),
+    }
 }

@@ -36,7 +36,12 @@ pub struct Armed {
     pub item_id: String,
     pub item_label: String,
     pub template_rev: String,
-    pub instance: SceneInstance,
+    /// Shared, so a render thread can take a reference and draw **without
+    /// holding the engine lock**. With several output groups each on their own
+    /// thread (ADR 0011), holding the lock across a draw would serialise them
+    /// into one — and arming under that same lock would stall every output for
+    /// the 0.3–2 ms an arm costs.
+    pub instance: std::sync::Arc<SceneInstance>,
     pub in_ms: f64,
     pub out_ms: f64,
     pub doc: SceneDoc,
@@ -126,6 +131,9 @@ pub struct LayerEngine {
     /// double-click, a bouncing GPI contact, and an HTTP retry all safe.
     applied: std::collections::HashSet<String>,
     pub epoch: u64,
+    /// Set once the node's own outputs are in place, after which the assignment
+    /// may only configure them and never add to them.
+    seeded: bool,
 }
 
 impl LayerEngine {
@@ -136,7 +144,16 @@ impl LayerEngine {
             gen: 0,
             applied: std::collections::HashSet::new(),
             epoch: 0,
+            seeded: false,
         }
+    }
+
+    /// Declare the outputs this node physically drives.
+    ///
+    /// After this, `configure` may only adjust them — the server cannot invent
+    /// an output that has no wire behind it.
+    pub fn seal_outputs(&mut self) {
+        self.seeded = true;
     }
 
     /// A new server epoch invalidates the idempotency keys, because `seq`
@@ -184,6 +201,21 @@ impl LayerEngine {
                             occupant: carried.remove(name).flatten(),
                         })
                         .collect();
+                }
+                // An output this node does not physically have.
+                //
+                // **The node is authoritative about what outputs exist**;
+                // capabilities are discovered, never configured. The server
+                // assigns LAYERS to an output, it does not bring one into
+                // being — and creating one here produced a phantom that
+                // reported 59.94 fps and zero late frames with no render
+                // thread behind it, which is worse than an error because it
+                // looks healthy.
+                None if self.seeded => {
+                    tracing::warn!(
+                        output = %oa.id,
+                        "the assignment names an output this node does not have; ignoring it"
+                    );
                 }
                 None => self.outputs.push(Output {
                     id: oa.id.clone(),
@@ -427,7 +459,7 @@ impl LayerEngine {
             out_ms: timeline::find(doc, "Out")
                 .map(|t| t.duration_ms as f64)
                 .unwrap_or(0.0),
-            instance,
+            instance: std::sync::Arc::new(instance),
             doc: doc.clone(),
         })
     }

@@ -54,7 +54,12 @@ USAGE:
     --state-dir <path>     Where identity, assignment, and the CAS live.
                            Default ./var/node
     --name <name>          Display name. Default: this machine's hostname.
-    --output <id>          Output id. Default out-0
+    --output <spec>        Repeatable. key=value,key=value — keys: id, backend,
+                           group, name, mode, device, key, preview, layers
+                           (semicolon-separated), size, fps. Replaces the plain
+                           output flags entirely when given.
+                           e.g. --output id=sdi,backend=decklink,device=1,key=3,group=ref
+    --output-id <id>       Id for the single default output. Default out-0
     --layers <a,b,c>       Layer names, in order. Default \"Lower Third\"
     --size <WxH>           Default 1920x1080
     --fps <N/D>            Default 60000/1001
@@ -69,6 +74,80 @@ USAGE:
     --headless             Render and time frames, but send nothing.
     --preview-port <n>     MJPEG preview. Default 8521; 0 disables it.
 ";
+
+/// Parse one `--output key=value,key=value` spec.
+///
+/// Unknown keys are an ERROR, not ignored. A typo'd `preveiw=8521` that
+/// silently leaves the preview on its default is the kind of thing discovered
+/// during a service.
+fn parse_output(
+    spec: &str,
+    index: usize,
+    default_layers: &[String],
+    default_fps: (u32, u32),
+    default_w: u32,
+    default_h: u32,
+) -> Result<runtime::OutputSpec> {
+    let mut out = runtime::OutputSpec {
+        id: format!("out-{index}"),
+        layers: default_layers.to_vec(),
+        fps: default_fps,
+        width: default_w,
+        height: default_h,
+        backend: "ndi".into(),
+        ndi_name: format!("ProdMesh Graphics {index}"),
+        decklink_device: 0,
+        decklink_key_device: None,
+        decklink_mode: "1080p59.94".into(),
+        preview_port: pmg_preview::PREVIEW_PORT + index as u16,
+        // Its own group unless told otherwise: assuming two outputs share a
+        // clock when they do not would pace one against a reference it does not
+        // follow (ADR 0011).
+        group: format!("g{index}"),
+    };
+
+    for pair in spec.split(',') {
+        let pair = pair.trim();
+        if pair.is_empty() {
+            continue;
+        }
+        let (k, v) = pair
+            .split_once('=')
+            .with_context(|| format!("{pair:?} is not key=value in --output {spec:?}"))?;
+        match k.trim() {
+            "id" => out.id = v.into(),
+            "backend" => out.backend = v.into(),
+            "group" => out.group = v.into(),
+            "name" => out.ndi_name = v.into(),
+            "mode" => out.decklink_mode = v.into(),
+            "device" => out.decklink_device = v.parse().context("device must be a number")?,
+            "key" => out.decklink_key_device = Some(v.parse().context("key must be a number")?),
+            "preview" => out.preview_port = v.parse().context("preview must be a port")?,
+            // Semicolons, because commas already separate the pairs.
+            "layers" => {
+                out.layers = v
+                    .split(';')
+                    .map(|s| s.trim().to_string())
+                    .filter(|s| !s.is_empty())
+                    .collect()
+            }
+            "size" => {
+                let (a, b) = v.split_once('x').context("size looks like 1920x1080")?;
+                out.width = a.parse()?;
+                out.height = b.parse()?;
+            }
+            "fps" => {
+                let (a, b) = v.split_once('/').context("fps looks like 60000/1001")?;
+                out.fps = (a.parse()?, b.parse()?);
+            }
+            other => anyhow::bail!(
+                "unknown --output key {other:?}. Known: id, backend, group, name, mode, \
+                 device, key, preview, layers, size, fps"
+            ),
+        }
+    }
+    Ok(out)
+}
 
 fn arg(args: &[String], flag: &str) -> Option<String> {
     args.iter()
@@ -146,35 +225,72 @@ fn main() -> Result<()> {
         None => None,
     };
 
-    let opts = runtime::Options {
-        output_id: arg(&args, "--output").unwrap_or_else(|| "out-0".into()),
-        layers,
-        fps,
-        ndi_name: arg(&args, "--ndi-name").unwrap_or_else(|| "ProdMesh Graphics".into()),
-        backend: arg(&args, "--backend").unwrap_or_else(|| "ndi".into()),
-        decklink_device: arg(&args, "--decklink")
-            .and_then(|s| s.parse().ok())
-            .unwrap_or(0),
-        decklink_key_device: arg(&args, "--decklink-key").and_then(|s| s.parse().ok()),
-        decklink_mode: arg(&args, "--decklink-mode").unwrap_or_else(|| "1080p59.94".into()),
-        width: w,
-        height: h,
-        server_http: format!("http://{server}"),
-        fallback_font,
-        headless: args.iter().any(|a| a == "--headless"),
-        preview_port: arg(&args, "--preview-port")
-            .and_then(|s| s.parse().ok())
-            .unwrap_or(pmg_preview::PREVIEW_PORT),
+    // One output from the plain flags, or several from repeated --output.
+    //
+    // The plain flags stay because a single NDI output is the common case and
+    // `--output id=…,backend=…` for it would be ceremony. They describe output
+    // zero; --output replaces them entirely rather than layering on top, so
+    // there is never a question about which one won.
+    let specs: Vec<String> = args
+        .iter()
+        .enumerate()
+        .filter(|(_, a)| a.as_str() == "--output")
+        .filter_map(|(i, _)| args.get(i + 1).cloned())
+        .collect();
+
+    let outputs = if specs.is_empty() {
+        vec![runtime::OutputSpec {
+            id: arg(&args, "--output-id").unwrap_or_else(|| "out-0".into()),
+            layers,
+            fps,
+            width: w,
+            height: h,
+            backend: if args.iter().any(|a| a == "--headless") {
+                "headless".into()
+            } else {
+                arg(&args, "--backend").unwrap_or_else(|| "ndi".into())
+            },
+            ndi_name: arg(&args, "--ndi-name").unwrap_or_else(|| "ProdMesh Graphics".into()),
+            decklink_device: arg(&args, "--decklink")
+                .and_then(|s| s.parse().ok())
+                .unwrap_or(0),
+            decklink_key_device: arg(&args, "--decklink-key").and_then(|s| s.parse().ok()),
+            decklink_mode: arg(&args, "--decklink-mode").unwrap_or_else(|| "1080p59.94".into()),
+            preview_port: arg(&args, "--preview-port")
+                .and_then(|s| s.parse().ok())
+                .unwrap_or(pmg_preview::PREVIEW_PORT),
+            group: "default".into(),
+        }]
+    } else {
+        specs
+            .iter()
+            .enumerate()
+            .map(|(i, spec)| parse_output(spec, i, &layers, fps, w, h))
+            .collect::<Result<Vec<_>>>()?
     };
 
     println!("pmg-node  {}  ({})", identity.name, identity.node_id);
     println!("  server     {server}");
     println!("  state      {state_dir}");
-    println!(
-        "  output     {} {}x{} @ {}/{}",
-        opts.output_id, w, h, fps.0, fps.1
-    );
-    println!("  layers     {}", opts.layers.join(", "));
+    for o in &outputs {
+        println!(
+            "  output     {} {}x{} @ {}/{} · {} · group {} · layers {}",
+            o.id,
+            o.width,
+            o.height,
+            o.fps.0,
+            o.fps.1,
+            o.backend,
+            o.group,
+            o.layers.join(", ")
+        );
+    }
+
+    let opts = runtime::Options {
+        outputs,
+        server_http: format!("http://{server}"),
+        fallback_font,
+    };
 
     let mut rt = runtime::Runtime::new(store::Store::open(&state_dir)?, opts);
 

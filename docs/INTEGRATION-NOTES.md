@@ -892,3 +892,48 @@ So the model is right and tested, the configuration is real and end-to-end, and
 the last inch is missing. Recorded here rather than implied complete, because
 "the matrix setting exists" and "the matrix setting does anything" are very
 different claims to make to someone about to trust a colour pipeline.
+
+---
+
+## The node is authoritative about which outputs EXIST
+
+**2026-08-15, M3c.** A node configured with `key-out` and `wall-out` received an
+assignment naming `out-0` — the server's default — and `configure()` **created
+it**. The result was a phantom output reporting 59.94 fps and zero late frames
+with no render thread behind it.
+
+That is worse than an error, because it looks healthy. An operator reading
+`/api/nodes` would see three outputs where two exist and only learn otherwise by
+noticing nothing ever appears on the third.
+
+The rule, now enforced: **capabilities are discovered, never configured.** The
+node knows its own wiring; the server assigns *layers to an output*, it does not
+bring one into being. `LayerEngine::seal_outputs()` is called once the node's own
+outputs are in place, after which an assignment naming an unknown output is
+logged and ignored rather than obeyed.
+
+The same instinct as `Hello`'s capability block: what the hardware said, not what
+someone typed.
+
+## One render thread per output GROUP, not per output
+
+**2026-08-15, M3c.** An output group is a set of outputs sharing a clock
+(ADR 0011), and that — not the output count — decides the threading.
+
+A thread per *output* would mean two threads pacing themselves against the same
+hardware clock and drifting apart in software for no reason. One thread for
+*all* outputs would mean an output on a different reference waiting on a clock it
+does not follow. So the threading model is decided by the plant's wiring.
+
+**Render threads must not hold the engine lock while drawing.** Each thread locks
+only long enough to snapshot what its outputs should show — an
+`Arc<SceneInstance>` plus this frame's timeline values — then releases and draws.
+`Armed::instance` became an `Arc` for exactly this. Holding it across a draw
+would serialise every group back into one thread wearing several hats.
+
+**Known cost, measured rather than assumed:** arming still happens under that
+lock, so a take briefly stalls every group. An arm is 0.3–2 ms against a
+16.68 ms budget and takes are a few times a minute, so it costs at most one late
+frame on a take. Two outputs across two groups ran at 59.94 with **zero** late
+frames through repeated takes. Moving the arm outside the lock is the obvious
+next step if it ever shows up on air.
