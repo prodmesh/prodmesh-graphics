@@ -1292,3 +1292,51 @@ the same mistake — suppressing errors to make it robust:
 
 Each looked like a timeout. `curl -f` and `|| true` are how a failing step
 becomes a slow one.
+
+## NDI audio: two structs one letter apart, and only one of them is the send shape
+*2026-08-15 · NDI runtime 6.3.2.0 (Apple) · M3e*
+
+NDI carries **planar float**; everything upstream here is interleaved 32-bit
+integer. Three things about closing that gap were not guessable.
+
+**`NDIlib_util_send_send_audio_interleaved_32s` does not exist.** `nm` on the
+6.3.2.0 runtime exports the `from_interleaved` converters and
+`send_send_audio_v2`, and no combined helper. So the path is convert, then send.
+The conversion is left to the SDK rather than written here, because it also
+applies NDI's reference-level convention — and picking that wrong is a feed
+20 dB hot or quiet with nothing reporting an error. `reference_level: 0` is
+correct for material already at the level it is meant to be: measured, a tone
+sent at 0.25 full scale came back at **−12.0 dBFS** against −12.04 expected.
+
+**`NDIlib_recv_capture_v3` takes an audio *v3* frame, not v2.** They differ:
+
+| | v2 (send) | v3 (receive) |
+|---|---|---|
+| `timecode` | 16 | 16 |
+| `FourCC` | — | **24** |
+| `p_data` | 24 | 32 |
+| `channel_stride_in_bytes` | 32 | 40 |
+| size | 56 | 64 |
+
+Passing a v2 where v3 is expected misreads **every field after the timecode** —
+a pointer read as an integer, a stride read as a pointer. It would not crash
+where the mistake was; it would report a plausible rate and then hand back
+garbage. Both are now asserted by offset, plus an assertion that their sizes
+**differ**, so a refactor that accidentally unifies them fails loudly.
+
+The two coexist because the send path genuinely wants v2:
+`send_send_audio_v2` and `util_audio_from_interleaved_32s_v2` are both defined
+in terms of it. Same concept, two layouts, one letter apart.
+
+**Verified by sending and receiving on one machine**, which is the same
+discipline `pmgctl ndi probe` was built with for video — decode real fields off
+a real frame rather than trust the struct:
+
+```
+audio: 48000 Hz, 2 ch, 801 samples, stride 3232 B, peak -12.0 dBFS
+```
+
+801 is the exact per-frame count `pmg_audio::AudioClock` produces at 59.94, so
+the cadence survives the wire. Note the receive stride (3232 B = 808 floats)
+is **not** the send stride (801 × 4 = 3204): NDI repacks, and a reader that
+assumed `no_samples * 4` would walk off by seven samples a channel per frame.

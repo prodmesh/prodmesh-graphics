@@ -51,6 +51,9 @@ pub struct Sender {
     fps_d: i32,
     /// Reused between frames so a 4-second take does not allocate 240 buffers.
     scratch: std::cell::RefCell<Vec<u8>>,
+    /// Planar float, filled by the SDK's converter each frame. Kept so a
+    /// service does not allocate an audio buffer per frame.
+    audio_scratch: std::cell::RefCell<Vec<f32>>,
     _name: CString,
 }
 
@@ -83,6 +86,7 @@ impl Sender {
             fps_n,
             fps_d,
             scratch: std::cell::RefCell::new(vec![0u8; (w * h * 4) as usize]),
+            audio_scratch: std::cell::RefCell::new(Vec::new()),
             _name: c_name,
         })
     }
@@ -140,6 +144,63 @@ impl Sender {
                 ..Default::default()
             };
             (self.ndi.send_send_video_v2)(self.inst, &video);
+        }
+        Ok(())
+    }
+
+    /// Send the audio that belongs to this frame.
+    ///
+    /// `pcm` is interleaved 32-bit signed at 48 kHz — the same buffer the
+    /// DeckLink path takes, and the same rule applies: its length must be
+    /// **this frame's** sample count from `pmg_audio::AudioClock`, not a round
+    /// number. Empty means this output carries no audio, which is normal.
+    ///
+    /// NDI carries **planar float**, so a conversion is unavoidable. It is done
+    /// by the SDK's own `util_audio_from_interleaved_32s_v2` rather than by us,
+    /// because the conversion is not just a scale — it also applies NDI's
+    /// reference-level convention, and picking that wrong makes a feed 20 dB
+    /// hot or quiet with nothing reporting an error.
+    pub fn send_audio_interleaved_32s(&self, pcm: &[i32], channels: usize) -> Result<()> {
+        if pcm.is_empty() || channels == 0 {
+            return Ok(());
+        }
+        if !pcm.len().is_multiple_of(channels) {
+            bail!(
+                "{} samples do not divide into {channels} channels",
+                pcm.len()
+            );
+        }
+        let samples = pcm.len() / channels;
+
+        // The planar destination the SDK fills. Reused across frames: a service
+        // must not allocate a buffer a frame.
+        let mut planar = self.audio_scratch.borrow_mut();
+        planar.resize(samples * channels, 0.0);
+
+        // SAFETY: both frames point at buffers we own and hold borrowed for the
+        // whole call. `from_interleaved_32s_v2` writes exactly
+        // `no_samples * no_channels` floats into `p_data`, which is what
+        // `planar` was just sized to, and `send_send_audio_v2` is synchronous —
+        // it copies before returning, so neither buffer outlives the call.
+        unsafe {
+            let src = NDIlib_audio_frame_interleaved_32s_t {
+                sample_rate: 48_000,
+                no_channels: channels as i32,
+                no_samples: samples as i32,
+                p_data: pcm.as_ptr() as *mut i32,
+                ..Default::default()
+            };
+            let mut dst = NDIlib_audio_frame_v2_t {
+                sample_rate: 48_000,
+                no_channels: channels as i32,
+                no_samples: samples as i32,
+                p_data: planar.as_mut_ptr(),
+                // Planar: one whole channel, then the next.
+                channel_stride_in_bytes: (samples * std::mem::size_of::<f32>()) as i32,
+                ..Default::default()
+            };
+            (self.ndi.util_audio_from_interleaved_32s_v2)(&src, &mut dst);
+            (self.ndi.send_send_audio_v2)(self.inst, &dst);
         }
         Ok(())
     }

@@ -24,7 +24,11 @@ pmgctl ndi — NDI runtime spike (M0)
     pmgctl ndi info
     pmgctl ndi probe [--source <substring>] [--seconds <n>]
     pmgctl ndi send  [--pattern <p>] [--name <n>] [--size WxH] [--fps N/D]
-                     [--range narrow|full] [--seconds <n>]
+                     [--range narrow|full] [--seconds <n>] [--tone]
+
+    --tone embeds a 1 kHz sine at the exact per-frame sample count the output's
+    clock asks for, so `probe` on another machine can confirm both the audio
+    ABI and the level. See pmg_audio: at 59.94 that count alternates.
 
 PATTERNS
     softedge    soft-edged white on transparent — THE one that catches a bad
@@ -158,17 +162,51 @@ fn probe(args: &[String]) -> Result<()> {
 
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(seconds);
         let mut frames = 0u32;
+        let mut audio_frames = 0u32;
         let mut ok = false;
 
-        while std::time::Instant::now() < deadline && frames < 3 {
+        while std::time::Instant::now() < deadline && (frames < 3 || audio_frames < 3) {
             let mut v = NDIlib_video_frame_v2_t::default();
-            let t = (ndi.recv_capture_v3)(
-                recv,
-                &mut v,
-                std::ptr::null_mut(),
-                std::ptr::null_mut(),
-                1000,
-            );
+            let mut a = NDIlib_audio_frame_v3_t::default();
+            let t = (ndi.recv_capture_v3)(recv, &mut v, &mut a, std::ptr::null_mut(), 1000);
+
+            // Audio is validated the same way video is: by decoding fields off
+            // a real frame. A struct whose offsets were wrong would report an
+            // absurd rate or channel count rather than crashing, which is
+            // exactly the failure this command exists to catch.
+            if t == FRAME_TYPE_AUDIO {
+                let peak = if a.p_data.is_null() || a.no_samples <= 0 {
+                    0.0f32
+                } else {
+                    // SAFETY (inside the enclosing unsafe block): the SDK owns
+                    // this buffer until recv_free_audio_v3; planar, no_samples
+                    // floats per channel at channel_stride.
+                    // p_data is uint8_t* in v3; the samples are f32.
+                    let base = a.p_data as *const f32;
+                    let stride = (a.channel_stride_in_bytes as usize) / 4;
+                    let mut m = 0.0f32;
+                    for ch in 0..a.no_channels.max(0) as usize {
+                        for i in 0..a.no_samples as usize {
+                            let x = *base.add(ch * stride + i);
+                            m = m.max(x.abs());
+                        }
+                    }
+                    m
+                };
+                let dbfs = if peak > 0.0 {
+                    format!("{:.1} dBFS", 20.0 * peak.log10())
+                } else {
+                    "silence".to_string()
+                };
+                println!(
+                    "audio: {} Hz, {} ch, {} samples, stride {} B, peak {dbfs}",
+                    a.sample_rate, a.no_channels, a.no_samples, a.channel_stride_in_bytes
+                );
+                audio_frames += 1;
+                // SAFETY: frame came from recv_capture_v3 and is not used after.
+                (ndi.recv_free_audio_v3)(recv, &a);
+                continue;
+            }
             if t != FRAME_TYPE_VIDEO {
                 continue;
             }
@@ -303,6 +341,26 @@ fn send(args: &[String]) -> Result<()> {
         let start = std::time::Instant::now();
         let mut announced = false;
 
+        // A 1 kHz tone at the EXACT per-frame sample count, so a probe on the
+        // other end validates the audio ABI and the level together. The phase
+        // carries across frames in the absolute sample index; resetting it each
+        // frame would click 60 times a second and prove nothing.
+        let tone = args.iter().any(|a| a == "--tone");
+        let aclock = tone
+            .then(|| {
+                pmg_audio::AudioClock::new((fps_n as u32, fps_d as u32), pmg_audio::SAMPLE_RATE)
+            })
+            .transpose()?;
+        if let Some(c) = &aclock {
+            println!(
+                "  tone: 1 kHz, {:.1} samples/frame nominal, cadence every {} frames",
+                c.samples_per_frame(),
+                c.cadence_frames()
+            );
+        }
+        let mut pcm: Vec<i32> = Vec::new();
+        let mut phase: u64 = 0;
+
         for frame_no in 0..total {
             // Static patterns are regenerated each frame rather than cached:
             // wasteful, and it keeps this spike honest about per-frame cost.
@@ -321,6 +379,38 @@ fn send(args: &[String]) -> Result<()> {
                 ..Default::default()
             };
             (ndi.send_send_video_v2)(sender, &video);
+
+            if let Some(c) = &aclock {
+                let n = c.samples_for(frame_no) as usize;
+                pcm.clear();
+                pcm.reserve(n * 2);
+                for _ in 0..n {
+                    let t = phase as f64 / pmg_audio::SAMPLE_RATE as f64;
+                    let v = ((t * 1000.0 * std::f64::consts::TAU).sin() * 0.25 * i32::MAX as f64)
+                        as i32;
+                    pcm.push(v);
+                    pcm.push(v);
+                    phase += 1;
+                }
+                let src = NDIlib_audio_frame_interleaved_32s_t {
+                    sample_rate: pmg_audio::SAMPLE_RATE as i32,
+                    no_channels: 2,
+                    no_samples: n as i32,
+                    p_data: pcm.as_ptr() as *mut i32,
+                    ..Default::default()
+                };
+                let mut planar = vec![0f32; n * 2];
+                let mut dst = NDIlib_audio_frame_v2_t {
+                    sample_rate: pmg_audio::SAMPLE_RATE as i32,
+                    no_channels: 2,
+                    no_samples: n as i32,
+                    p_data: planar.as_mut_ptr(),
+                    channel_stride_in_bytes: (n * 4) as i32,
+                    ..Default::default()
+                };
+                (ndi.util_audio_from_interleaved_32s_v2)(&src, &mut dst);
+                (ndi.send_send_audio_v2)(sender, &dst);
+            }
 
             if !announced && (ndi.send_get_no_connections)(sender, 0) > 0 {
                 announced = true;

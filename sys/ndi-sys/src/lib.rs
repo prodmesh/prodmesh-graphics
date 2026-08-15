@@ -38,6 +38,10 @@ pub const FOURCC_BGRA: c_int = 0x4152_4742;
 pub const FRAME_FORMAT_PROGRESSIVE: c_int = 1;
 pub const FRAME_TYPE_NONE: c_int = 0;
 pub const FRAME_TYPE_VIDEO: c_int = 1;
+pub const FRAME_TYPE_AUDIO: c_int = 2;
+
+/// `'FLTP'` — planar 32-bit float, the only audio format NDI sends uncompressed.
+pub const FOURCC_AUDIO_FLTP: c_int = i32::from_le_bytes(*b"FLTp");
 pub const FRAME_TYPE_ERROR: c_int = 4;
 pub const RECV_COLOR_FORMAT_BGRX_BGRA: c_int = 0;
 pub const RECV_BANDWIDTH_HIGHEST: c_int = 100;
@@ -139,6 +143,119 @@ impl Default for NDIlib_video_frame_v2_t {
     }
 }
 
+/// Planar float audio — **what NDI actually carries.**
+///
+/// Transcribed from `Processing.NDI.structs.h`. Note `p_data` is `float*` and
+/// the channels are PLANAR, one after another with `channel_stride_in_bytes`
+/// between them. Everything upstream of here is interleaved 32-bit integer, so
+/// something has to convert; see [`Ndi::send_audio_interleaved_32s`] for why
+/// that something is the SDK and not us.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NDIlib_audio_frame_v2_t {
+    pub sample_rate: c_int,
+    pub no_channels: c_int,
+    pub no_samples: c_int,
+    pub timecode: i64,
+    pub p_data: *mut f32,
+    pub channel_stride_in_bytes: c_int,
+    pub p_metadata: *const c_char,
+    pub timestamp: i64,
+}
+
+impl Default for NDIlib_audio_frame_v2_t {
+    fn default() -> Self {
+        Self {
+            sample_rate: 48_000,
+            no_channels: 2,
+            no_samples: 0,
+            // NDIlib_send_timecode_synthesize — let the SDK stamp it, exactly
+            // as the video path does, so the two agree by construction.
+            timecode: i64::MAX,
+            p_data: std::ptr::null_mut(),
+            channel_stride_in_bytes: 0,
+            p_metadata: std::ptr::null(),
+            timestamp: 0,
+        }
+    }
+}
+
+/// Interleaved 32-bit integer audio, the shape everything upstream produces.
+///
+/// From `Processing.NDI.utilities.h`. `reference_level` is the headroom in dB
+/// between the integer full scale and NDI's 0 dB reference — **not a gain
+/// control**, and getting it wrong is a silently hot or quiet feed rather than
+/// an error.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NDIlib_audio_frame_interleaved_32s_t {
+    pub sample_rate: c_int,
+    pub no_channels: c_int,
+    pub no_samples: c_int,
+    pub timecode: i64,
+    pub reference_level: c_int,
+    pub p_data: *mut i32,
+}
+
+impl Default for NDIlib_audio_frame_interleaved_32s_t {
+    fn default() -> Self {
+        Self {
+            sample_rate: 48_000,
+            no_channels: 2,
+            no_samples: 0,
+            timecode: i64::MAX,
+            // 0 dB: the integer full scale IS NDI's reference. The SDK's own
+            // examples use 20 for material mastered with 20 dB of headroom;
+            // a clip's PCM is already at the level it is meant to be, and
+            // adding headroom here would send everything 20 dB quiet.
+            reference_level: 0,
+            p_data: std::ptr::null_mut(),
+        }
+    }
+}
+
+/// The RECEIVE-side audio frame, and **not the same shape as v2.**
+///
+/// `NDIlib_recv_capture_v3` takes this, not [`NDIlib_audio_frame_v2_t`]. v3
+/// inserts a `FourCC` between `timecode` and `p_data`, so passing a v2 here
+/// misreads every field after the timecode — a pointer read as an integer and
+/// a stride read as a pointer. It would not crash immediately; it would report
+/// a plausible-looking rate and then hand back garbage.
+///
+/// The two coexist because the SEND path genuinely wants v2:
+/// `send_send_audio_v2` and `util_audio_from_interleaved_32s_v2` are both
+/// defined in terms of it. Same word, two layouts, one letter apart.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NDIlib_audio_frame_v3_t {
+    pub sample_rate: c_int,
+    pub no_channels: c_int,
+    pub no_samples: c_int,
+    pub timecode: i64,
+    pub FourCC: c_int,
+    pub p_data: *mut u8,
+    /// Union with `data_size_in_bytes` for compressed audio FourCCs.
+    pub channel_stride_in_bytes: c_int,
+    pub p_metadata: *const c_char,
+    pub timestamp: i64,
+}
+
+impl Default for NDIlib_audio_frame_v3_t {
+    fn default() -> Self {
+        Self {
+            sample_rate: 48_000,
+            no_channels: 2,
+            no_samples: 0,
+            timecode: i64::MAX,
+            FourCC: FOURCC_AUDIO_FLTP,
+            p_data: std::ptr::null_mut(),
+            channel_stride_in_bytes: 0,
+            p_metadata: std::ptr::null(),
+            timestamp: 0,
+        }
+    }
+}
+
 pub type find_instance_t = *mut c_void;
 pub type recv_instance_t = *mut c_void;
 pub type send_instance_t = *mut c_void;
@@ -170,15 +287,27 @@ pub struct Ndi {
     pub recv_capture_v3: unsafe extern "C" fn(
         recv_instance_t,
         *mut NDIlib_video_frame_v2_t,
-        *mut c_void,
+        *mut NDIlib_audio_frame_v3_t,
         *mut c_void,
         u32,
     ) -> c_int,
     pub recv_free_video_v2: unsafe extern "C" fn(recv_instance_t, *const NDIlib_video_frame_v2_t),
+    pub recv_free_audio_v3: unsafe extern "C" fn(recv_instance_t, *const NDIlib_audio_frame_v3_t),
 
     pub send_create: unsafe extern "C" fn(*const NDIlib_send_create_t) -> send_instance_t,
     pub send_destroy: unsafe extern "C" fn(send_instance_t),
     pub send_send_video_v2: unsafe extern "C" fn(send_instance_t, *const NDIlib_video_frame_v2_t),
+    pub send_send_audio_v2: unsafe extern "C" fn(send_instance_t, *const NDIlib_audio_frame_v2_t),
+    /// Interleaved 32-bit int → planar float, done by the SDK.
+    ///
+    /// `NDIlib_util_send_send_audio_interleaved_32s` does NOT exist in the
+    /// runtime — checked with `nm` against 6.3.2.0, which exports only the
+    /// `from_interleaved` converters and `send_send_audio_v2`. So the path is
+    /// convert, then send.
+    pub util_audio_from_interleaved_32s_v2: unsafe extern "C" fn(
+        *const NDIlib_audio_frame_interleaved_32s_t,
+        *mut NDIlib_audio_frame_v2_t,
+    ),
     pub send_get_no_connections: unsafe extern "C" fn(send_instance_t, u32) -> c_int,
 }
 
@@ -229,9 +358,16 @@ impl Ndi {
             recv_destroy: sym!(lib, path, "NDIlib_recv_destroy"),
             recv_capture_v3: sym!(lib, path, "NDIlib_recv_capture_v3"),
             recv_free_video_v2: sym!(lib, path, "NDIlib_recv_free_video_v2"),
+            recv_free_audio_v3: sym!(lib, path, "NDIlib_recv_free_audio_v3"),
             send_create: sym!(lib, path, "NDIlib_send_create"),
             send_destroy: sym!(lib, path, "NDIlib_send_destroy"),
             send_send_video_v2: sym!(lib, path, "NDIlib_send_send_video_v2"),
+            send_send_audio_v2: sym!(lib, path, "NDIlib_send_send_audio_v2"),
+            util_audio_from_interleaved_32s_v2: sym!(
+                lib,
+                path,
+                "NDIlib_util_audio_from_interleaved_32s_v2"
+            ),
             send_get_no_connections: sym!(lib, path, "NDIlib_send_get_no_connections"),
             _lib: lib,
         };
@@ -332,6 +468,71 @@ mod abi {
         );
         assert_eq!(offset_of!(NDIlib_video_frame_v2_t, p_metadata), 56);
         assert_eq!(offset_of!(NDIlib_video_frame_v2_t, timestamp), 64);
+
+        // Audio. Same discipline: the C compiler decides the padding and these
+        // confirm Rust put it in the same places. A wrong offset here is not a
+        // crash, it is audio at the wrong rate or channel count — which sounds
+        // like a broken decoder and is not one.
+        assert_eq!(offset_of!(NDIlib_audio_frame_v2_t, sample_rate), 0);
+        assert_eq!(offset_of!(NDIlib_audio_frame_v2_t, no_channels), 4);
+        assert_eq!(offset_of!(NDIlib_audio_frame_v2_t, no_samples), 8);
+        assert_eq!(offset_of!(NDIlib_audio_frame_v2_t, timecode), 16);
+        assert_eq!(offset_of!(NDIlib_audio_frame_v2_t, p_data), 24);
+        assert_eq!(
+            offset_of!(NDIlib_audio_frame_v2_t, channel_stride_in_bytes),
+            32
+        );
+        assert_eq!(offset_of!(NDIlib_audio_frame_v2_t, p_metadata), 40);
+        assert_eq!(offset_of!(NDIlib_audio_frame_v2_t, timestamp), 48);
+        assert_eq!(std::mem::size_of::<NDIlib_audio_frame_v2_t>(), 56);
+
+        // v3, the RECEIVE shape. The FourCC at 24 is the whole difference, and
+        // it pushes everything after it along by eight bytes.
+        assert_eq!(offset_of!(NDIlib_audio_frame_v3_t, sample_rate), 0);
+        assert_eq!(offset_of!(NDIlib_audio_frame_v3_t, no_channels), 4);
+        assert_eq!(offset_of!(NDIlib_audio_frame_v3_t, no_samples), 8);
+        assert_eq!(offset_of!(NDIlib_audio_frame_v3_t, timecode), 16);
+        assert_eq!(offset_of!(NDIlib_audio_frame_v3_t, FourCC), 24);
+        assert_eq!(offset_of!(NDIlib_audio_frame_v3_t, p_data), 32);
+        assert_eq!(
+            offset_of!(NDIlib_audio_frame_v3_t, channel_stride_in_bytes),
+            40
+        );
+        assert_eq!(offset_of!(NDIlib_audio_frame_v3_t, p_metadata), 48);
+        assert_eq!(offset_of!(NDIlib_audio_frame_v3_t, timestamp), 56);
+        assert_eq!(std::mem::size_of::<NDIlib_audio_frame_v3_t>(), 64);
+        // The v2 send shape and the v3 receive shape MUST differ. If a refactor
+        // ever makes them agree, one of them is wrong.
+        assert_ne!(
+            std::mem::size_of::<NDIlib_audio_frame_v2_t>(),
+            std::mem::size_of::<NDIlib_audio_frame_v3_t>()
+        );
+
+        assert_eq!(
+            offset_of!(NDIlib_audio_frame_interleaved_32s_t, sample_rate),
+            0
+        );
+        assert_eq!(
+            offset_of!(NDIlib_audio_frame_interleaved_32s_t, no_channels),
+            4
+        );
+        assert_eq!(
+            offset_of!(NDIlib_audio_frame_interleaved_32s_t, no_samples),
+            8
+        );
+        assert_eq!(
+            offset_of!(NDIlib_audio_frame_interleaved_32s_t, timecode),
+            16
+        );
+        assert_eq!(
+            offset_of!(NDIlib_audio_frame_interleaved_32s_t, reference_level),
+            24
+        );
+        assert_eq!(offset_of!(NDIlib_audio_frame_interleaved_32s_t, p_data), 32);
+        assert_eq!(
+            std::mem::size_of::<NDIlib_audio_frame_interleaved_32s_t>(),
+            40
+        );
     }
 
     #[test]
@@ -374,6 +575,7 @@ mod abi {
         assert_eq!(FOURCC_BGRA, 0x4152_4742);
         assert_eq!(FRAME_FORMAT_PROGRESSIVE, 1);
         assert_eq!(FRAME_TYPE_VIDEO, 1);
+        assert_eq!(FRAME_TYPE_AUDIO, 2);
         assert_eq!(RECV_COLOR_FORMAT_BGRX_BGRA, 0);
         assert_eq!(RECV_BANDWIDTH_HIGHEST, 100);
     }

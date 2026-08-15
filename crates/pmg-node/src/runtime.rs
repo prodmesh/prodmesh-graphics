@@ -106,9 +106,13 @@ impl Library for Assigned {
 /// they differ in how they are PACED — NDI clocks itself, DeckLink schedules
 /// against its own clock. A trait would hide that difference behind a uniform
 /// `send()`, which is the one thing about them that is not uniform.
+#[allow(clippy::large_enum_variant)]
 pub enum Backend {
     /// Render and time frames, send nothing.
     Headless,
+    // Boxed would be one indirection on every frame's send for the sake of a
+    // variant that exists once per output. There are one to four of these in a
+    // process, not a collection of them.
     Ndi(pmg_out_ndi::Sender),
     DeckLink(Box<pmg_out_decklink::Sender>),
 }
@@ -821,6 +825,28 @@ fn render_group(
             // carrying audio says it out loud every five seconds: FLAT is
             // correct, a trend in either direction is not.
             if out.spec.audio_channels > 0 && out.frame.is_multiple_of(300) {
+                // NDI has no card buffer to read — the SDK owns the pacing —
+                // so there is one fewer instrument here, and the peak is the
+                // one that still means something.
+                if let Backend::Ndi(_) = &out.backend {
+                    let peak = out
+                        .audio
+                        .iter()
+                        .map(|s| s.unsigned_abs())
+                        .max()
+                        .unwrap_or(0);
+                    let dbfs = if peak == 0 {
+                        f32::NEG_INFINITY
+                    } else {
+                        20.0 * (peak as f32 / i32::MAX as f32).log10()
+                    };
+                    tracing::info!(
+                        output = %out.spec.id,
+                        frame = out.frame,
+                        peak_dbfs = format!("{dbfs:.1}"),
+                        "audio"
+                    );
+                }
                 if let Backend::DeckLink(d) = &out.backend {
                     let st = d.stats();
                     // The peak of THIS frame's samples, as dBFS. A flat buffer
@@ -862,7 +888,15 @@ fn render_group(
 
             match &out.backend {
                 // NDI is opened with clock_video, so this call paces the loop.
-                Backend::Ndi(n) => n.send_rgba_premultiplied(&rgba)?,
+                Backend::Ndi(n) => {
+                    n.send_rgba_premultiplied(&rgba)?;
+                    // Audio AFTER the picture, so a video failure never leaves
+                    // a receiver holding sound for a frame that will not come.
+                    n.send_audio_interleaved_32s(
+                        &out.audio,
+                        out.spec.audio_channels.max(0) as usize,
+                    )?;
+                }
                 // DeckLink schedules against its own clock and blocks when the
                 // queue is full — the same pacing, against a clock that can be
                 // genlocked.
