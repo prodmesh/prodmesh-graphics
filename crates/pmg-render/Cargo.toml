@@ -12,6 +12,7 @@ thiserror = { workspace = true }
 pmg-scene = { path = "../pmg-scene" }
 pmg-layout = { path = "../pmg-layout" }
 pmg-anim = { path = "../pmg-anim" }
+pmg-text = { path = "../pmg-text" }
 wgpu = { workspace = true }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]

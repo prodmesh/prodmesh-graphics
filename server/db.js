@@ -17,7 +17,7 @@ import Database from 'better-sqlite3'
 import fs from 'node:fs'
 import path from 'node:path'
 
-export const SCHEMA_VERSION = 1
+export const SCHEMA_VERSION = 2
 
 let db = null
 
@@ -109,6 +109,19 @@ const MIGRATIONS = [
         acked_at  INTEGER
       );
     `)
+  },
+
+  // 2 — keep the JSON mirror alongside each revision.
+  //
+  // A published revision is canonical CBOR, which Design cannot read and
+  // deliberately never learns to. Without the mirror the only way to reopen a
+  // template is to still have the file that made it, which makes Design a
+  // one-way door and loses the template the first time a laptop is reimaged.
+  //
+  // The server still does not parse it: it is another opaque CAS blob, stored
+  // by address, and this column is just the pointer.
+  (d) => {
+    d.exec(`ALTER TABLE template_revisions ADD COLUMN mirror_hash TEXT`)
   },
 ]
 

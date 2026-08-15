@@ -18,9 +18,10 @@
 //! you ignore it and regenerate per frame.
 
 use anyhow::{bail, Context, Result};
-use pmg_render::scene::{GlyphSource, RunGlyph, SceneInstance};
+use pmg_render::scene::SceneInstance;
+use pmg_render::text_source::TextEngineGlyphs;
 use pmg_render::{timeline, SceneRenderer};
-use pmg_scene::doc::{FontSpec, SceneDoc};
+use pmg_scene::doc::SceneDoc;
 use pmg_text::{Measurer, TextEngine};
 use std::path::Path;
 
@@ -44,44 +45,6 @@ fn arg(args: &[String], flag: &str) -> Option<String> {
         .position(|a| a == flag)
         .and_then(|i| args.get(i + 1))
         .cloned()
-}
-
-/// Bridges `pmg-text` to the renderer without either knowing about the other.
-struct EngineGlyphs<'a> {
-    engine: &'a mut TextEngine,
-}
-
-impl GlyphSource for EngineGlyphs<'_> {
-    fn run(&mut self, text: &str, font: &FontSpec) -> Option<(Vec<RunGlyph>, f32)> {
-        let face = self.engine.db.select(&font.family, font.weight)?;
-        let shaped = self
-            .engine
-            .shape(face, text, font.size, &font.features, font.tracking)?;
-        let ascent = shaped.metrics.ascent;
-
-        let mut out = Vec::new();
-        for g in &shaped.glyphs {
-            // Split the fractional position into a whole pixel and a phase, and
-            // rasterize AT that phase. Rounding here instead is precisely what
-            // makes animated text shudder (R3).
-            let (whole, phase) = pmg_text::quantize(g.x);
-            let Some(bmp) = self.engine.glyph(face, g.id, font.size, phase) else {
-                continue;
-            };
-            if bmp.is_empty() {
-                continue;
-            }
-            out.push(RunGlyph {
-                x: whole as f32,
-                left: bmp.left,
-                top: bmp.top,
-                width: bmp.width,
-                height: bmp.height,
-                coverage: bmp.coverage.clone(),
-            });
-        }
-        Some((out, ascent))
-    }
 }
 
 pub fn main(args: &[String]) -> Result<()> {
@@ -160,12 +123,7 @@ pub fn main(args: &[String]) -> Result<()> {
     let solved = pmg_layout::solve(&doc, &data, &measurer)?;
     let mut engine = measurer.into_engine();
 
-    let inst = {
-        let mut glyphs = EngineGlyphs {
-            engine: &mut engine,
-        };
-        SceneInstance::build(&doc, &solved, &mut glyphs)
-    };
+    let inst = SceneInstance::build(&doc, &solved, &mut TextEngineGlyphs::new(&mut engine));
     let arm_ms = arm_start.elapsed().as_secs_f64() * 1000.0;
 
     println!("armed in {arm_ms:.1} ms");

@@ -24,53 +24,12 @@
 
 use anyhow::Result;
 use pmg_proto::{Cue, CueAck, CueOp, CueResult, DataValue, RejectReason};
-use pmg_render::scene::{GlyphSource, RunGlyph, SceneInstance};
+use pmg_render::scene::SceneInstance;
+use pmg_render::text_source::TextEngineGlyphs;
 use pmg_render::timeline;
-use pmg_scene::doc::{FontSpec, SceneDoc};
+use pmg_scene::doc::SceneDoc;
 use pmg_text::{Measurer, TextEngine};
 use std::collections::BTreeMap;
-
-/// Bridges `pmg-text` to the renderer without either crate knowing the other.
-///
-/// One copy, used by both the node and `pmgctl take`. Two copies of the
-/// quantize-then-rasterize step would be two chances to round a glyph to an
-/// integer, which is exactly the thing that makes animated text shudder (R3).
-pub struct EngineGlyphs<'a> {
-    pub engine: &'a mut TextEngine,
-}
-
-impl GlyphSource for EngineGlyphs<'_> {
-    fn run(&mut self, text: &str, font: &FontSpec) -> Option<(Vec<RunGlyph>, f32)> {
-        let face = self.engine.db.select(&font.family, font.weight)?;
-        let shaped = self
-            .engine
-            .shape(face, text, font.size, &font.features, font.tracking)?;
-        let ascent = shaped.metrics.ascent;
-
-        let mut out = Vec::new();
-        for g in &shaped.glyphs {
-            // Split the fractional position into a whole pixel and a phase, and
-            // rasterize AT that phase. Rounding here instead is precisely what
-            // makes animated text shudder (R3).
-            let (whole, phase) = pmg_text::quantize(g.x);
-            let Some(bmp) = self.engine.glyph(face, g.id, font.size, phase) else {
-                continue;
-            };
-            if bmp.is_empty() {
-                continue;
-            }
-            out.push(RunGlyph {
-                x: whole as f32,
-                left: bmp.left,
-                top: bmp.top,
-                width: bmp.width,
-                height: bmp.height,
-                coverage: bmp.coverage.clone(),
-            });
-        }
-        Some((out, ascent))
-    }
-}
 
 /// A template the node can read, plus its timelines.
 pub struct Armed {
@@ -391,12 +350,7 @@ impl LayerEngine {
         let solved = pmg_layout::solve(doc, &bound, &measurer)
             .map_err(|_| RejectReason::UnreadableTemplate)?;
         let mut engine = measurer.into_engine();
-        let instance = {
-            let mut glyphs = EngineGlyphs {
-                engine: &mut engine,
-            };
-            SceneInstance::build(doc, &solved, &mut glyphs)
-        };
+        let instance = SceneInstance::build(doc, &solved, &mut TextEngineGlyphs::new(&mut engine));
 
         Ok(Armed {
             item_id: item_id.to_string(),

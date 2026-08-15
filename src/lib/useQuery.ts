@@ -19,9 +19,23 @@ export function useQuery<T>(key: string | null): { data?: T; error?: Error; load
   useEffect(() => {
     if (!key) return
     let cancelled = false
+    const wake = () => { if (!cancelled) bump((n) => n + 1) }
 
     const entry = cache.get(key) as Entry<T> | undefined
-    if (entry && Date.now() - entry.at < STALE_MS) return
+    if (entry && Date.now() - entry.at < STALE_MS) {
+      // Fresh entry. If it already settled, render reads it below and there is
+      // nothing to wait for. If it is still in flight, we MUST attach to it.
+      //
+      // Returning early here instead was a real bug: React runs an effect
+      // twice on mount in development, so the second run found the first run's
+      // in-flight entry, returned, and never re-rendered — while the first
+      // run's own wake-up had already been cancelled by its cleanup. The widget
+      // sat on "connecting" forever with the data sitting in the cache beside
+      // it. The same thing happens in production whenever a component remounts
+      // inside the stale window.
+      if (!entry.data && !entry.error) entry.promise?.finally(wake)
+      return () => { cancelled = true }
+    }
 
     const next: Entry<T> = { at: Date.now() }
     next.promise = fetch(key)
@@ -30,7 +44,7 @@ export function useQuery<T>(key: string | null): { data?: T; error?: Error; load
         next.data = (await r.json()) as T
       })
       .catch((e: Error) => { next.error = e })
-      .finally(() => { if (!cancelled) bump((n) => n + 1) })
+      .finally(wake)
     cache.set(key, next as Entry<unknown>)
 
     return () => { cancelled = true }

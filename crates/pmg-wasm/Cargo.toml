@@ -11,6 +11,11 @@ crate-type = ["cdylib", "rlib"]
 
 [dependencies]
 pmg-render = { path = "../pmg-render" }
+pmg-scene = { path = "../pmg-scene" }
+pmg-layout = { path = "../pmg-layout" }
+pmg-text = { path = "../pmg-text" }
+serde = { workspace = true }
+serde_json = { workspace = true }
 wgpu = { workspace = true }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
@@ -19,3 +24,6 @@ wasm-bindgen-futures = "0.4"
 js-sys = "0.3"
 console_error_panic_hook = "0.1"
 wgpu = { workspace = true, default-features = false, features = ["webgpu", "wgsl"] }
+
+[dev-dependencies]
+serde_json = { workspace = true }

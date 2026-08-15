@@ -72,6 +72,32 @@ export function createApp() {
   })
   app.get('/api/stream', handleStream)
   app.get('/cas/:hash', cas.handleGet)
+
+  // Asset upload. Raw body, not multipart: the client already knows the bytes
+  // and a multipart wrapper would only add a parser between them and the hash.
+  //
+  // 256 MB covers a font, an image, and a short clip. Large media gets a
+  // resumable path in M3 — the limit is here so an accident fails fast rather
+  // than filling a booth machine's disk.
+  app.post(
+    '/api/assets',
+    express.raw({ type: '*/*', limit: '256mb' }),
+    async (req, res) => {
+      if (!req.body?.length) {
+        return res.status(422).json({ error: 'validation_failed', label: 'That upload had no content.' })
+      }
+      const stored = await cas.put(req.body)
+      const db = openDb()
+      db.prepare(
+        `INSERT OR IGNORE INTO assets (hash, size, kind, first_seen) VALUES (?, ?, ?, ?)`,
+      ).run(stored.hash, stored.size, String(req.query.kind ?? 'blob'), Date.now())
+      res.status(stored.deduped ? 200 : 201).json(stored)
+    },
+  )
+
+  app.get('/api/assets', (_req, res) => {
+    res.json({ assets: openDb().prepare('SELECT * FROM assets ORDER BY first_seen DESC').all() })
+  })
   app.head('/cas/:hash', cas.handleGet)
 
   // The pull half of the ADR 0008 bridge: a client that missed frames on the

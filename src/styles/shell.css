@@ -185,3 +185,49 @@
 .field__req { font-style: normal; font-size: 0.75rem; color: var(--text-faint); }
 .field__count { font-style: normal; font-size: 0.75rem; color: var(--text-faint); margin-left: auto; font-family: var(--font-mono); }
 .field__count--over { color: var(--danger); }
+
+/* --------------------------------------------------------------------------
+   Design.
+
+   The canvas is TRANSPARENT and the checkerboard is here, in CSS. The output is
+   a key signal, so baking a background into the pixels would hide the one thing
+   a designer needs to see — what will actually key over live video.
+   -------------------------------------------------------------------------- */
+
+.design { display: grid; gap: 1.25rem; align-items: start; }
+@media (min-width: 1000px) { .design { grid-template-columns: minmax(0, 1fr) 20rem; } }
+
+.design__stage { display: grid; gap: 0.75rem; min-width: 0; }
+.design__checker {
+  border: 1px solid var(--border); border-radius: var(--radius);
+  overflow: hidden; line-height: 0;
+  background-color: #6e6e6e;
+  background-image:
+    linear-gradient(45deg, #8a8a8a 25%, transparent 25%, transparent 75%, #8a8a8a 75%),
+    linear-gradient(45deg, #8a8a8a 25%, transparent 25%, transparent 75%, #8a8a8a 75%);
+  background-size: 24px 24px;
+  background-position: 0 0, 12px 12px;
+}
+/* Fixed neutral greys, not tokens: this is a measurement backdrop, and it must
+   look identical in light and dark so a judgement about an edge is about the
+   edge. It is the one place in this app where a literal colour is correct. */
+.design__canvas { display: block; width: 100%; height: auto; }
+
+.design__scrub { display: flex; align-items: center; gap: 0.75rem; }
+.design__scrub input[type="range"] { flex: 1; }
+.design__scrub select {
+  padding: 0.4rem 0.5rem; border-radius: var(--radius-sm);
+  border: 1px solid var(--border-strong); background: var(--bg); color: var(--text); font: inherit;
+}
+
+.design__panel {
+  display: grid; gap: 0.85rem; padding: 1rem;
+  border: 1px solid var(--border); border-radius: var(--radius-lg); background: var(--bg-raised);
+}
+.design__h2 { margin: 0.25rem 0 0; font-size: 0.95rem; }
+.design__status {
+  margin: 0; padding: 0.55rem 0.7rem; border-radius: var(--radius);
+  background: var(--accent-soft); border: 1px solid var(--accent-border); color: var(--accent-text);
+  font-size: 0.85rem; display: flex; align-items: center; gap: 0.4rem;
+}
+.design__panel .field input[type="file"] { font-size: 0.8rem; }

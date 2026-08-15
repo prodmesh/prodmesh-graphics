@@ -5,7 +5,7 @@ change that makes something real — not afterwards.
 
 `docs/ROADMAP.md` is where we are going. This is where we are.
 
-**Last updated: 2026-08-15 · M0 complete · M1 is end to end: browser → server → node → NDI. Design's canvas is the remaining M1 gap.**
+**Last updated: 2026-08-15 · M0 complete · **M1 is complete**: design in the browser, publish, take on air over NDI.**
 
 ---
 
@@ -50,9 +50,19 @@ three take/take-out cycles.
 leaves the node rendering; a brand-new server process with no memory of any take
 adopts the graphic still in `hold` from the node's `StateReport`.
 
-**What M1 still lacks is Design's canvas.** Templates are compiled by `pmgctl`
-and published over the API; the browser cannot yet author one. That is the last
-M1 piece.
+**Design renders with the same Rust the node runs.** The browser's
+`compile_template` produced a byte-identical `template_rev` to `pmgctl` for the
+same document (2893 bytes, same hash), and the canvas is the shared renderer on
+WebGPU: **arm 22.5 ms, warm frames 3.34 ms**. Responsive layout and `visible_if`
+behave in the browser exactly as they do natively.
+
+**The whole loop has been driven through the UI**: open a template → edit its
+data → scrub the In timeline → Publish → build an Item → Take → on air, with the
+node staging the published blob by its address.
+
+**What M1 does not have**, and is honest about: playlists and a rundown, layer
+stacks beyond one, preview, auth, discovery, DeckLink, and media. Those are M2
+and M3.
 
 **Spike S2 ran, and it failed on one criterion.** Fringing, tabular figures, and
 glyph-cache cost all measure clean, but sub-pixel motion deviates from linear by
@@ -83,7 +93,9 @@ other than what they were.
 | `server/nodeLink.js` | 🟢 handshake, assignment offer/ack, cues with deadlines, replay ring, StateReport adopted |
 | `POST /api/cue` | 🟢 synchronous — 503 `cue_not_acked` when the node stays silent, never a silent success |
 | `pmg-proto` | 🟢 the wire contract, with checked-in CBOR fixtures the JavaScript tests decode |
-| Design / Edit / Show | 🟡 Edit and Show are real; **Design is still a stub** — the canvas needs the WASM scene renderer |
+| Design / Edit / Show | 🟢 all three real. Design compiles and renders with the shared Rust; Show takes on air and does not lie |
+| `pmg-wasm` | 🟢 `compile_template` + `DesignSession` — the browser half of ADR 0001, pinned by a native test |
+| Fonts | 🟡 uploaded as CAS assets and fetched by hash. Family matching is still provisional — one face serves every family a template names |
 | `pmg-node` | 🟢 **the playout binary.** Link client, staging, durable assignment, layer engine, NDI out. Survives server loss; 10 cue-rule tests |
 | `pmg-cas` | 🟢 atomic writes, streaming put, verify. Agrees with `server/cas.js` |
 | `pmg-out-ndi` | 🟢 the shared sender — one unpremultiply loop for the node and the CLI |

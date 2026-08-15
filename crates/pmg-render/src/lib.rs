@@ -24,6 +24,7 @@
 pub mod draw;
 pub mod parity;
 pub mod scene;
+pub mod text_source;
 pub mod timeline;
 
 pub use draw::SceneRenderer;

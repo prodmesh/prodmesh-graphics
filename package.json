@@ -11,7 +11,7 @@
     "dev": "concurrently -n server,web -c cyan,magenta \"npm:dev:server\" \"npm:dev:web\"",
     "dev:server": "node --watch server/index.js",
     "dev:web": "vite",
-    "build": "tsc -b && vite build",
+    "build": "npm run wasm && tsc -b && vite build",
     "preview": "vite preview",
     "start": "NODE_ENV=production node server/index.js",
     "test": "npm run test:server && npm run test:web",
@@ -19,7 +19,8 @@
     "test:web": "vitest run",
     "lint": "oxlint server src",
     "selftest": "cargo run -q -p pmg-cli -- --selftest",
-    "wire:fixtures": "node tools/write-wire-fixtures.mjs"
+    "wire:fixtures": "node tools/write-wire-fixtures.mjs",
+    "wasm": "cargo build --release -p pmg-wasm --target wasm32-unknown-unknown && wasm-bindgen --target web --out-dir src/wasm target/wasm32-unknown-unknown/release/pmg_wasm.wasm"
   },
   "dependencies": {
     "better-sqlite3": "^12.4.1",

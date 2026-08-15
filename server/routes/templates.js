@@ -99,6 +99,13 @@ router.post('/api/templates/:id/publish', async (req, res) => {
     return fail(res, 422, 'validation_failed', 'The publish is missing its compiled scene.')
   }
 
+  // The JSON mirror, if the client sent one. Stored by address like anything
+  // else, and never parsed here.
+  let mirrorHash = null
+  if (typeof req.body?.mirror === 'string' && req.body.mirror.length) {
+    mirrorHash = (await cas.put(Buffer.from(req.body.mirror, 'utf8'))).hash
+  }
+
   let stored
   try {
     stored = await cas.put(Buffer.from(b64, 'base64'))
@@ -128,8 +135,8 @@ router.post('/api/templates/:id/publish', async (req, res) => {
     db.transaction(() => {
       db.prepare(
         `INSERT INTO template_revisions
-           (template_rev, template_id, name, min_reader, manifest, published_at, published_by)
-         VALUES (?, ?, ?, ?, ?, ?, ?)`,
+           (template_rev, template_id, name, min_reader, manifest, published_at, published_by, mirror_hash)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
       ).run(
         manifest.template_rev,
         t.id,
@@ -138,6 +145,7 @@ router.post('/api/templates/:id/publish', async (req, res) => {
         JSON.stringify(manifest),
         now,
         req.body?.published_by ?? null,
+        mirrorHash,
       )
       db.prepare('UPDATE templates SET head_rev = ?, name = ?, updated_at = ? WHERE id = ?')
         .run(manifest.template_rev, manifest.name, now, t.id)
@@ -148,12 +156,20 @@ router.post('/api/templates/:id/publish', async (req, res) => {
     // safe to treat as idempotent BECAUSE the id is the hash.
     db.prepare('UPDATE templates SET head_rev = ?, updated_at = ? WHERE id = ?')
       .run(manifest.template_rev, now, t.id)
+    // A mirror can arrive with a republish of bytes we already had — for
+    // instance the first publish that came from `pmgctl`, which does not send
+    // one. Backfilling it costs nothing and makes the template openable.
+    if (mirrorHash) {
+      db.prepare('UPDATE template_revisions SET mirror_hash = COALESCE(mirror_hash, ?) WHERE template_rev = ?')
+        .run(mirrorHash, manifest.template_rev)
+    }
   }
 
   res.status(existing ? 200 : 201).json({
     template_rev: manifest.template_rev,
     template_id: t.id,
     deduped: Boolean(existing) || stored.deduped,
+    mirror_hash: mirrorHash,
     warnings: manifest.warnings ?? [],
     // Assets the template needs that this server does not hold. Design should
     // say so plainly rather than let a node discover it at staging time.

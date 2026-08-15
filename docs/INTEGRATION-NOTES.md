@@ -560,3 +560,45 @@ selects only the listener. But that was invisible until logging worked.
 
 For a process whose whole job is to run unattended in a booth, a real subscriber
 is not a nicety.
+
+---
+
+## The designer and the CLI compile to the same bytes — measured, in a browser
+
+**2026-08-15, Chrome / WebGPU on an M3 Max.** `compile_template` in the browser
+produced
+
+```
+blake3:44dbd44c3bdc19e4d40d8affc35d225aa86fb6560a4639c1488756a4c183de6a  (2893 bytes)
+```
+
+for `testdata/templates/lower-third.json` — **identical** to what
+`pmgctl scene compile` writes for the same document. That is ADR 0001's central
+claim at the compiler level, and it is what lets Design publish a revision by id
+and a node fetch it by the same id with nothing in between having to agree.
+
+Also measured in-browser, same session: **arm 22.5 ms**, first frame 10 ms
+(pipeline creation), **warm frames 3.34 ms average / 4.4 ms worst** across a
+scrub. `visible_if` collapses correctly in the browser — clearing the title took
+the band from 132 px to 94 px and reported `omitted: ["title"]`.
+
+`crates/pmg-wasm/tests/same_compiler.rs` pins the compiler half in CI without a
+browser, because `design.rs` builds natively too. It cannot check that the WASM
+build agrees — that remains the parity harness's job.
+
+## A React effect that runs twice can strand a fetch in the cache
+
+**2026-08-15.** The sidebar sat on "connecting" while `/api/version` returned
+200. `useQuery` returned early when it found a **fresh** cache entry, which is
+correct for a settled one and wrong for an in-flight one.
+
+React runs an effect twice on mount in development. The first run started the
+fetch and registered a wake-up; its cleanup cancelled that wake-up; the second
+run found the entry, saw it was fresh, and returned without attaching to the
+pending promise. Nothing ever re-rendered, with the data sitting in the cache
+beside the component.
+
+It is not a development-only bug: the same thing happens in production whenever
+a component remounts inside the 5 s stale window. Fixed by attaching to
+`entry.promise` when the entry is fresh but unsettled, and pinned by a test that
+renders under `StrictMode` against a fetch with a real delay.

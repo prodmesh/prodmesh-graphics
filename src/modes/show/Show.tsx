@@ -45,9 +45,10 @@ export function Show() {
         <NoNodes />
       ) : (
         <div className="show">
-          <OnAir nodeId={node.node_id} outputId={output?.id ?? 'out-0'} />
+          <OnAir name={node.name} outputId={output?.id ?? 'out-0'} />
           <Rack
             nodeId={node.node_id}
+            nodeName={node.name}
             outputId={output?.id ?? 'out-0'}
             items={items?.items ?? []}
             reachable={node.reachable}
@@ -73,14 +74,17 @@ function NoNodes() {
 
 // ---------------------------------------------------------------------------
 
-function OnAir({ nodeId, outputId }: { nodeId: string; outputId: string }) {
+// The NAME, not the id. An id identifies a node to the system; a name is what
+// is written on the machine in the rack, and that is what an operator needs at
+// 10:15 on a Sunday.
+function OnAir({ name, outputId }: { name: string; outputId: string }) {
   const layers = useTopic<LayersSnapshot>(topics.outputLayers(outputId))
 
   return (
     <section className="show__onair" aria-label="On air">
       <header className="show__onair-head">
         <Radio size={16} aria-hidden />
-        <span>{nodeId}</span>
+        <span>{name}</span>
         <span className="show__dim">{outputId}</span>
         {layers?.fps ? <span className="show__dim">{layers.fps.toFixed(2)} fps</span> : null}
       </header>
@@ -118,11 +122,13 @@ function OnAir({ nodeId, outputId }: { nodeId: string; outputId: string }) {
 
 function Rack({
   nodeId,
+  nodeName,
   outputId,
   items,
   reachable,
 }: {
   nodeId: string
+  nodeName: string
   outputId: string
   items: Item[]
   reachable: boolean
@@ -157,7 +163,7 @@ function Rack({
 
       {!reachable ? (
         <p className="show__problem" role="status">
-          {nodeId} is offline. Anything already on air is still on air.
+          {nodeName} is offline. Anything already on air is still on air.
         </p>
       ) : null}
 
