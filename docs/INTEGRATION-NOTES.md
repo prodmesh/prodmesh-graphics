@@ -155,6 +155,21 @@ If those disagree, the upgrade is wedged. This is the third distinct
 userspace/driver version-skew failure found in one afternoon, and the only one
 where the tooling actively reports a healthy state that is not true.
 
+**Confirmed fix (same day):** unplugging the Thunderbolt chassis and plugging it
+back in broke the deadlock. The running dext became the 16.3 bundle, and the new
+driver immediately began a **card firmware update** — which is itself the proof
+the handover worked, since it could only read the card's firmware version once it
+owned the device.
+
+**Budget for a firmware update after any Desktop Video upgrade, and for a full
+power cycle after that** — card firmware is re-read at power-on, so a warm
+restart can leave it reporting the old version. Do not interrupt the flash.
+
+Total elapsed for what looked like "the card died": approve extension → reboot →
+still nothing → unplug/replug → firmware update → power cycle. **None of it is
+automatic, and all of it is invisible from the application's side.** Schedule a
+Desktop Video update for a weekday, never the morning of a service.
+
 ### On a Quad 2, external keying is reported on only 2 of 8 connectors
 *2026-08-14 · same hardware as above*
 
