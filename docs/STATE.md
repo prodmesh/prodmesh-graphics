@@ -11,22 +11,28 @@ change that makes something real — not afterwards.
 
 ## The honest summary
 
-There is no engine, and nothing has rendered a scene. There is a repository with
-a complete design written down, a Cargo workspace of mostly-stub crates, and a
-web app serving an empty four-mode shell.
+**M0 is complete and all three of its gating spikes passed.** None of the
+foundational ADRs is a bet any more.
 
-**But both vendor boundaries are real, measured, and one of them is proven.** NDI
-sends and receives frames through a hand-written, offset-verified binding.
-DeckLink enumerates, probes, and — as of today — **sustains 1080p59.94 for ten
-minutes with zero late and zero dropped frames**, which validates ADR 0003's
-hand-written-shim approach for output.
+- **S1** — native wgpu and browser WebGPU render **bit-identically**: 0/255 max
+  channel delta, zero geometric displacement. Measured on Metal; cross-backend
+  (D3D12, Vulkan) is still untested.
+- **S3** — the hand-written DeckLink shim sustained **1080p59.94 for ten minutes
+  with zero late and zero dropped frames**.
+- **S6** — WebGPU is comfortably available in-browser: real adapter and device,
+  244 KB bundle, ~5 ms per figure.
 
-`docs/INTEGRATION-NOTES.md` is no longer empty; six entries came out of one
-afternoon, and three of them were version-skew failures that each presented as
-something other than what they were.
+**M1 is under way.** The scene format (M1a) and the layout solver (M1b) are done:
+a lower third compiles to canonical CBOR with a stable `template_rev`, and lays
+out with the band growing and shrinking against the name and collapsing when the
+title is empty — all verified as numbers, before any pixels.
 
-**S1 (render parity) and S6 (WebGPU in the booth) have still not run**, so ADRs
-0001 and 0002 remain bets.
+**Still no scene rendering, no server beyond health, and no browser UI.** The
+next piece, `pmg-text`, is the riskiest one left (R3).
+
+`docs/INTEGRATION-NOTES.md` is no longer empty; seven entries came out of one
+afternoon, and three were version-skew failures that each presented as something
+other than what they were.
 
 ---
 
@@ -35,7 +41,7 @@ something other than what they were.
 | Component | State |
 |---|---|
 | Documentation set | ✅ complete — 15 ADRs, 7 specs, 9 spike briefs |
-| Cargo workspace | 🟡 stubs — all 19 crates compile; `fmt`, `clippy -D warnings`, and the wasm32 pure-set job are green |
+| Cargo workspace | 🟢 19 crates; `fmt`, `clippy -D warnings`, and the wasm32 pure-set job green in both SDK and no-SDK configs |
 | `pmgctl --selftest` | 🟢 gates the format's load-bearing guarantees: canonical CBOR round-trip, stable `template_rev`, JSON-mirror equivalence, `visible_if` collapse |
 | `sys/decklink-sys` | 🟢 enumeration, probing, modes, reference, **and scheduled output — 10 min at 1080p59.94, zero late, zero dropped** |
 | `sys/ndi-sys` | 🟢 runtime loading, find, receive, send — **frames verified in both directions**. ABI asserted statically and at runtime |
@@ -48,22 +54,20 @@ something other than what they were.
 | PMG Link | ⬜ spec only |
 | CAS | ⬜ spec only |
 | Web app | 🟡 four-mode shell, routing, tokens, `useTopic` + `useQuery`. 6 tests. No functionality |
-| `pmg-wasm` | 🟡 the parity harness — renders the corpus in-browser and posts raw RGBA back. 244 KB |
-| Design canvas | ⬜ not started |
-| `pmg-render` | 🟡 the S1 parity corpus only — 3 figures on wgpu 30, native **and** wasm32. No scene rendering |
-
 | `pmg-scene` | 🟢 **full document model**, canonical CBOR + JSON mirror, `template_rev`, validation, manifest, total binding evaluation. 25 tests |
 | `pmg-layout` | 🟢 **flexbox solver** over `TextMeasure` (taffy, ADR 0016). Shrink-and-grow and `visible_if` removal verified as numbers. 12 tests |
 | `pmg-text` | ⬜ not started — **M1c, next, and the riskiest remaining piece (R3)** |
+| `pmg-render` | 🟡 the S1 parity corpus only — 3 figures on wgpu 30, native **and** wasm32. No scene rendering yet |
+| `pmg-wasm` | 🟡 the parity harness — renders the corpus in-browser and posts raw RGBA back. 244 KB |
 | `pmg-out-ndi` / `pmg-out-decklink` | ⬜ not started — `pmgctl` drives `sys/` directly for now |
+| Design canvas | ⬜ not started |
 | CI | 🟡 workflows written and green locally; **never run on GitHub Actions** — no remote yet |
 | Rust toolchain on the dev box | ✅ 1.90.0 + `wasm32-unknown-unknown` |
 
 ### What `--selftest` actually asserts today
 
-Three crates carry real assertions, chosen because they are small, fully
-specified, and guard the rules most likely to be broken by someone doing the
-obvious thing:
+Four crates carry real assertions, chosen because they guard the rules most
+likely to be broken by someone doing the obvious thing:
 
 - **`pmg-color`** — narrow/full range endpoints, and **key chroma is neutral at
   every alpha in every range**. That is the assertion that catches someone
@@ -71,11 +75,14 @@ obvious thing:
 - **`pmg-anim`** — exact rational frame time, timeline endpoints, holding
   outside the range, monotonicity, and **that evaluating twice gives the same
   answer** — which fails the moment something reaches for a clock.
-- **`pmg-scene`** — version gating in both directions, and that every binding
+- **`pmg-scene`** — version gating in both directions; canonical CBOR round-trip
+  and stable `template_rev`; JSON-mirror equivalence; and that every binding
   transform is **total** against a hostile input corpus (empty, whitespace, CJK,
   emoji, zero-width). A template must not be able to throw on air.
+- **`pmg-layout`** — the band contains its children, grows and shrinks with the
+  name, collapses when the title is empty, and is deterministic across runs.
 
-The other seven suites return `Ok(())`. They are wired in so that adding real
+The remaining six suites return `Ok(())`. They are wired in so that adding real
 assertions is a one-line change rather than a question of where they go.
 
 ---
@@ -129,9 +136,10 @@ for a decision:
 
 The next three things that matter:
 
-1. **Start M1.** The foundational bets have all returned green, so the scene
-   format, layout solver, and text stack are now the critical path rather than
-   the risk.
+1. **M1c — the text stack.** The riskiest piece left, and where R3 lives:
+   subpixel glyph positioning (or animated text shudders), premultiplied AA edges
+   (or it fringes over live video), and the vertical-metric choice that can never
+   be changed once templates exist.
 2. **Run the parity corpus on Windows (D3D12)**, so ADR 0001's promise can be
    stated without the "measured on Metal" qualification.
 3. **S3's remaining legs at church**, where there is a reference generator: the
