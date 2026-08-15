@@ -5,7 +5,7 @@
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest'
 import { render, screen, waitFor } from '@testing-library/react'
 import { StrictMode } from 'react'
-import { useQuery, _reset } from './useQuery'
+import { useQuery, invalidate, _reset } from './useQuery'
 
 function Version() {
   const { data, loading } = useQuery<{ server: string }>('/api/version')
@@ -47,5 +47,31 @@ describe('a component that mounts twice', () => {
     )
     await waitFor(() => expect(screen.getAllByText('v0.1.0')).toHaveLength(2))
     expect(vi.mocked(fetch)).toHaveBeenCalledTimes(1)
+  })
+})
+
+describe('invalidate', () => {
+  test('refetches for a component that is already mounted', async () => {
+    let version = 1
+    vi.stubGlobal('fetch', vi.fn(async () => {
+      await new Promise((r) => setTimeout(r, 5))
+      return new Response(JSON.stringify({ server: `0.1.${version}` }), { status: 200 })
+    }))
+
+    render(<Version />)
+    await waitFor(() => expect(screen.getByText('v0.1.1')).toBeDefined())
+
+    // Deleting the cache entry alone does nothing here: the component's effect
+    // depends on the key, the key has not changed, so it would never look
+    // again. Every save-then-invalidate in the app silently failed to refresh
+    // until invalidation became an event rather than a deletion.
+    version = 2
+    invalidate('/api/version')
+    await waitFor(() => expect(screen.getByText('v0.1.2')).toBeDefined())
+  })
+
+  test('invalidating something nobody is watching does not fetch', () => {
+    invalidate('/api/nothing-mounted')
+    expect(vi.mocked(fetch)).not.toHaveBeenCalled()
   })
 })

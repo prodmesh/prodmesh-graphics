@@ -29,6 +29,8 @@ import { router as healthRouter } from './routes/health.js'
 import { router as templatesRouter } from './routes/templates.js'
 import { router as itemsRouter } from './routes/items.js'
 import { router as cueRouter } from './routes/cue.js'
+import { router as rundownRouter } from './routes/rundown.js'
+import * as rundown from './rundown.js'
 import * as nodeLink from './nodeLink.js'
 import { build as buildAssignment } from './assignment.js'
 import * as cas from './cas.js'
@@ -59,11 +61,13 @@ export function createApp() {
 
   registerCueLogTopics()
   nodeLink.registerTopics()
+  rundown.registerTopics()
 
   app.use(healthRouter)
   app.use(templatesRouter)
   app.use(itemsRouter)
   app.use(cueRouter)
+  app.use(rundownRouter)
 
   app.get('/api/nodes', (_req, res) => res.json({ nodes: nodeLink.list() }))
 
@@ -211,7 +215,7 @@ export function createApp() {
 // Only listen when run directly, so tests can import createApp() freely.
 if (process.argv[1] && import.meta.url === `file://${process.argv[1]}`) {
   const server = createApp().listen(PORT, () => {
-    console.log(`ProdMesh Graphics control server on :${PORT} (M1)`)
+    console.log(`ProdMesh Graphics control server on :${PORT} (M2)`)
   })
   // PMG Link shares the HTTP listener: it is a WebSocket upgrade on /link, so
   // it needs the server object rather than the app. Assets and preview stay

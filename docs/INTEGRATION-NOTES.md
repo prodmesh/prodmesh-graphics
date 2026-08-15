@@ -645,3 +645,44 @@ booth-1"* while booth-1 sat there connected.
 Name lookup now prefers the reachable session when exactly one match is online.
 Two *live* nodes sharing a name is still ambiguous and still refused, because
 picking one would be a coin flip deciding what goes on air.
+
+---
+
+## `invalidate()` that only deletes refreshes nothing
+
+**2026-08-15, building M2b.** Three symptoms at once: two playlists both named
+"Playlist 1", each holding one item when two were added, and a rundown that
+stayed empty. One cause.
+
+`useQuery.invalidate()` deleted the cache entry and stopped. A component that is
+already mounted has an effect keyed on `[key]`; the key has not changed, so it
+never looks again. **Every save-then-invalidate in the app was silently failing
+to refresh**, and it looked like it worked wherever something happened to
+unmount in between — closing an editor, switching modes. Where nothing
+unmounted, the screen kept showing pre-save data and the next write was computed
+from it.
+
+Invalidation is an event now: subscribers are registered per key and told to
+refetch. Pinned by a test that mutates the response between two renders of a
+component that never unmounts.
+
+The lesson generalises past this codebase: a cache with no subscriber registry
+can be *populated* correctly and still never be *read* again, and the failure
+looks like a UI bug rather than a data-layer one.
+
+## A warning that fires every time is not a warning
+
+**2026-08-15.** The rundown panel's divergence notice originally read "the
+rundown is on X, but that isn't what's on air", triggered whenever the cursor
+did not match the output.
+
+`Take next` fires the cursor's item **and then advances**, so the cursor is one
+ahead of the output almost permanently. The notice appeared on every single
+take. Correct by its own definition, and useless — an operator learns to ignore
+it within a service, at which point it may as well not exist.
+
+The signal an operator actually needs is narrower: **the output is showing
+something this rundown does not contain** — taken from the rack, fired by a GPI,
+left over from earlier. Where they are *within* the running order is already
+carried by the two marks in the list, which needs no prose. The notice now names
+the stranger, so it says what to look at rather than that something is wrong.

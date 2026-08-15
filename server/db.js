@@ -17,7 +17,7 @@ import Database from 'better-sqlite3'
 import fs from 'node:fs'
 import path from 'node:path'
 
-export const SCHEMA_VERSION = 3
+export const SCHEMA_VERSION = 4
 
 let db = null
 
@@ -140,6 +140,58 @@ const MIGRATIONS = [
         layers     TEXT NOT NULL,
         updated_at INTEGER NOT NULL,
         PRIMARY KEY (node_id, output_id)
+      );
+    `)
+  },
+
+  // 4 — playlists, the rundown, and the cursor.
+  //
+  // `position` is a dense integer renumbered on every reorder. A rundown is
+  // tens of entries, so the cost is nothing and the invariant is worth more:
+  // there is exactly one order, readable directly, with no gaps to reason about
+  // and no fractional ranks that drift toward collision.
+  //
+  // The CURSOR is server state, and it is intent rather than fact. It records
+  // what the operator means to do next; what is actually on air is the node's
+  // answer and lives nowhere in this schema. The two are allowed to disagree,
+  // and THEORY-OF-OPERATIONS says the UI must show that divergence rather than
+  // silently re-fire.
+  (d) => {
+    d.exec(`
+      CREATE TABLE playlists (
+        id         TEXT PRIMARY KEY,
+        name       TEXT NOT NULL,
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL
+      );
+
+      CREATE TABLE playlist_items (
+        playlist_id TEXT NOT NULL REFERENCES playlists(id) ON DELETE CASCADE,
+        item_id     TEXT NOT NULL REFERENCES items(id) ON DELETE CASCADE,
+        position    INTEGER NOT NULL,
+        PRIMARY KEY (playlist_id, item_id)
+      );
+      CREATE INDEX playlist_items_order ON playlist_items(playlist_id, position);
+
+      CREATE TABLE rundowns (
+        id         TEXT PRIMARY KEY,
+        name       TEXT NOT NULL,
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL
+      );
+
+      CREATE TABLE rundown_playlists (
+        rundown_id  TEXT NOT NULL REFERENCES rundowns(id) ON DELETE CASCADE,
+        playlist_id TEXT NOT NULL REFERENCES playlists(id) ON DELETE CASCADE,
+        position    INTEGER NOT NULL,
+        PRIMARY KEY (rundown_id, playlist_id)
+      );
+      CREATE INDEX rundown_playlists_order ON rundown_playlists(rundown_id, position);
+
+      CREATE TABLE rundown_cursor (
+        rundown_id TEXT PRIMARY KEY REFERENCES rundowns(id) ON DELETE CASCADE,
+        item_id    TEXT,
+        updated_at INTEGER NOT NULL
       );
     `)
   },

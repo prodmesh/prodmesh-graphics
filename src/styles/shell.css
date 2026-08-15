@@ -239,3 +239,65 @@
   letter-spacing: 0.06em; color: var(--text-dim);
 }
 .btn--small { padding: 0.3rem 0.6rem; font-size: 0.78rem; }
+
+/* --------------------------------------------------------------------------
+   The rundown.
+
+   Two marks, deliberately different: the CURSOR is where the operator is, and
+   ON AIR is what the node reports. They are allowed to disagree, and the panel
+   shows both rather than reconciling them.
+   -------------------------------------------------------------------------- */
+
+.rundown {
+  border: 1px solid var(--border); border-radius: var(--radius-lg);
+  background: var(--bg-raised); display: grid; gap: 0.6rem; padding: 0.9rem;
+}
+.rundown__head { display: flex; align-items: baseline; justify-content: space-between; gap: 1rem; }
+.rundown__head h2 { margin: 0; font-size: 0.95rem; }
+.rundown__transport { display: flex; gap: 0.5rem; align-items: center; }
+.rundown__transport .btn--take { flex: 1; justify-content: center; }
+
+.rundown__diverged {
+  margin: 0; padding: 0.5rem 0.7rem; border-radius: var(--radius); font-size: 0.83rem;
+  background: var(--warn-soft); border: 1px solid var(--warn-border); color: var(--warn-text);
+}
+
+.rundown__list, .rundown__list ol { list-style: none; margin: 0; padding: 0; }
+.rundown__playlist h3 {
+  margin: 0.6rem 0 0.25rem; font-size: 0.75rem; text-transform: uppercase;
+  letter-spacing: 0.06em; color: var(--text-faint);
+}
+.rundown__item {
+  display: flex; align-items: center; justify-content: space-between; gap: 0.5rem;
+  border-radius: var(--radius-sm); padding-right: 0.5rem;
+}
+/* Where the operator is: an accent bar on the leading edge. */
+.rundown__item--cursor { background: var(--accent-soft); box-shadow: inset 3px 0 0 var(--accent); }
+/* What the node says is showing: the on-air token, same as everywhere else. */
+.rundown__item--live .rundown__live { color: var(--on-air); }
+.rundown__jump {
+  flex: 1; text-align: left; background: none; border: 0; color: inherit;
+  font: inherit; padding: 0.4rem 0.55rem; cursor: pointer; border-radius: var(--radius-sm);
+}
+.rundown__jump:hover { background: var(--bg-tile-hover); }
+.rundown__live { display: inline-flex; align-items: center; gap: 0.25rem; font-size: 0.72rem; }
+
+.running { display: grid; gap: 1.5rem; margin-top: 1.75rem; }
+@media (min-width: 900px) { .running { grid-template-columns: 1fr 1fr; } }
+.running h2 { font-size: 1rem; margin: 0; }
+.running__editor {
+  margin-top: 0.75rem; padding: 0.85rem; display: grid; gap: 0.6rem;
+  border: 1px solid var(--border); border-radius: var(--radius); background: var(--bg-raised);
+}
+.running__editor h3 { margin: 0; font-size: 0.9rem; }
+.running__order { list-style: none; margin: 0; padding: 0; display: grid; gap: 0.3rem; }
+.running__order li {
+  display: flex; align-items: center; gap: 0.4rem;
+  padding: 0.3rem 0.4rem; border-radius: var(--radius-sm); background: var(--bg-tile);
+}
+.running__pos {
+  min-width: 1.4rem; text-align: right; font-family: var(--font-mono);
+  font-size: 0.8rem; color: var(--text-faint);
+}
+.running__label { flex: 1; min-width: 0; font-size: 0.88rem; }
+.running__add { display: flex; flex-wrap: wrap; gap: 0.35rem; }

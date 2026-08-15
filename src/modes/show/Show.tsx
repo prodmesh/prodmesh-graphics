@@ -27,6 +27,7 @@ import { useTopic } from '../../lib/stream'
 import { useQuery } from '../../lib/useQuery'
 import { keys, topics } from '../../lib/keys'
 import { ApiError, newCueId, takeCue } from '../../lib/api'
+import { RundownPanel } from './Rundown'
 import type { Item, LayersSnapshot, NodeSummary, CueLogSnapshot } from './types'
 
 const SHOW = 'default'
@@ -34,9 +35,11 @@ const SHOW = 'default'
 export function Show() {
   const { data: nodes } = useQuery<{ nodes: NodeSummary[] }>(keys.nodes())
   const { data: items } = useQuery<{ items: Item[] }>(keys.items())
+  const { data: rundowns } = useQuery<{ rundowns: { id: string; name: string }[] }>(keys.rundowns())
 
   const node = nodes?.nodes?.[0]
   const output = node?.state?.outputs?.[0]
+  const rundown = rundowns?.rundowns?.[0]
 
   return (
     <>
@@ -53,6 +56,15 @@ export function Show() {
             items={items?.items ?? []}
             reachable={node.reachable}
           />
+          {rundown ? (
+            <RundownPanel
+              rundownId={rundown.id}
+              nodeId={node.node_id}
+              outputId={output?.id ?? 'out-0'}
+              reachable={node.reachable}
+              show={SHOW}
+            />
+          ) : null}
           <TakeLog />
         </div>
       )}

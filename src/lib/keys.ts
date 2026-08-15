@@ -17,7 +17,10 @@ export const keys = {
   item: (id: string) => `/api/items/${id}`,
 
   playlists: () => '/api/playlists',
+  playlist: (id: string) => `/api/playlists/${id}`,
   rundowns: () => '/api/rundowns',
+  rundown: (id: string) => `/api/rundowns/${id}`,
+  assets: () => '/api/assets',
 
   nodes: () => '/api/nodes',
   node: (id: string) => `/api/nodes/${id}`,

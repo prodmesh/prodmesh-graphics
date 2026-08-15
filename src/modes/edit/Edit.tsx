@@ -22,6 +22,7 @@ import { useQuery, invalidate } from '../../lib/useQuery'
 import { useTopic } from '../../lib/stream'
 import { keys, topics } from '../../lib/keys'
 import { ApiError, patch, post } from '../../lib/api'
+import { Running } from './Running'
 import type { Item } from '../show/types'
 
 type Field = {
@@ -91,6 +92,8 @@ export function Edit() {
           ) : null}
         </div>
       )}
+
+      {publishable.length > 0 ? <Running items={items?.items ?? []} /> : null}
     </>
   )
 }

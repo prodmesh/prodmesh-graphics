@@ -51,6 +51,7 @@ async function send<T>(method: string, url: string, body?: unknown): Promise<T> 
 export const get = <T>(url: string) => send<T>('GET', url)
 export const post = <T>(url: string, body?: unknown) => send<T>('POST', url, body ?? {})
 export const patch = <T>(url: string, body: unknown) => send<T>('PATCH', url, body)
+export const put = <T>(url: string, body: unknown) => send<T>('PUT', url, body)
 export const del = (url: string) => send<void>('DELETE', url)
 
 /**
