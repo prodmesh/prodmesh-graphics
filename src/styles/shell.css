@@ -61,3 +61,127 @@
   .shell__sidebar { width: var(--sidebar-rail); }
   .shell__brand, .shell__link span, .shell__hint { display: none; }
 }
+
+/* --------------------------------------------------------------------------
+   Show and Edit.
+
+   Tokens only, never a literal colour — the same rule as ProdMesh-Control, and
+   the reason a theme change is one file rather than a search.
+
+   Show is sized for a booth: big targets, high contrast, and nothing
+   destructive adjacent to something routine.
+   -------------------------------------------------------------------------- */
+
+.show { display: grid; gap: 1.25rem; grid-template-columns: minmax(0, 1fr); }
+@media (min-width: 1100px) {
+  .show { grid-template-columns: minmax(0, 1fr) 22rem; grid-template-areas: "onair log" "rack log"; }
+  .show__onair { grid-area: onair; }
+  .show__rack  { grid-area: rack; }
+  .show__log   { grid-area: log; }
+}
+
+.show__dim { color: var(--text-dim); font-size: 0.85rem; }
+.show__pad { padding: 0.75rem 0; }
+
+.show__onair {
+  border: 1px solid var(--border); border-radius: var(--radius-lg);
+  background: var(--bg-raised); overflow: hidden;
+}
+.show__onair-head {
+  display: flex; align-items: center; gap: 0.6rem;
+  padding: 0.7rem 0.9rem; border-bottom: 1px solid var(--border-subtle);
+  font-weight: 600;
+}
+.show__layers { list-style: none; margin: 0; padding: 0; }
+.show__layer {
+  display: flex; align-items: baseline; gap: 0.75rem;
+  padding: 0.7rem 0.9rem; border-bottom: 1px solid var(--border-subtle);
+}
+.show__layer:last-child { border-bottom: 0; }
+/* On air gets its own token, not "red". It means one thing everywhere. */
+.show__layer--live { background: var(--on-air-soft); box-shadow: inset 3px 0 0 var(--on-air); }
+.show__layer-name { min-width: 8rem; font-weight: 600; }
+.show__layer-item { color: var(--text); }
+.show__degraded { color: var(--warn-text); display: inline-flex; align-items: center; gap: 0.25rem; font-size: 0.8rem; }
+
+.show__rack { display: grid; gap: 0.6rem; }
+.show__items { list-style: none; margin: 0; padding: 0; display: grid; gap: 0.5rem; }
+.show__item {
+  display: flex; align-items: center; justify-content: space-between; gap: 1rem;
+  padding: 0.7rem 0.9rem; border: 1px solid var(--border); border-radius: var(--radius);
+  background: var(--bg-tile);
+}
+.show__item-id { display: flex; flex-direction: column; gap: 0.15rem; min-width: 0; }
+.show__item-label { font-weight: 600; }
+.show__item-actions { display: flex; gap: 0.5rem; flex-shrink: 0; }
+.show__staging { color: var(--warn-text); font-size: 0.8rem; }
+.show__clear { margin-top: 0.5rem; }
+
+.show__problem {
+  display: flex; align-items: center; gap: 0.5rem;
+  padding: 0.7rem 0.9rem; border-radius: var(--radius);
+  background: var(--warn-soft); border: 1px solid var(--warn-border); color: var(--warn-text);
+}
+
+.show__log { border: 1px solid var(--border); border-radius: var(--radius-lg); background: var(--bg-raised); }
+.show__log-head { margin: 0; padding: 0.7rem 0.9rem; font-size: 0.95rem; border-bottom: 1px solid var(--border-subtle); }
+.show__log-list { list-style: none; margin: 0; padding: 0.25rem 0; max-height: 32rem; overflow-y: auto; }
+.show__log-list li {
+  display: grid; grid-template-columns: 5.5rem 5rem minmax(0, 1fr) auto;
+  gap: 0.5rem; padding: 0.35rem 0.9rem; font-size: 0.85rem; align-items: baseline;
+}
+.show__log-bad { color: var(--warn-text); }
+.show__log-time { font-family: var(--font-mono); color: var(--text-faint); }
+.show__log-op { font-weight: 600; }
+.show__log-item { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+.btn {
+  display: inline-flex; align-items: center; gap: 0.4rem;
+  padding: 0.55rem 0.95rem; border-radius: var(--radius);
+  border: 1px solid var(--border-strong); background: var(--bg-tile);
+  color: var(--text); font: inherit; font-weight: 600; cursor: pointer;
+}
+.btn:hover:not(:disabled) { background: var(--bg-tile-hover); }
+.btn:disabled { opacity: 0.45; cursor: not-allowed; }
+.btn--take { background: var(--accent); border-color: var(--accent); color: var(--text-on-accent); min-width: 6rem; justify-content: center; }
+.btn--take:hover:not(:disabled) { background: var(--accent-hover); }
+.btn--ghost { background: transparent; }
+
+.edit { display: grid; gap: 1.25rem; align-items: start; }
+@media (min-width: 900px) { .edit { grid-template-columns: minmax(0, 1fr) minmax(0, 22rem); } }
+.edit__list-head { display: flex; align-items: center; justify-content: space-between; gap: 1rem; }
+.edit__list-head h2 { font-size: 1rem; margin: 0; }
+.edit__items { list-style: none; margin: 0.75rem 0 0; padding: 0; display: grid; gap: 0.4rem; }
+.edit__item { border: 1px solid var(--border); border-radius: var(--radius); background: var(--bg-tile); }
+.edit__item--selected { border-color: var(--accent-border); background: var(--accent-soft); }
+.edit__item-btn {
+  display: flex; flex-direction: column; gap: 0.15rem; align-items: flex-start;
+  width: 100%; padding: 0.65rem 0.85rem; background: none; border: 0; color: inherit;
+  font: inherit; text-align: left; cursor: pointer;
+}
+.edit__item-label { font-weight: 600; }
+.edit__item-flags { display: flex; flex-wrap: wrap; gap: 0.35rem; padding: 0 0.85rem 0.6rem; }
+.edit__flag { font-size: 0.75rem; padding: 0.1rem 0.45rem; border-radius: var(--radius-sm); display: inline-flex; align-items: center; gap: 0.25rem; }
+.edit__flag--info { background: var(--purple-soft); color: var(--purple-text); border: 1px solid var(--purple-border); }
+.edit__flag--warn { background: var(--warn-soft); color: var(--warn-text); border: 1px solid var(--warn-border); }
+
+.edit__editor {
+  display: grid; gap: 0.75rem; padding: 1rem;
+  border: 1px solid var(--border); border-radius: var(--radius-lg); background: var(--bg-raised);
+}
+.edit__editor h2 { margin: 0; font-size: 1rem; }
+.edit__actions { display: flex; gap: 0.5rem; margin-top: 0.25rem; }
+.edit__problems {
+  margin: 0; padding: 0.6rem 0.9rem 0.6rem 1.9rem; border-radius: var(--radius);
+  background: var(--warn-soft); border: 1px solid var(--warn-border); color: var(--warn-text); font-size: 0.88rem;
+}
+
+.field { display: grid; gap: 0.3rem; font-size: 0.9rem; }
+.field > span { display: flex; align-items: baseline; gap: 0.5rem; color: var(--text-dim); }
+.field input[type="text"], .field input[type="number"], .field select {
+  padding: 0.5rem 0.6rem; border-radius: var(--radius-sm);
+  border: 1px solid var(--border-strong); background: var(--bg); color: var(--text); font: inherit;
+}
+.field__req { font-style: normal; font-size: 0.75rem; color: var(--text-faint); }
+.field__count { font-style: normal; font-size: 0.75rem; color: var(--text-faint); margin-left: auto; font-family: var(--font-mono); }
+.field__count--over { color: var(--danger); }
