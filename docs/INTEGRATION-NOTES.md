@@ -67,6 +67,27 @@ in the building.
 This is the same lesson as ProPresenter 21.1 in the church versus 21.4 on the
 laptop: **the building is not the dev machine.**
 
+**Update, 2026-08-15 — the dev machine moved, and now the fallback is the
+untested path.** Desktop Video on this MacBook Pro is now **16.3**, and the same
+`pmgctl decklink list` reports `attrs=16.0 status=16.0 output=16.0`: the
+newest-first query succeeds on its first try and the fallback chain never runs.
+Capabilities read correctly and directly — `16 audio channels`, `persistent id
+0xC55080A0`, external keying present.
+
+That is worse for us, not better. **The code path that made a 14.5 driver work
+is now exercised nowhere on this machine**, while the booth machine is the one
+likely to still be on an old driver — which is exactly the configuration the
+fallback exists for. The lesson has inverted rather than gone away: the dev
+machine is no longer the building, so the compatibility path needs a deliberate
+test rather than an incidental one. Until there is a way to run against an older
+driver, treat the fallback as **unverified since 2026-08-14** rather than as
+working code.
+
+Also measured on the Quad 2 at 16.3, and relevant to fill+key configuration:
+**external keying is present on only one connector per topological group** —
+`[1]` in group `0x5007` and `[3]` in group `0x5005`, not on all eight. Configure
+must not offer a keyed pair on a connector that cannot key.
+
 ### Updating Desktop Video makes every DeckLink vanish until you approve the extension and reboot
 *2026-08-14 · MacBook Pro arm64, macOS 26.3 · Desktop Video 14.5 → 16.3 · DeckLink Quad 2 in an Echo Express SE-I TB3*
 
