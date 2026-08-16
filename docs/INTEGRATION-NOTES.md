@@ -1528,6 +1528,24 @@ disturbed this run: the machine was quiet where the first run hiccupped at 12.5
 minutes. So this proves stability, and the *injected*-stall run proves recovery.
 Neither run proves both, and it would be a mistake to read either as if it did.
 
+**ProPresenter was open for the whole run, and it changes two things.** It was
+running during the earlier soak that stalled at 12.5 minutes and was the best
+remaining suspect once screen recording was ruled out. It is not the cause: two
+hours alongside it, zero late frames, 82 corrections. More usefully, **coexisting
+with ProPresenter as the CG layer is a stated design decision** (VISION,
+decision 9) and it has now been demonstrated rather than assumed — same machine,
+same GPU, same VideoToolbox, two hours, no interference in either direction.
+
+The stall that started all of this therefore has no identified cause: not screen
+recording, not ProPresenter, nothing in any log. Which is the argument for the
+correction that now exists, and not an argument for continuing to look.
+
+**The signal held lock on real downstream hardware.** The output was watched for
+the full two hours through an SDI→HDMI converter. Zero late frames is our own
+counter reporting on itself; a third-party device accepting the signal
+continuously for two hours is independent evidence that the timing and format
+are actually right.
+
 **One harness correction.** The first pass of this verdict failed the run on a
 single held frame — which turned out to be at frame 300, the clip holding its
 first picture while ffmpeg produced one. That is the documented ~120 ms pre-roll
