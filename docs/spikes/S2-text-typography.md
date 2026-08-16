@@ -1,7 +1,7 @@
 # S2 — Text and typography at broadcast quality
 
 **Gates:** M5 · **Risk:** [R3](../RISKS.md#r3) · **ADR:** 0002
-**Status:** **RUN 2026-08-15** — 4 of 5 measured criteria pass; **shudder FAILS and its root cause is open**
+**Status:** **RUN 2026-08-15** — 4 of 5 measured criteria pass; shudder FAILS by measurement, but **2026-08-16: not visible across 446 lower thirds watched on SDI for two hours.** Root cause open; priority reduced. The untested case is slow sustained motion (a ticker), not reveals
 
 ## Question
 
@@ -145,6 +145,35 @@ itself saturating when an edge column clamps at 0 or 255.
 (~1.1 px/frame) it is roughly 18% positional jitter, which could well read as
 judder — or could be invisible. **That still needs eyes on a real output**, and
 the metric now exists to tell whether any fix actually helped.
+
+### A2 — watched on a real display for two hours, 2026-08-16
+
+**The number is unchanged and the risk is not what it was.** During M3's
+two-hour soak the lower third played its In and Out **446 times**, watched
+continuously on an SDI→HDMI converter. Reported: *"looked awesome, very
+consistent the whole time."*
+
+That is more relevant than it first sounds. The In slides the band **900 px in
+700 ms on a cubic ease-out** (`0.16, 1, 0.3, 1`), so it decelerates into rest —
+**the tail of that curve is sub-pixel motion, fractions of a pixel per frame.**
+It is exactly where a 0.21 px deviation from linear would surface, as a hitch on
+settle. Over 446 repetitions, on real hardware, nobody saw one.
+
+What this does and does not establish:
+
+- **Does**: at the motion profile a lower third actually uses — a fast slide
+  decelerating to a stop — the deviation is below the threshold of notice. That
+  moves this from "an unknown that might be disqualifying" to "a measured
+  imperfection with no observed consequence".
+- **Does not**: make the 0.21 px go away, or say anything about **slow sustained
+  motion**. A ticker crawling continuously across the screen is the opposite
+  profile: the error has nowhere to hide and no deceleration to mask it, and it
+  accumulates in the eye rather than resolving. **That case is still untested and
+  is the one that would justify reopening this.**
+
+Root cause remains open. The priority for finding it drops accordingly: it is
+now a known-magnitude blemish rather than a possible blocker, and the test that
+would change that assessment is a crawling ticker, not more lower thirds.
 
 ### C — fringing is clean
 

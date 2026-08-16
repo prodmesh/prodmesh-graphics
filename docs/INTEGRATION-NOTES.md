@@ -1546,6 +1546,24 @@ counter reporting on itself; a third-party device accepting the signal
 continuously for two hours is independent evidence that the timing and format
 are actually right.
 
+**Watched, not just counted — and it changes what S2 means.** The lower third
+played 446 times over the two hours, seen on the converter throughout: *"looked
+awesome, very consistent."* The In slides the band 900 px in 700 ms on a cubic
+ease-out, so it **decelerates into rest**, and that tail is sub-pixel motion —
+precisely where spike S2's measured 0.21 px deviation from linear would show as
+a hitch on settle. Over 446 repetitions on real hardware, it did not.
+
+That does not delete the 0.21 px; it reclassifies it. From "an unknown that
+might be disqualifying" to "a measured imperfection with no observed
+consequence at the motion profile a lower third uses". **The case still untested
+is slow sustained motion** — a ticker crawling, where the error has no
+deceleration to hide behind and accumulates in the eye. That, not more reveals,
+is what would justify reopening S2.
+
+The clip's 30 s loop point was visible as the content restarting, which is the
+material, with no hitch reported at the seam — `-stream_loop` behaving as
+intended over roughly 240 wraps.
+
 **One harness correction.** The first pass of this verdict failed the run on a
 single held frame — which turned out to be at frame 300, the clip holding its
 first picture while ffmpeg produced one. That is the documented ~120 ms pre-roll
