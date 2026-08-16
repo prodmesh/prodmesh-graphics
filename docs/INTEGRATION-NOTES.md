@@ -1382,3 +1382,59 @@ a GPU buffer and stalls the decoder within seconds.
 MJPEG is kept behind `--preview-mjpeg`. It needs no decoder in the browser at
 all, which makes it the instrument that answers "is ANY picture coming out of
 this node" when the answer for H.264 is no.
+
+## A two-hour soak: one hiccup, and an audio offset that never recovers
+*2026-08-16 · MacBook Pro arm64 · Desktop Video 16.3 · DeckLink Quad 2 · M3*
+
+Two hours at 1080p59.94, a 30 s clip looping on Fullscreen with embedded audio,
+446 lower-third take/take-out cycles on another layer. **894 cues, every one
+applied, no warnings and no errors in the whole run.** And it failed three
+checks — all of them the same five seconds.
+
+```
+  render over budget    17
+  card displayed late   55        FAIL
+  clip held frames      108       FAIL
+  audio buffer trend    5976 -> 14063 samples (+168.5 ms)   FAIL
+  audio peak            -21.1 dBFS  (programme)
+```
+
+The three are one incident. At **frame ~45,000 — twelve and a half minutes in —**
+inside a single 300-frame window:
+
+| | before | after |
+|---|---|---|
+| clip held frames | 0 | 108 |
+| card displayed late | 0 | 53 |
+| audio buffered | 4,241 | 14,050 |
+
+Then **nothing else happened for an hour and forty-seven minutes.** Held stayed
+at 108, late crept to 55 and stopped, and the buffer sat dead flat at ~14,000.
+Whatever stalled the machine for a second at 12.5 minutes stalled it once.
+
+**The finding is not the hiccup. It is that the hiccup is permanent.**
+
+The audio buffer went from ~5,900 samples (123 ms) to ~14,000 (292 ms) and
+**stayed there for the rest of the run**. That is a **+168 ms lip-sync offset
+that nothing corrects and nothing reports.** Audio is scheduled continuous: the
+card consumes it against its own 48 kHz clock while we top it up once per
+*scheduled* frame. When the output stalls, our loop keeps scheduling into
+DeckLink's queue, audio piles up ahead of picture — and once ahead, it is ahead
+forever. There is no feedback path.
+
+Every other counter recovered. Held frames stopped climbing; late frames stopped
+climbing; the frame budget was met for the next 1.75 hours. **Only the sync
+error is cumulative, and it is the only one a viewer would still be noticing two
+hours later.**
+
+The fix is to close the loop on the instrument that already exists.
+`GetBufferedAudioSampleFrameCount` is read every five seconds for exactly this;
+it needs to *drive* the sample count rather than only report it — hold a target
+level and correct gently toward it, which is what playout hardware does and what
+`pmg_audio::AudioClock` deliberately does not do on its own. The exact cadence
+stays right; a slow correction rides on top.
+
+**What the soak proves about soaking.** Three minutes passed cleanly, twice.
+The stall at 12.5 minutes and the permanence of its consequence are both
+invisible at that length — and the permanence is the part that matters, because
+a booth machine will hiccup and the question is only whether it recovers.
