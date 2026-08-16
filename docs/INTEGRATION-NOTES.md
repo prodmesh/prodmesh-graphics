@@ -1502,3 +1502,36 @@ for the rest of the service.
 **An injected stall is late frames by definition.** The verdict allows ~90 for a
 one-second injection and checks recovery instead. A harness whose only failure
 mode is its own stimulus tests nothing.
+
+## The two-hour soak, passed
+*2026-08-16 · MacBook Pro arm64 · Desktop Video 16.3 · DeckLink Quad 2 sub-device 1 · M3*
+
+Two hours at 1080p59.94 — a clip looping with embedded audio on one layer, 446
+lower-third take/take-out cycles on another, 894 cues, **all applied, none
+rejected, zero warnings and zero errors**.
+
+```
+  card displayed late    0        over 432,000 frames
+  clip held frames       0        during the run (+1 at startup, by design)
+  audio buffer trend     +2.3 ms  over two hours
+  audio peak             -21.1 dBFS
+```
+
+M3's bar was "zero dropped output frames, measured A/V drift within a frame".
+Both are met with room: **zero** late frames, and the audio buffer's entire
+excursion across two hours was **489 samples — 10.2 ms, well inside a single
+16.68 ms frame**, against a learned target of 6,145.
+
+**The correction barely had to work, which is the interesting part.** 82
+corrections across 432,000 frames — 0.02 % — and **zero hard resyncs**. Nothing
+disturbed this run: the machine was quiet where the first run hiccupped at 12.5
+minutes. So this proves stability, and the *injected*-stall run proves recovery.
+Neither run proves both, and it would be a mistake to read either as if it did.
+
+**One harness correction.** The first pass of this verdict failed the run on a
+single held frame — which turned out to be at frame 300, the clip holding its
+first picture while ffmpeg produced one. That is the documented ~120 ms pre-roll
+behaviour working exactly as described. Held frames are cumulative from the
+player's creation, so the check now takes the first sample as a baseline and
+asks whether the decoder fell behind **again**. A test that fails every run for
+the one thing behaving as designed teaches people to ignore it.

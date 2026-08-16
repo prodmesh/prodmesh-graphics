@@ -283,8 +283,17 @@ if need(cardl, "card displayed late"):
         check(late == 0, "card displayed late", f"{late:.0f}  (what a viewer would see)")
 
 if need(held, "clip held frames"):
-    check(max(held) == 0, "clip held frames",
-          f"{max(held):.0f}" + ("" if max(held) == 0 else "  (decoder fell behind)"))
+    # Held frames are cumulative from the player's creation, and a clip HOLDS
+    # ITS FIRST FRAME by design: ffmpeg needs ~120 ms to produce one, and the
+    # clock starts when it lands (INTEGRATION-NOTES). Counting that as a
+    # decoder failure fails every run for the one thing that is working as
+    # documented. What matters is whether it holds again LATER.
+    baseline, final = held[0], max(held)
+    during = final - baseline
+    check(during == 0, "clip held frames",
+          f"{during:.0f} during the run"
+          + (f"  (+{baseline:.0f} at startup, by design)" if baseline else "")
+          + ("" if during == 0 else "  DECODER FELL BEHIND"))
     print(f"  ----  clip dropped frames   {max(drop) if drop else 0:.0f}  (expected when media runs faster)")
 
 if need(bufs, "audio buffer trend"):
