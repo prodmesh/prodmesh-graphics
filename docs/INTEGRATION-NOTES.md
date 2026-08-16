@@ -1434,6 +1434,27 @@ level and correct gently toward it, which is what playout hardware does and what
 `pmg_audio::AudioClock` deliberately does not do on its own. The exact cadence
 stays right; a slow correction rides on top.
 
+**The obvious suspect was ruled out, and ruling it out was useful.** Four macOS
+screen recordings ran during this soak — about 24 minutes of them, including one
+of 13.6 minutes. macOS screen recording is a heavy `VideoToolbox` client, the
+**same hardware encoder the preview uses**, so it was the natural explanation.
+It is not: the stall was at 17:01:00–17:01:30 and the first recording started at
+17:07:08, six minutes later. And during every recording window the counters are
+indistinguishable from a quiet control window — late frozen at 55, held frozen
+at 108, buffer in the same 13,500–14,200 band.
+
+| | buffer | late | held |
+|---|---|---|---|
+| the stall, 17:01 | 4,241 → 14,058 | 0 → 53 | 0 → 108 |
+| recording, 13.6 min | 13,768–14,209 | 55 → 55 | 108 → 108 |
+| quiet control | 13,898–14,210 | 55 → 55 | 108 → 108 |
+
+So the node tolerates contention for the encoder it depends on, and the stall
+that mattered came from something with no trace in any log. **That is the
+argument for fixing the consequence rather than hunting the cause**: a booth
+machine will hiccup, the causes cannot be enumerated, and the only question
+that can be engineered is whether it recovers.
+
 **What the soak proves about soaking.** Three minutes passed cleanly, twice.
 The stall at 12.5 minutes and the permanence of its consequence are both
 invisible at that length — and the permanence is the part that matters, because
