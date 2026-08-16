@@ -27,12 +27,14 @@ API=http://127.0.0.1:8519
 MINUTES=5
 BACKEND=decklink
 CYCLE=8          # seconds between lower-third take and take-out
+STALL=""        # --stall-at <s>: inject a 1 s stall and assert it recovers
 while [ $# -gt 0 ]; do
   case "$1" in
     --minutes) MINUTES="$2"; shift 2 ;;
     --hours)   MINUTES=$(( $2 * 60 )); shift 2 ;;
     --backend) BACKEND="$2"; shift 2 ;;
     --cycle)   CYCLE="$2"; shift 2 ;;
+    --stall-at) STALL="$2"; shift 2 ;;
     *) echo "unknown flag $1" >&2; exit 2 ;;
   esac
 done
@@ -157,6 +159,7 @@ rm -rf "$RUN/node"
 NODE_ARGS=(--state-dir "$RUN/node" --server ws://127.0.0.1:8519 --name soak
            --layers "Fullscreen,Lower Third,Bug" --audio-channels 2
            --font /System/Library/Fonts/Helvetica.ttc)
+[ -n "$STALL" ] && NODE_ARGS+=(--inject-stall-at "$STALL")
 if [ "$BACKEND" = "decklink" ]; then
   NODE_ARGS+=(--backend decklink --decklink 1 --decklink-mode "1080p59.94")
 else
@@ -267,7 +270,17 @@ def need(samples, label):
 print(f"  ----  render over budget    {api_late}  (our budget, from the node's own report)")
 
 if need(cardl, "card displayed late"):
-    check(max(cardl) == 0, "card displayed late", f"{max(cardl):.0f}  (what a viewer would see)")
+    late = max(cardl)
+    stall = "INJECTING" in log
+    if stall:
+        # An injected stall IS late frames — that is the stimulus, not a fault.
+        # One second at 59.94 is about 60. Anything much past that is the run
+        # failing for its own reasons, which is still worth catching.
+        budget = 90
+        check(late <= budget, "card displayed late",
+              f"{late:.0f} of {budget} allowed for the injected 1 s stall")
+    else:
+        check(late == 0, "card displayed late", f"{late:.0f}  (what a viewer would see)")
 
 if need(held, "clip held frames"):
     check(max(held) == 0, "clip held frames",
@@ -287,6 +300,20 @@ if need(peaks, "audio peak"):
     loud = max(peaks)
     check(loud > -60, "audio peak",
           f"{loud:.1f} dBFS  ({'programme' if loud > -60 else 'SILENCE'})")
+
+# Recovery, when a stall was injected. The point of the whole exercise: the
+# soak found that a hiccup left audio permanently ahead, so an injected hiccup
+# must now come back.
+if "INJECTING" in log and bufs:
+    tgt = [float(m) for m in re.findall(r"target=(\d+)", log)]
+    target = max(tgt) if tgt else st.mean(bufs[:max(1, len(bufs)//10)])
+    peak_after = max(bufs)
+    settled = st.mean(bufs[-max(1, len(bufs)//10):])
+    off_ms = (settled - target) * 1000 / 48000
+    check(abs(off_ms) < 20, "recovered from stall",
+          f"peaked {peak_after:.0f}, settled {settled:.0f} against target {target:.0f} ({off_ms:+.1f} ms)")
+    corr = [float(m) for m in re.findall(r"corrections=(\d+)", log)]
+    print(f"  ----  sync corrections      {max(corr) if corr else 0:.0f}")
 
 print(f"\n  {cycles} lower-third take/take-out cycles over the run")
 print(f"  full log: {run}/node.log")

@@ -1459,3 +1459,46 @@ that can be engineered is whether it recovers.
 The stall at 12.5 minutes and the permanence of its consequence are both
 invisible at that length — and the permanence is the part that matters, because
 a booth machine will hiccup and the question is only whether it recovers.
+
+## Closing the loop on the audio buffer, and two shapes of correction that do not work
+*2026-08-16 · DeckLink Quad 2 · M3*
+
+The soak's permanent +168 ms offset is fixed by making
+`GetBufferedAudioSampleFrameCount` **drive** the sample count rather than only
+report it. `AudioClock` stays open-loop and bit-exact; `AudioSync` rides on top
+and only acts when the level is off target.
+
+Verified by **injecting** the fault rather than waiting for one —
+`--inject-stall-at <s>` stalls a render thread for a second, on demand:
+
+| | peaked | settled | offset |
+|---|---|---|---|
+| before | 29,643 | 14,006 | **+164.8 ms, permanent** |
+| after | 9,712 | 6,061 | **−0.6 ms** |
+
+Note the peak as well as the settle: the excursion is smaller now, because a
+gross error is caught in one step instead of only cleaned up afterwards.
+
+**Two shapes that seemed obviously right and were not.**
+
+*Proportional correction.* Scaling the step by the error is the textbook shape
+and it slows down exactly as it approaches, so the last 25 ms take longer than
+the first 75. Measured, it turned a 20 s recovery into 50 s and a six-minute
+soak could not finish recovering. The step is already below audibility, so
+easing off buys nothing — it is **flat until back inside the tolerance band**,
+which is narrow enough that overshoot cannot hunt.
+
+*A half-second resync threshold.* Chosen as "obviously bad", it was both too
+slow and too lenient: the injected stall produced 490 ms, which sat just under
+the threshold and then took six and a half minutes to walk back one sample at a
+time. **100 ms** is the threshold now — past that, the click of a single step
+beats sitting through the offset.
+
+**The target is learned, not configured.** Ten seconds in, the node adopts the
+settled buffer level. It depends on preroll depth and on the card, and a wrong
+constant is not a mistake you find — it is a level the node corrects *towards*
+for the rest of the service.
+
+**An injected stall is late frames by definition.** The verdict allows ~90 for a
+one-second injection and checks recovery instead. A harness whose only failure
+mode is its own stimulus tests nothing.

@@ -184,6 +184,121 @@ pub fn mix_frame(
         .collect())
 }
 
+/// Holds the card's audio buffer at a target level.
+///
+/// # Why the exact cadence is not enough
+///
+/// [`AudioClock`] produces exactly the right number of samples for every frame,
+/// and over two hours it drifts by zero. That is necessary and it is not
+/// sufficient, because it is **open loop**: it counts the frames we *scheduled*,
+/// and the card consumes audio against its own 48 kHz clock regardless of
+/// whether those frames were displayed.
+///
+/// Measured on 2026-08-16: a one-second stall twelve minutes into a two-hour
+/// soak left the card holding 14,000 samples instead of 5,900 — audio **168 ms
+/// ahead of picture** — and it stayed there for the remaining hour and
+/// forty-seven minutes. Every other counter recovered. Nothing corrected this
+/// one and nothing reported it, because there was no feedback path at all.
+///
+/// # How it corrects
+///
+/// Gently, and only when off target. One sample per frame is 60 samples a
+/// second — **0.125 % of the stream, far below anything audible** — and it
+/// clears that 168 ms in about two minutes. Correcting faster would be a bigger
+/// discontinuity for no benefit, since the error is already inaudible on its own
+/// once it stops growing; correcting at all is the entire point.
+///
+/// A gross error gets a hard resync instead. Past half a second the offset is
+/// worse than the click of fixing it in one step, and two minutes of gradual
+/// correction would itself be two minutes of visibly bad lip sync.
+/// The most samples a single frame's count may be bent by.
+///
+/// 4 of ~801 is half a percent. Audible distortion from dropped samples starts
+/// far above this, and the cap matters more than the number: an uncapped
+/// correction would turn one bad reading into an audible jump.
+const MAX_CORRECTION: u32 = 4;
+
+#[derive(Debug, Clone, Copy)]
+pub struct AudioSync {
+    target: u32,
+    tolerance: u32,
+    resync_above: u32,
+    /// Corrections applied, and hard resyncs. Reported, never hidden — a node
+    /// quietly correcting all service is a node with something else wrong.
+    pub corrections: u64,
+    pub resyncs: u64,
+}
+
+impl AudioSync {
+    /// `target` is the buffer level to hold, in sample frames.
+    ///
+    /// Two to three video frames is the natural place: deep enough that a
+    /// momentary hiccup does not underrun into a click, shallow enough that the
+    /// audio is not needlessly late.
+    pub fn new(target: u32) -> Self {
+        Self {
+            target,
+            // Under a third of a frame. Correcting inside the normal
+            // oscillation would mean correcting constantly against noise.
+            tolerance: 250,
+            // 100 ms. Measured 2026-08-16: a half-second threshold was both too
+            // slow and too lenient — an injected stall left 490 ms of offset,
+            // which sat just UNDER the threshold and then took six and a half
+            // minutes to walk back at one sample a frame. A hundred milliseconds
+            // of lip sync is already past what anyone should sit through, so
+            // past that the click of a single step is the better trade.
+            resync_above: SAMPLE_RATE / 10,
+            corrections: 0,
+            resyncs: 0,
+        }
+    }
+
+    pub fn target(&self) -> u32 {
+        self.target
+    }
+
+    /// How many samples to actually send this frame.
+    ///
+    /// `nominal` is [`AudioClock::samples_for`] — the exact count. `buffered` is
+    /// what the card says it still holds. The return value differs from
+    /// `nominal` by at most one sample, except on a hard resync.
+    pub fn correct(&mut self, nominal: u32, buffered: u32) -> u32 {
+        let error = buffered as i64 - self.target as i64;
+
+        if error.unsigned_abs() as u32 > self.resync_above {
+            self.resyncs += 1;
+            // Send a whole frame's worth short or long, in one step. Past half a
+            // second, being right now beats being smooth.
+            return if error > 0 {
+                nominal.saturating_sub(nominal.min(error.unsigned_abs() as u32))
+            } else {
+                nominal + (error.unsigned_abs() as u32).min(nominal)
+            };
+        }
+
+        if error.unsigned_abs() as u32 <= self.tolerance {
+            return nominal;
+        }
+
+        self.corrections += 1;
+        // FLAT, not proportional to the error.
+        //
+        // Scaling the step by the error was the obvious first shape and it is
+        // wrong: it slows down exactly as it approaches, so the last 25 ms take
+        // longer than the first 75. Measured, that turned a 20 s recovery into
+        // 50 s. The step is already below audibility, so there is nothing to
+        // buy by easing off — correct at the same rate until back inside the
+        // tolerance band, which is narrow enough that overshoot cannot hunt.
+        let step = MAX_CORRECTION;
+        if error > 0 {
+            // Ahead: send fewer, so the card catches up.
+            nominal.saturating_sub(step.min(nominal))
+        } else {
+            nominal + step
+        }
+    }
+}
+
 pub fn selftest() -> Result<(), String> {
     // Two hours at 59.94 must carry exactly the right number of samples. A
     // per-frame rounding error of 0.8 samples is inaudible for an hour and is
@@ -213,6 +328,124 @@ pub fn selftest() -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The soak's failure, replayed: a stall leaves the buffer 8,000 samples
+    /// high and nothing brings it back.
+    #[test]
+    fn an_offset_is_corrected_rather_than_lived_with() {
+        let clock = AudioClock::new((60000, 1001), SAMPLE_RATE).unwrap();
+        let mut sync = AudioSync::new(5900);
+
+        // Steady state: no correction at all, so the exact cadence survives.
+        let quiet: Vec<u32> = (0..5)
+            .map(|n| sync.correct(clock.samples_for(n), 5900))
+            .collect();
+        assert_eq!(
+            quiet.iter().sum::<u32>(),
+            4004,
+            "an on-target buffer must not be touched"
+        );
+        assert_eq!(sync.corrections, 0);
+
+        // Now the stall: 8,000 samples ahead. Simulate the card draining while
+        // we feed the corrected count.
+        let mut buffered: i64 = 14_000;
+        let mut frames = 0u64;
+        while buffered > 5900 + 250 && frames < 20_000 {
+            let want = clock.samples_for(frames);
+            let sent = sync.correct(want, buffered as u32);
+            // The card consumes the nominal amount in the time a frame takes.
+            buffered += sent as i64 - want as i64;
+            frames += 1;
+        }
+        assert!(
+            buffered <= 6150,
+            "the offset must come back, got {buffered}"
+        );
+        assert!(
+            frames < 9000,
+            "and within a couple of minutes, took {frames} frames"
+        );
+        println!(
+            "corrected 8100 samples in {frames} frames ({:.0} s)",
+            frames as f64 / 59.94
+        );
+    }
+
+    #[test]
+    fn a_gross_offset_resyncs_in_one_step_rather_than_over_minutes() {
+        let mut sync = AudioSync::new(5900);
+        // A whole second ahead. Two minutes of gradual correction would be two
+        // minutes of visibly bad lip sync.
+        let sent = sync.correct(801, 54_000);
+        assert!(sent < 801);
+        assert_eq!(sync.resyncs, 1);
+    }
+
+    #[test]
+    fn gradual_correction_is_capped_however_far_off_it_is() {
+        let mut sync = AudioSync::new(5900);
+        // Inside the resync threshold, so all of these take the gentle path.
+        for buffered in [6200u32, 7000, 9000, 3000, 2000] {
+            let sent = sync.correct(801, buffered);
+            assert!(
+                sent.abs_diff(801) <= MAX_CORRECTION,
+                "buffered {buffered} moved the count by {}",
+                sent.abs_diff(801)
+            );
+        }
+        assert_eq!(sync.resyncs, 0);
+    }
+
+    /// A resync deliberately exceeds the gradual cap — that is what makes it a
+    /// resync — but it may never bend a frame by more than the frame itself,
+    /// or the count sent stops meaning anything.
+    #[test]
+    fn a_resync_never_sends_more_than_one_frames_worth_extra() {
+        let mut sync = AudioSync::new(5900);
+        let empty = sync.correct(801, 0);
+        assert!(empty <= 801 * 2, "padded to {empty}");
+        let flooded = sync.correct(801, 200_000);
+        assert_eq!(
+            flooded, 0,
+            "a badly overfull buffer sends nothing this frame"
+        );
+        assert_eq!(sync.resyncs, 2);
+    }
+
+    /// The case the injected stall actually produced, and the one the first
+    /// version could not clear inside a six-minute run.
+    #[test]
+    fn a_half_second_stall_recovers_in_seconds_not_minutes() {
+        let clock = AudioClock::new((60000, 1001), SAMPLE_RATE).unwrap();
+        let mut sync = AudioSync::new(6096);
+        let mut buffered: i64 = 29_643; // measured peak after a 1 s stall
+        let mut frames = 0u64;
+        while (buffered - 6096).abs() > 250 && frames < 100_000 {
+            let want = clock.samples_for(frames);
+            let sent = sync.correct(want, buffered as u32);
+            buffered += sent as i64 - want as i64;
+            frames += 1;
+        }
+        let secs = frames as f64 / 59.94;
+        assert!(
+            secs < 30.0,
+            "a stall must clear in seconds, took {secs:.0} s ({frames} frames)"
+        );
+        println!(
+            "cleared 490 ms of offset in {secs:.1} s ({} resyncs)",
+            sync.resyncs
+        );
+    }
+
+    /// A draining buffer is padded rather than left to reach zero, where it
+    /// would click.
+    #[test]
+    fn a_draining_buffer_is_padded() {
+        let mut sync = AudioSync::new(5900);
+        assert_eq!(sync.correct(801, 5000), 801 + MAX_CORRECTION);
+        assert_eq!(sync.corrections, 1);
+    }
 
     #[test]
     fn twenty_five_is_a_whole_number_of_samples() {

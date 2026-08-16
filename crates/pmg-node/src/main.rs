@@ -73,6 +73,9 @@ USAGE:
                            asset. Provisional — see runtime.rs.
     --headless             Render and time frames, but send nothing.
     --preview-port <n>     Preview channel. Default 8521; 0 disables it.
+    --inject-stall-at <s>  TEST INSTRUMENT. Stall the render thread for one
+                           second, once, this many seconds in — so audio-sync
+                           recovery can be asserted rather than waited for.
     --preview-mjpeg        Serve MJPEG over HTTP instead of H.264 over a
                            WebSocket. Needs no decoder in the browser, so it is
                            the fallback when H.264 shows nothing.
@@ -111,6 +114,7 @@ fn parse_output(
         // the same sound on a second SDI feed a plant may well sum.
         audio_channels: 0,
         preview_mjpeg: false,
+        inject_stall_at_s: None,
     };
 
     for pair in spec.split(',') {
@@ -296,6 +300,7 @@ fn main() -> Result<()> {
                 .and_then(|s| s.parse().ok())
                 .unwrap_or(0),
             preview_mjpeg: args.iter().any(|a| a == "--preview-mjpeg"),
+            inject_stall_at_s: arg(&args, "--inject-stall-at").and_then(|s| s.parse().ok()),
             preview_port: arg(&args, "--preview-port")
                 .and_then(|s| s.parse().ok())
                 .unwrap_or(pmg_preview::PREVIEW_PORT),

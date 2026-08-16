@@ -148,6 +148,14 @@ pub struct OutputSpec {
     /// lower-third key and to a wall feed needs its audio in different places or
     /// nowhere (`docs/specs/output-config.md` §7).
     pub audio_channels: i32,
+    /// Stall this output's render thread once, this many seconds in.
+    ///
+    /// **A test instrument, not a feature.** A booth machine hiccups for
+    /// reasons that leave no trace — the one measured in the two-hour soak had
+    /// no warning, no error, and no correlation with anything running. Waiting
+    /// for another is not a test, so this makes one on demand and the recovery
+    /// becomes something that can be asserted.
+    pub inject_stall_at_s: Option<u64>,
     /// Serve the old MJPEG preview instead of H.264.
     ///
     /// Kept because it needs no decoder in the browser at all, which makes it
@@ -586,6 +594,13 @@ fn looks_like_a_font(b: &[u8]) -> bool {
     )
 }
 
+/// When to sample the settled audio buffer and adopt it as the sync target.
+///
+/// Ten seconds in: past preroll and past the first clip's decoder warming up,
+/// while still early enough that a target learned from a disturbed level is
+/// unlikely.
+const LEARN_TARGET_FRAME: u64 = 600;
+
 /// Has a cue's deadline passed before we could act on it?
 ///
 /// A tiny function so it can be TESTED. The engine's rejection branch had a
@@ -708,6 +723,9 @@ fn render_group(
         audio: Vec<i32>,
         /// `None` when this output carries no audio.
         aclock: Option<pmg_audio::AudioClock>,
+        /// Closes the loop on the card's audio buffer. `None` until the level
+        /// has settled — see `learn_target`.
+        async_: Option<pmg_audio::AudioSync>,
     }
 
     let mut outputs = Vec::new();
@@ -763,6 +781,7 @@ fn render_group(
             backend,
             renderers: crate::render::RendererCache::default(),
             audio: Vec::new(),
+            async_: None,
             aclock: match spec.audio_channels {
                 0 => None,
                 _ => match pmg_audio::AudioClock::new(spec.fps, pmg_audio::SAMPLE_RATE) {
@@ -787,6 +806,17 @@ fn render_group(
         for out in &mut outputs {
             let budget_ms = 1000.0 / (out.spec.fps.0 as f64 / out.spec.fps.1 as f64);
             let t0 = Instant::now();
+
+            // The injected stall. One second, once, at the requested time —
+            // long enough to leave the audio offset the soak found.
+            if let Some(at) = out.spec.inject_stall_at_s {
+                let at_frame = at * out.spec.fps.0 as u64 / out.spec.fps.1 as u64;
+                if out.frame == at_frame {
+                    tracing::warn!(output = %out.spec.id, frame = out.frame,
+                                   "INJECTING a 1 s stall (test instrument)");
+                    std::thread::sleep(Duration::from_millis(1000));
+                }
+            }
 
             // --- snapshot, under the lock, briefly ------------------------
             let (plan, pattern) = {
@@ -816,10 +846,38 @@ fn render_group(
             // This frame's audio buffer, sized by the OUTPUT's clock. Cleared
             // and refilled rather than reallocated — a service must not
             // allocate a buffer a frame.
-            let asamples = out
-                .aclock
-                .map(|c| c.samples_for(out.frame) as usize)
-                .unwrap_or(0);
+            // The exact count for this frame, then the correction on top.
+            //
+            // AudioClock alone is open loop: it counts frames we SCHEDULED,
+            // while the card consumes against its own 48 kHz clock. A stall
+            // leaves audio permanently ahead — measured at +168 ms over a
+            // two-hour soak, with nothing correcting it (INTEGRATION-NOTES).
+            let nominal = out.aclock.map(|c| c.samples_for(out.frame)).unwrap_or(0);
+            let asamples = if nominal == 0 {
+                0
+            } else {
+                let buffered = match &out.backend {
+                    Backend::DeckLink(d) => d.stats().buffered_audio as u32,
+                    // NDI paces itself and exposes no buffer to read, so there
+                    // is nothing to close the loop against. Stated rather than
+                    // silently skipped.
+                    _ => 0,
+                };
+                match (&mut out.async_, buffered) {
+                    (Some(sync), b) if b > 0 => sync.correct(nominal, b) as usize,
+                    // Learn the natural level once it has settled rather than
+                    // hard-coding one: it depends on preroll depth and on the
+                    // card, and a wrong target would be corrected TOWARDS
+                    // forever.
+                    (None, b) if b > 0 && out.frame == LEARN_TARGET_FRAME => {
+                        tracing::info!(output = %out.spec.id, target = b,
+                                       "audio sync target learned");
+                        out.async_ = Some(pmg_audio::AudioSync::new(b));
+                        nominal as usize
+                    }
+                    _ => nominal as usize,
+                }
+            };
             out.audio.clear();
             out.audio
                 .resize(asamples * out.spec.audio_channels.max(0) as usize, 0);
@@ -935,6 +993,9 @@ fn render_group(
                         audio_ms = st.buffered_audio * 1000 / pmg_audio::SAMPLE_RATE as u64,
                         peak_dbfs = format!("{dbfs:.1}"),
                         late = st.displayed_late,
+                        target = out.async_.map(|s| s.target()).unwrap_or(0),
+                        corrections = out.async_.map(|s| s.corrections).unwrap_or(0),
+                        resyncs = out.async_.map(|s| s.resyncs).unwrap_or(0),
                         "audio buffer"
                     );
                 }
