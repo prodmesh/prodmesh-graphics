@@ -195,3 +195,45 @@ playlists, one rundown) can be recreated on request.
 | **Configure** | Real. Adoption, layer stacks, colour, test patterns | Yes, but it is a setup mode and density may be correct |
 | **Edit** | Real but plain. Items, playlists, rundown ordering | Yes |
 | **Design** | A renderer with a file picker | **Not yet** — judging it would list things already known missing |
+
+---
+
+## 7. The rule for design explorations
+
+Added 2026-08-16, after two rounds. Both rounds were valuable and they failed in
+opposite directions, which is what makes the rule worth writing down.
+
+**A design may reveal that the model is missing something. It may not invent a
+concept the model does not have and present it as a widget.**
+
+If an exploration needs something new, it has to be nameable as a *model*
+change — something that could be written as an ADR — rather than smuggled in as
+chrome. That test is not a restriction on the design work; it is what makes the
+design work count, because a gap named in a mockup becomes a decision, and a gap
+papered over with a control becomes a bug two milestones later.
+
+Worked examples, both real:
+
+- **Passed.** *"The box tweens to fit the new text."* That named a capability the
+  system did not have, it was traceable to a real service, and it became M3g.
+- **Failed.** *Simple / Advanced*, a second vocabulary for volunteers. The model
+  has no concept of two registers, and it already answered the need: `UI_TEXT.md`
+  is the simple register, and the fix for a term that is too technical is to
+  change it there, once, for everybody.
+- **Failed.** Per-destination *field overrides* — a different Line 2 on the wall.
+  ADR 0018 rejected this explicitly. The real need behind it (a CCLI credit on
+  the wall, not over camera) is already met: same data, two templates, and
+  `visible_if`. An override re-opens "which one is the real Item".
+
+Two further rules that came out of the same review:
+
+**Nothing you set once belongs in permanent chrome.** Top-bar space is for what
+changes *during* a service. A detail-level preference goes in settings, per
+station. A playlist's mode is a property of the content (ADR 0017), so it appears
+as an **indicator**, not a control.
+
+**A readout that never changes is decoration.** `Link Quality: 99.8%` on a closed
+booth LAN reads the same until the cable is out, at which point it is the least
+useful thing on screen. Numbers that are always the same value train an operator
+to stop reading the bar they will need in an emergency. Show what changes and
+matters: on air or not, which node, whether it is reachable.
