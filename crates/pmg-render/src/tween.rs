@@ -113,17 +113,32 @@ pub fn tween_frames(
         }
     }
 
-    // The outgoing content, at the rects it was laid out with. It does not
-    // morph: there is nothing to morph it to.
+    // Where each node is GOING, so the outgoing pass can be clipped by the same
+    // morphing geometry the incoming one is.
+    let going: BTreeMap<&str, Rect> = to.nodes.iter().map(|n| (n.id.as_str(), n.rect)).collect();
+
+    // The outgoing content. Its GLYPHS do not move — they are placed in
+    // absolute design space and there is nothing to interpolate them to — but
+    // the box that CLIPS them must morph with everything else.
+    //
+    // Getting this wrong is visible and was: with the old rects left in place,
+    // a box shrinking to fit shorter text kept clipping the outgoing line to
+    // its original width, so the old text hung outside the new box for the
+    // length of the tween and then vanished when the pass stopped. Seen on SDI,
+    // not in any capture — the frame harness never exercised a shrink.
     let from_frames = crate::scene::apply_tracks(from, &BTreeMap::new())
         .into_iter()
         .zip(from.nodes.iter())
         .map(|(mut f, n)| {
+            if let Some(new) = going.get(n.id.as_str()) {
+                f.rect = Some(lerp_rect(n.rect, *new, t));
+            }
             if is_content(&n.content) {
                 f.opacity *= 1.0 - t;
             } else {
                 // Drawn by the `to` pass. Zero here rather than skipped, so the
-                // two lists stay index-aligned with their instances.
+                // two lists stay index-aligned with their instances — and a
+                // clipping node still contributes its scissor at zero opacity.
                 f.opacity = 0.0;
             }
             f
@@ -290,6 +305,60 @@ mod tests {
         let f = tween_frames(&a, &b, 0.5, &BTreeMap::new());
         assert_eq!(f.to[1].rect, None, "no old rect to come from");
         assert!((f.to[1].opacity - 0.5).abs() < 1e-6, "it fades in instead");
+    }
+
+    /// The bug seen on SDI: a box shrinking to fit shorter text left the
+    /// outgoing line hanging outside it, because the outgoing pass was clipped
+    /// by the rect it *started* at rather than the one it is passing through.
+    #[test]
+    fn the_outgoing_pass_is_clipped_by_the_morphing_box_not_the_old_one() {
+        let wide = inst(vec![
+            node("band", rect(0.0, 0.0, 900.0, 60.0), RenderContent::Box),
+            node(
+                "line",
+                rect(8.0, 8.0, 880.0, 40.0),
+                RenderContent::Text(vec![]),
+            ),
+        ]);
+        let narrow = inst(vec![
+            node("band", rect(0.0, 0.0, 300.0, 60.0), RenderContent::Box),
+            node(
+                "line",
+                rect(8.0, 8.0, 280.0, 40.0),
+                RenderContent::Text(vec![]),
+            ),
+        ]);
+
+        let f = tween_frames(&wide, &narrow, 0.5, &BTreeMap::new());
+        let clipper = f.from[0].rect.expect("the outgoing clip box must morph");
+        assert_eq!(clipper.w, 600.0, "halfway between 900 and 300");
+
+        // Both passes agree on the geometry at every point, which is what makes
+        // one box rather than two.
+        assert_eq!(f.to[0].rect.unwrap().w, clipper.w);
+    }
+
+    /// Growing is the case that happened to work by accident — the outgoing
+    /// text already fits inside a box that is getting bigger — so it is pinned
+    /// here to stop a later fix for shrinking from breaking it.
+    #[test]
+    fn growing_and_shrinking_both_clip_to_the_same_rect() {
+        let small = inst(vec![node(
+            "band",
+            rect(0.0, 0.0, 100.0, 40.0),
+            RenderContent::Box,
+        )]);
+        let big = inst(vec![node(
+            "band",
+            rect(0.0, 0.0, 500.0, 40.0),
+            RenderContent::Box,
+        )]);
+
+        for (a, b, want) in [(&small, &big, 300.0), (&big, &small, 300.0)] {
+            let f = tween_frames(a, b, 0.5, &BTreeMap::new());
+            assert_eq!(f.from[0].rect.unwrap().w, want);
+            assert_eq!(f.to[0].rect.unwrap().w, want);
+        }
     }
 
     #[test]

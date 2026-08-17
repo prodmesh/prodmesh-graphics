@@ -619,7 +619,6 @@ fn is_late(deadline_ms: Option<u64>, elapsed: std::time::Duration) -> bool {
 /// it.
 struct LayerPlan {
     layer: String,
-    key: String,
     inst: Arc<pmg_render::scene::SceneInstance>,
     values: std::collections::BTreeMap<String, f32>,
     players: Option<Arc<std::sync::Mutex<engine::PlayerSet>>>,
@@ -837,7 +836,6 @@ fn render_group(
                     .filter_map(|l| {
                         l.occupant.as_ref().map(|occ| LayerPlan {
                             layer: l.name.clone(),
-                            key: format!("{}|{}", occ.armed.item_id, occ.armed.template_rev),
                             inst: occ.armed.instance.clone(),
                             values: engine::frame_values(occ),
                             // An Arc clone, so the players come out of the lock
@@ -893,7 +891,7 @@ fn render_group(
             let mut live = std::collections::HashSet::new();
             for (i, p) in plan.iter().enumerate() {
                 live.insert(p.layer.clone());
-                let renderer = out.renderers.get(&gpu, &p.layer, &p.key, &p.inst);
+                let renderer = out.renderers.get(&gpu, &p.layer, &p.inst);
                 // Clips first: a frame that arrives after the draw is a frame
                 // late, and the texture write must be queued before the pass
                 // that samples it.
@@ -911,7 +909,7 @@ fn render_group(
                     // then the outgoing content dissolved over it. Two passes,
                     // and only while a tween is actually running.
                     Some((from, t)) => {
-                        let from_renderer = out.tween_renderers.get(&gpu, &p.layer, &p.key, from);
+                        let from_renderer = out.tween_renderers.get(&gpu, &p.layer, from);
                         let frames = pmg_render::tween_frames(from, &p.inst, *t, &p.values);
                         crate::render::draw_frames(
                             &gpu,

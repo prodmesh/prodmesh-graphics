@@ -19,6 +19,7 @@
 use anyhow::{bail, Context, Result};
 use pmg_render::scene::SceneInstance;
 use pmg_render::SceneRenderer;
+use std::sync::Arc;
 
 /// A wgpu device plus the readback machinery, reused for every frame.
 pub struct Gpu {
@@ -224,28 +225,40 @@ pub fn draw_frames(
 /// layer is occupied.
 #[derive(Default)]
 pub struct RendererCache {
-    /// layer name -> (what it was built for, the renderer)
-    entries: std::collections::HashMap<String, (String, SceneRenderer)>,
+    /// layer name -> (the instance it was built for, the renderer)
+    ///
+    /// Keyed on the **identity of the instance**, not on a name for it.
+    ///
+    /// It used to be keyed on `item_id|template_rev`, which was correct while
+    /// the only way an instance could change was re-arming a different Item.
+    /// A live rebind (M3g) changes neither: same Item, same template, new data
+    /// and therefore a **new glyph atlas**. The stale renderer was handed back
+    /// and used to draw the new instance, whose glyph coordinates indexed into
+    /// an atlas built for the old text — text rendered as garbage on air while
+    /// the box tweened perfectly, because boxes do not touch the atlas.
+    ///
+    /// The `Arc` is held rather than its address compared, so a freed instance
+    /// cannot have its allocation reused by a new one and silently match.
+    entries: std::collections::HashMap<String, (Arc<SceneInstance>, SceneRenderer)>,
 }
 
 impl RendererCache {
     /// Get the renderer for a layer, rebuilding only if the occupant changed.
-    pub fn get(
-        &mut self,
-        gpu: &Gpu,
-        layer: &str,
-        key: &str,
-        inst: &SceneInstance,
-    ) -> &SceneRenderer {
+    /// Get the renderer for a layer, rebuilding only if the instance changed.
+    ///
+    /// Takes the `Arc` rather than a reference plus a key, so it is not possible
+    /// for a caller to describe an instance inaccurately. That was the shape of
+    /// the bug this replaced.
+    pub fn get(&mut self, gpu: &Gpu, layer: &str, inst: &Arc<SceneInstance>) -> &SceneRenderer {
         let slot = self.entries.entry(layer.to_string()).or_insert_with(|| {
             (
-                key.to_string(),
+                inst.clone(),
                 SceneRenderer::new(&gpu.device, &gpu.queue, inst),
             )
         });
-        if slot.0 != key {
+        if !Arc::ptr_eq(&slot.0, inst) {
             *slot = (
-                key.to_string(),
+                inst.clone(),
                 SceneRenderer::new(&gpu.device, &gpu.queue, inst),
             );
         }
