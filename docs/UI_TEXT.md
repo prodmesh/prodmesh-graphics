@@ -80,3 +80,27 @@ Prefer naming the thing over naming the failure. "Booth-1 is offline" beats
   known good state, or nothing. Inherited from ProdMesh-Control's `DisplayView`,
   and the reasoning is the same: a screen showing a stack trace is worse than a
   screen showing nothing.
+
+## One register, and the one that was rejected
+
+A design exploration (2026-08-16) proposed a **Simple / Advanced** switch: a
+second, gentler vocabulary for volunteers alongside the broadcast one. *Put on
+screen* for **Take**. *Name strip, one line* for *L3 Single Line*. *Song words*
+for *Lyric Overlay*. It was well written and it is not being built.
+
+The reasoning is worth keeping, because it will be proposed again. The
+simplified copy reads better in isolation and costs more everywhere else: two
+words for one action means training material that has to teach both, a support
+conversation where nobody is sure which screen the other person is looking at,
+and a vocabulary that can drift in one register without anyone noticing in the
+other. This file is normative precisely so there is one name per thing.
+
+**The plain words here already are the simple register.** Take, Take out, Clear,
+Layer, Item — that is the whole point of §1 and §2, and it is what the North Star
+means by ProPresenter's simplicity. If a term feels too technical for a
+volunteer, the fix is to change it **here**, once, for everybody — not to add a
+second word beside it.
+
+What the exploration got right, and is kept: the *supporting* sentences may vary
+in detail. "Nothing on this layer" and "Layer 2 · CLEAR" say the same thing at
+different densities. Density is a display decision. **Naming is not.**

@@ -56,7 +56,7 @@ Two rules do most of the architectural work:
 | [docs/THEORY-OF-OPERATIONS.md](docs/THEORY-OF-OPERATIONS.md) | How a graphic actually gets on air, hop by hop |
 | [docs/ROADMAP.md](docs/ROADMAP.md) | M0–M6, what ships when, what is deferred |
 | [docs/RISKS.md](docs/RISKS.md) | What might not work, and the spike that will tell us |
-| [docs/decisions/](docs/decisions/) | 15 ADRs — every structural choice and its reasoning |
+| [docs/decisions/](docs/decisions/) | 18 ADRs — every structural choice and its reasoning |
 | [docs/specs/](docs/specs/) | The normative formats and protocols |
 | [AGENTS.md](AGENTS.md) | Build, test, conventions, and the gotchas list |
 

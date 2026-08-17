@@ -127,8 +127,14 @@ This is what the current Show view already does.
 ### Why this matters beyond UI
 
 **These are not two skins over one behaviour.** A Playlist needs a mode, the
-cursor's meaning changes with it, and the keyboard map changes with it. That is a
-data-model decision, not a layout one, and it wants an ADR before it is built.
+cursor's meaning changes with it, and the keyboard map changes with it.
+
+**Settled 2026-08-16 in ADR 0017.** Mode belongs to the Playlist. The cursor and
+the on-air state stay separate indicators in *both* modes — Follow moves the
+cursor instantly and still waits for the node's ack before claiming air, because
+Follow is the mode where nobody is watching for a correction. A newer take
+supersedes an unfired older one rather than queueing, so a chorus does not flash
+through every slide the operator passed.
 
 ---
 
@@ -143,10 +149,14 @@ one SDI conductor, key on the other) *and* to an **in-room LED wall** over NDI,
 usually into a compositor like Pixera or Resolume — same content, different
 treatment, possibly a different template per destination.
 
-Today an Item has exactly one `destination: { output, layer }`. Supporting this
-means either an Item with several destinations, or a Playlist that fans one piece
-of content out across a set. **Neither exists.** This is the largest modelling
-gap on the horizon.
+**Settled 2026-08-16 in ADR 0018.** An Item is data plus a *list* of
+destinations, each pinning its own `template_rev`. The sharp part is not the
+list: it is that a take fires the destinations it can reach and reports per
+destination what happened. A partly-delivered take is a state the interface must
+be able to express — *"On air on Booth-1. The wall feed did not confirm: Booth-2
+is offline."* — rather than an edge case rounded to success or failure.
+
+Not built yet. The schema, the assignment, and the aggregated ack are the work.
 
 ### Lyrics as content — **not modelled**
 

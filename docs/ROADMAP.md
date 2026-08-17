@@ -146,6 +146,12 @@ Where it stops being a graphics toy and starts being broadcast equipment.
 
 ## M4 — Control surfaces
 
+**Blocked on two model changes, deliberately.** ADR 0017 (playout mode per
+playlist) and ADR 0018 (one Item, several destinations) both alter what a cue
+means: a take can now be superseded, and it can now be partly delivered. Every
+surface in this milestone is an adapter over that model, so building five of them
+first means rewriting five of them after. **Land 0017 and 0018, then M4.**
+
 **The rule that shapes this milestone: the open WS/REST API is the only real
 surface, and every other one is a thin adapter over it.** Building five surfaces
 in parallel means five half-tested paths into a live show. One path, tested hard,
@@ -159,6 +165,9 @@ with adapters on top.
   `ross-dashboard-grid` skill).
 - GPI, OSC, and MIDI — **terminating at the node**, not at the server, because
   that is what makes them work when the server is down.
+- Surfaces report `Superseded` distinctly from `Rejected` (ADR 0017), and a
+  partly-delivered take distinctly from a failed one (ADR 0018). A panel with
+  three lamps needs those to be different lamps.
 - ProdMesh-Control as a consumer of the API.
 
 **Verification:** every surface fires a take **with the control server stopped**.
