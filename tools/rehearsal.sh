@@ -38,18 +38,25 @@ sleep 2
 say "1. build"
 cargo build --release -p pmg-node -p pmg-cli 2>&1 | grep -E "^error" && exit 1
 
-say "2. server"
-PMG_DB="$RUN/var/pmg.db" PMG_CAS="$RUN/var/cas" node server/index.js > "$RUN/server.log" 2>&1 &
+say "2. the web app"
+# The server only serves the browser app when NODE_ENV=production, from dist/.
+# Without this the API answers fine and every UI route is "Cannot GET /show" —
+# which is what the first rehearsal ran into, having been told to open Show.
+npm run build 2>&1 | tail -3
+
+say "3. server"
+NODE_ENV=production PMG_DB="$RUN/var/pmg.db" PMG_CAS="$RUN/var/cas" \
+  node server/index.js > "$RUN/server.log" 2>&1 &
 SERVER_PID=$!
 trap 'kill $SERVER_PID 2>/dev/null || true; kill ${NODE_PID:-0} 2>/dev/null || true' EXIT
 for _ in $(seq 1 40); do curl -sf "$API/api/health" >/dev/null 2>&1 && break; sleep 0.5; done
 
-say "3. the service"
+say "4. the service"
 # Not piped to /dev/null: if building the service fails, that IS the result of
 # the rehearsal and it must be on screen rather than swallowed.
 python3 tools/rehearsal-service.py "$API" "$RUN" | tee "$RUN/service.json"
 
-say "4. node — three outputs"
+say "5. node — three outputs"
 # One layer per output, named the same on each, because an Item's destinations
 # name a layer per output and they have to exist to be armed into.
 if [ "$ALL_NDI" = 1 ]; then
@@ -77,7 +84,7 @@ done
 curl -sf -X POST "$API/api/nodes/$NID/adopt" -H 'Content-Type: application/json' \
   -d '{"adopted":true}' >/dev/null
 
-say "5. ready"
+say "6. ready"
 cat <<EOF
 
   Show view    $API/show
