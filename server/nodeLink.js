@@ -406,7 +406,19 @@ export function offerAssignment(nodeId, assignment) {
 export function cue(nodeId, { cue_id, op, deadline_ms, at = null }) {
   const s = find(nodeId)
   if (!s) {
-    return Promise.resolve({ result: 'unknown_node', reason: 'no_such_node' })
+    // A node the server knows and simply cannot reach is OFFLINE, not unknown.
+    // Sessions are live-only, so without this check every powered-off node
+    // answers "there is no node called that — check the name in Configure",
+    // which sends an operator to fix a name that was never wrong. The
+    // distinction is the whole point of having two words for it.
+    const known = handle()
+      .prepare('SELECT 1 FROM nodes WHERE node_id = ? OR name = ?')
+      .get(nodeId, nodeId)
+    return Promise.resolve(
+      known
+        ? { result: 'offline', reason: 'node_offline' }
+        : { result: 'unknown_node', reason: 'no_such_node' },
+    )
   }
   if (!s.adopted) {
     // It is connected and it is not ours. Refusing here rather than at the node

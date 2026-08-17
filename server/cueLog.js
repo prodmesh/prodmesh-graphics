@@ -79,6 +79,11 @@ export function append(showId, e) {
     user: e.user ?? null,
     station: e.station ?? null,
     result: e.result ?? 'applied',
+    // Only present when a take fanned out (ADR 0018). One operator action is
+    // one entry, so the per-destination outcomes hang off it rather than
+    // becoming rows of their own — several rows would read as several takes to
+    // whoever goes through the log afterwards asking what happened.
+    ...(e.destinations ? { destinations: e.destinations } : {}),
   }
   l.entries.push(entry)
   if (l.entries.length > RETAIN) l.entries.splice(0, l.entries.length - RETAIN)

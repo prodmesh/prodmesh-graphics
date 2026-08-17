@@ -409,3 +409,115 @@ test('a batch stops at the first failure rather than half-applying a look', asyn
   assert.equal(r.status, 409)
   await n.close()
 })
+
+// ---------------------------------------------------------------------------
+// The aggregated ack — ADR 0018.
+//
+// A take names an Item, not a node. When that Item lives on two nodes the
+// operator still pressed one button, and the answer they get has to describe
+// the whole action rather than whichever node the server happened to ask first.
+// ---------------------------------------------------------------------------
+
+/** Give `item-1` a destination on each named node. */
+const seedDestinations = (...nodes) => {
+  seedItem()
+  const d = db.handle()
+  const rev = `blake3:${'0'.repeat(64)}`
+  d.prepare('DELETE FROM item_destinations WHERE item_id = ?').run('item-1')
+  nodes.forEach((node, i) => {
+    // A destination can only name a node Configure has already adopted, so the
+    // row exists whether or not the machine is currently powered on. That is
+    // what makes "offline" the right word for one that does not answer.
+    d.prepare(
+      `INSERT OR IGNORE INTO nodes (node_id, name, adopted) VALUES (?, ?, 1)`,
+    ).run(node, node)
+    d.prepare(
+      `INSERT INTO item_destinations
+         (item_id, ordinal, node_id, output, layer, template_rev, mode, blank)
+       VALUES ('item-1', ?, ?, 'out-0', 'Lower Third', ?, 'auto', 0)`,
+    ).run(i, node, rev)
+  })
+}
+
+test('a take with no node named fans to every node the item lives on', async () => {
+  seedDestinations('fan-a', 'fan-b')
+  const a = await fakeNode({ nodeId: 'fan-a' })
+  const b = await fakeNode({ nodeId: 'fan-b' })
+
+  const r = await post('/api/cue', {
+    cue_id: 'fan-1', op: 'take', item: 'item-1', surface: 'show_view',
+  })
+
+  assert.equal(r.status, 200)
+  assert.equal(r.json.result, 'applied')
+  assert.deepEqual(
+    r.json.destinations.map((d) => `${d.node}:${d.result}`).toSorted(),
+    ['fan-a:applied', 'fan-b:applied'],
+  )
+  // One human action, one cue_id, on both wires. Two ids would defeat dedupe
+  // on a retry and make one take look like two in the log.
+  assert.equal(a.seen.find((m) => m.cue)?.cue?.cue_id ?? 'fan-1', 'fan-1')
+  await a.close(); await b.close()
+})
+
+test('a take that reaches one node of two says which one did not, and is not a success', async () => {
+  seedDestinations('part-a', 'part-offline')
+  const a = await fakeNode({ nodeId: 'part-a' })
+
+  const r = await post('/api/cue', {
+    cue_id: 'part-1', op: 'take', item: 'item-1', surface: 'show_view',
+  })
+
+  // 503, not 207 and not 200. The take button must not go green unless
+  // everything fired, and a client checking only `res.ok` goes green on any
+  // 2xx. Being wrong in that direction is the failure this endpoint exists to
+  // prevent, so a partial delivery reads as a failure carrying success detail.
+  assert.equal(r.status, 503)
+  assert.equal(r.json.result, 'partial')
+  assert.match(r.json.label, /On air on part-a\./)
+  assert.match(r.json.label, /part-offline did not confirm: it is offline\./)
+  assert.deepEqual(
+    r.json.destinations.map((d) => [d.node, d.result]),
+    [['part-a', 'applied'], ['part-offline', 'offline']],
+  )
+  await a.close()
+})
+
+test('a fanned take is one log entry carrying several outcomes, not several takes', async () => {
+  seedDestinations('log-a', 'log-offline')
+  const a = await fakeNode({ nodeId: 'log-a' })
+
+  await post('/api/cue', { cue_id: 'log-1', op: 'take', item: 'item-1', surface: 'show_view' })
+
+  const entries = cueLog.since('default', 0).entries
+  assert.equal(entries.length, 1, 'one button, one row — otherwise a fan-out reads as two takes')
+  assert.equal(entries[0].result, 'partial')
+  assert.deepEqual(
+    entries[0].destinations.map((d) => d.result),
+    ['applied', 'offline'],
+  )
+  await a.close()
+})
+
+test('a take reaching no node at all keeps its single-node answer', async () => {
+  // Not "partial": nothing fired, so the operator needs the specific reason,
+  // not a sentence about a mixed result that has no successful half.
+  seedDestinations('gone-a', 'gone-b')
+  const r = await post('/api/cue', { cue_id: 'none-1', op: 'take', item: 'item-1' })
+  assert.equal(r.status, 503)
+  assert.equal(r.json.error, 'node_offline')
+})
+
+test('naming a node still takes to that node alone', async () => {
+  // The escape hatch an operator needs when one node is having a bad morning:
+  // fanning anyway would take the graphic back to the machine they just pulled.
+  seedDestinations('only-a', 'only-b')
+  const a = await fakeNode({ nodeId: 'only-a' })
+  const r = await post('/api/cue', {
+    cue_id: 'only-1', node: 'only-a', output: 'out-0', layer: 'Lower Third',
+    op: 'take', item: 'item-1',
+  })
+  assert.equal(r.status, 200)
+  assert.equal(r.json.destinations, undefined, 'one node, so nothing to aggregate')
+  await a.close()
+})

@@ -81,6 +81,70 @@ function destinationsFor(itemId, nodeId) {
     }))
 }
 
+/**
+ * Which nodes serve any destination of this Item.
+ *
+ * A destination naming no node belongs to whoever has that output, so with one
+ * node this is simply that node — which is the honest answer before Configure
+ * can name them.
+ */
+function nodesFor(itemId, explicit) {
+  if (explicit) return [explicit]
+  const db = handle()
+  const dests = db
+    .prepare('SELECT node_id, output FROM item_destinations WHERE item_id = ?')
+    .all(itemId)
+  if (!dests.length) return []
+
+  const named = [...new Set(dests.map((d) => d.node_id).filter(Boolean))]
+  const unnamed = dests.filter((d) => !d.node_id).map((d) => d.output)
+
+  // An unnamed destination goes to whichever adopted node actually has that
+  // output. Asking the outputs table rather than guessing is what stops a
+  // take being sent to a node that would only refuse it.
+  const byOutput = unnamed.length
+    ? db
+        .prepare(
+          `SELECT DISTINCT node_id FROM outputs
+            WHERE output_id IN (${unnamed.map(() => '?').join(',')})`,
+        )
+        .all(...unnamed)
+        .map((r) => r.node_id)
+    : []
+
+  return [...new Set([...named, ...byOutput])]
+}
+
+/** Why one destination did not fire, as the end of a sentence. */
+function whyNot(a) {
+  switch (a.result) {
+    case 'offline':      return 'it is offline'
+    case 'unknown_node': return 'there is no node by that name'
+    case 'not_adopted':  return 'it has not been adopted yet'
+    case 'not_acked':    return 'it did not confirm in time'
+    // rejectLabel() would be tempting here and is wrong: it names the node
+    // itself, and this clause already sits after one.
+    default:             return a.detail ?? `it refused the cue (${a.reason ?? 'rejected'})`
+  }
+}
+
+/**
+ * One sentence describing a partly-delivered take.
+ *
+ * Says what IS on air first. That is the thing an operator needs before they
+ * decide whether to press anything again, and burying it behind the failure is
+ * how someone ends up taking a graphic twice on the node that already had it.
+ */
+function partialLabel(acks) {
+  const ok = acks.filter((a) => a.result === 'applied' || a.result === 'deduped')
+  const bad = acks.filter((a) => !ok.includes(a))
+  const on = ok.length
+    ? `On air on ${ok.map((a) => a.node).join(' and ')}.`
+    : 'Not on air anywhere.'
+  const off = bad.map((a) => `${a.node} did not confirm: ${whyNot(a)}.`).join(' ')
+  return `${on} ${off}`.trim()
+}
+
 function buildOp(body, item) {
   const output = body.output
   const layer = body.layer
@@ -161,14 +225,40 @@ async function dispatch(body, ctx) {
     item = row
   }
 
-  const [op, problem] = buildOp(body, item)
-  if (problem) return { http: 422, payload: { error: 'validation_failed', label: problem } }
+  // Which nodes this action reaches. One for everything except a take, which
+  // an Item's destinations may spread across several (ADR 0018).
+  const targets = body.op === 'take' ? nodesFor(item.id, body.node) : [body.node]
+  if (!targets.length) {
+    return {
+      http: 409,
+      payload: {
+        error: 'no_destination',
+        label: 'That item has no destination on any connected node.',
+      },
+    }
+  }
 
-  const ack = await link.cue(body.node, {
-    cue_id: body.cue_id,
-    op,
-    deadline_ms: body.deadline_ms,
-  })
+  // Fanned in parallel, sharing one cue_id. Safe because dedupe is scoped per
+  // node, and RIGHT because the operator pressed one button: two ids would
+  // make one action look like two in the log.
+  const acks = await Promise.all(
+    targets.map(async (node) => {
+      const [op, problem] = buildOp({ ...body, node }, item)
+      if (problem) return { node, result: 'rejected', detail: problem }
+      const a = await link.cue(node, {
+        cue_id: body.cue_id,
+        op,
+        deadline_ms: body.deadline_ms,
+      })
+      return { node, ...a }
+    }),
+  )
+
+  // The single-node answer, unchanged, so every existing caller and every
+  // existing test still sees exactly what it saw.
+  const ack = acks[0]
+  const fired = acks.filter((a) => a.result === 'applied' || a.result === 'deduped')
+  const partial = acks.length > 1 && fired.length > 0 && fired.length < acks.length
 
   // The log records what happened AND which surface did it — without that the
   // log is confusing the first time someone uses a GPI (ADR 0014).
@@ -184,14 +274,52 @@ async function dispatch(body, ctx) {
     user: ctx.user,
     station: ctx.station,
     fired_at_frame: ack.fired_at_frame ?? null,
-    result: ack.result,
+    // One operator action, one log entry, and the per-destination outcomes
+    // beside it. Logging one row per node would make a fan-out look like
+    // several takes to whoever reads it afterwards.
+    result: partial ? 'partial' : ack.result,
+    destinations: acks.length > 1 ? acks.map((a) => ({ node: a.node, result: a.result })) : undefined,
   })
+
+  // A partly-delivered take.
+  //
+  // Deliberately a FAILURE status carrying success detail, not a 2xx. The take
+  // button must not go green unless everything fired, and a client that checks
+  // only `res.ok` would show green on any 2xx — including 207. Being wrong in
+  // that direction is the failure ADR 0008 exists to prevent, so the safe
+  // default wins and richer clients read `destinations` for the specifics.
+  if (partial) {
+    return {
+      http: 503,
+      payload: {
+        result: 'partial',
+        error: 'partly_delivered',
+        label: partialLabel(acks),
+        destinations: acks.map((a) => ({
+          node: a.node,
+          result: a.result,
+          detail: a.detail ?? a.reason ?? null,
+        })),
+        seq: entry.seq,
+      },
+    }
+  }
 
   switch (ack.result) {
     case 'applied':
     case 'deduped':
-      return { http: 200, payload: { result: ack.result, fired_at_frame: ack.fired_at_frame ?? null,
-                                     at_utc: ack.at_utc ?? entry.at_utc, seq: entry.seq } }
+      return {
+        http: 200,
+        payload: {
+          result: ack.result,
+          fired_at_frame: ack.fired_at_frame ?? null,
+          at_utc: ack.at_utc ?? entry.at_utc,
+          seq: entry.seq,
+          ...(acks.length > 1
+            ? { destinations: acks.map((a) => ({ node: a.node, result: a.result })) }
+            : {}),
+        },
+      }
     case 'not_adopted':
       return { http: 409, payload: { error: 'not_adopted',
         label: `${body.node} hasn’t been adopted yet. Adopt it in Configure before taking to it.` } }
