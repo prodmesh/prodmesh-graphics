@@ -404,13 +404,48 @@ pub struct SyncProgress {
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
 pub struct Ready {
     pub assignment_gen: u64,
-    pub items_ready: Vec<String>,
-    pub items_blocked: Vec<BlockedItem>,
+    /// One entry per Item this node was assigned. Not two lists: a ready list
+    /// and a blocked list made "ready" and "blocked" look mutually exclusive,
+    /// which stopped being true the moment an Item could have several
+    /// destinations at different revisions (ADR 0018).
+    pub items: Vec<ItemReadiness>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
-pub struct BlockedItem {
+pub struct ItemReadiness {
     pub item: String,
+    /// Per destination this node serves, in assignment order.
+    pub destinations: Vec<DestinationReadiness>,
+}
+
+impl ItemReadiness {
+    /// **Armable when at least one destination is ready** — ADR 0018's
+    /// deliberate relaxation of ADR 0006.
+    ///
+    /// All-or-nothing was right when an Item had one destination and wrong the
+    /// moment it had two: one un-staged asset on a secondary feed would make a
+    /// graphic un-armable on the feed that is actually going out. What ADR 0006
+    /// was protecting — never putting a half-loaded graphic on air — is still
+    /// enforced, just per destination rather than per Item.
+    pub fn is_armable(&self) -> bool {
+        self.destinations.iter().any(|d| d.ready)
+    }
+
+    /// True when some destinations are ready and some are not. The operator has
+    /// to be told this before they take, not after.
+    pub fn is_partial(&self) -> bool {
+        self.is_armable() && self.destinations.iter().any(|d| !d.ready)
+    }
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+pub struct DestinationReadiness {
+    pub output: String,
+    pub layer: String,
+    /// Repeated from the destination because it is the usual reason for a
+    /// split: two destinations at two revisions, one staged and one not.
+    pub template_rev: String,
+    pub ready: bool,
     pub missing: Vec<String>,
     /// Set when the block is a version refusal rather than a missing byte, with
     /// both numbers in it so the message can name them.

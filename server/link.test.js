@@ -521,3 +521,96 @@ test('naming a node still takes to that node alone', async () => {
   assert.equal(r.json.destinations, undefined, 'one node, so nothing to aggregate')
   await a.close()
 })
+
+// ---------------------------------------------------------------------------
+// Per-destination readiness — ADR 0018's relaxation of ADR 0006.
+// ---------------------------------------------------------------------------
+
+/** Report readiness from a fake node, in the node's own wire shape. */
+const reportReady = (n, items) =>
+  n.ws.send(wire.encode({ Ready: { assignment_gen: 1, items } }))
+
+const settle = () => new Promise((r) => setTimeout(r, 60))
+
+test('an item ready on one destination of two is armable, and names the other', async () => {
+  const a = await fakeNode({ nodeId: 'ready-a' })
+  const b = await fakeNode({ nodeId: 'ready-b' })
+  reportReady(a, [{ item: 'item-1', destinations: [
+    { output: 'out-0', layer: 'Lower Third', template_rev: 'rev-x', ready: true, missing: [], unreadable: null },
+  ] }])
+  reportReady(b, [{ item: 'item-1', destinations: [
+    { output: 'out-0', layer: 'Wall', template_rev: 'rev-y', ready: false, missing: ['rev-y'], unreadable: null },
+  ] }])
+  await settle()
+
+  const r = link.readinessOf('item-1')
+  // All-or-nothing was right with one destination and wrong with two: it would
+  // stop the programme feed for an asset missing on the overflow feed.
+  assert.equal(r.ready, true)
+  assert.equal(r.partial, true)
+  assert.deepEqual(r.missing, ['rev-y'], 'only what is actually outstanding')
+  assert.deepEqual(
+    r.destinations.map((d) => `${d.node}/${d.layer}:${d.ready}`).toSorted(),
+    ['ready-a/Lower Third:true', 'ready-b/Wall:false'],
+  )
+  await a.close(); await b.close()
+})
+
+test('readiness is aggregated across nodes, not taken from whichever answered last', async () => {
+  // The old snapshot returned the first session that mentioned the item, so
+  // with two nodes the answer depended on Map iteration order — it would have
+  // reported ready:true here and hidden the blocked feed entirely.
+  const a = await fakeNode({ nodeId: 'agg-a' })
+  const b = await fakeNode({ nodeId: 'agg-b' })
+  reportReady(a, [{ item: 'item-2', destinations: [
+    { output: 'out-0', layer: 'L', template_rev: 'r', ready: true, missing: [], unreadable: null },
+  ] }])
+  reportReady(b, [{ item: 'item-2', destinations: [
+    { output: 'out-0', layer: 'L', template_rev: 'r', ready: true, missing: [], unreadable: null },
+  ] }])
+  await settle()
+
+  assert.equal(link.readinessOf('item-2').destinations.length, 2)
+  assert.equal(link.readinessOf('item-2').partial, false)
+  await a.close(); await b.close()
+})
+
+test('an item no node has staged anywhere is not armable', async () => {
+  const a = await fakeNode({ nodeId: 'none-ready' })
+  reportReady(a, [{ item: 'item-3', destinations: [
+    { output: 'out-0', layer: 'L', template_rev: 'r', ready: false, missing: ['r'], unreadable: null },
+  ] }])
+  await settle()
+
+  const r = link.readinessOf('item-3')
+  assert.equal(r.ready, false)
+  // Not partial. Partial means SOME of it works, and none of this does — the
+  // operator needs "you cannot take this", not "it will be incomplete".
+  assert.equal(r.partial, false)
+  await a.close()
+})
+
+test('an item nobody has reported on gets no invented reason', async () => {
+  const r = link.readinessOf('never-heard-of')
+  assert.equal(r.ready, false)
+  assert.deepEqual(r.missing, [], 'we have not heard is not the same as something is missing')
+  assert.equal(r.unreadable, null)
+  assert.deepEqual(r.destinations, [])
+})
+
+test('a version refusal is carried through as the reason, not as a missing byte', async () => {
+  const a = await fakeNode({ nodeId: 'too-old' })
+  reportReady(a, [{ item: 'item-4', destinations: [
+    { output: 'out-0', layer: 'L', template_rev: 'r', ready: false, missing: [],
+      unreadable: 'needs reader 2, this node is 1' },
+  ] }])
+  await settle()
+
+  const r = link.readinessOf('item-4')
+  assert.equal(r.ready, false)
+  // "still copying" would be a lie that resolves itself by waiting. This one
+  // never does, and the operator has to know that on Saturday.
+  assert.deepEqual(r.missing, [])
+  assert.match(r.unreadable, /needs reader 2/)
+  await a.close()
+})

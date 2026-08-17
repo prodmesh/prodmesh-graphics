@@ -170,6 +170,27 @@ describe('readiness', () => {
       expect(screen.getByRole('button', { name: /^Take$/ }).hasAttribute('disabled')).toBe(true)
     })
   })
+
+  test('an item ready on one destination and not the other is takeable, and says so', async () => {
+    topicValues['item:item-1:readiness'] = {
+      item: 'item-1', ready: true, partial: true, missing: ['blake3:bb'], unreadable: null,
+      destinations: [
+        { node: 'booth-1', output: 'out-0', layer: 'Lower Third', ready: true, missing: [], unreadable: null },
+        { node: 'booth-2', output: 'out-0', layer: 'Wall', ready: false, missing: ['blake3:bb'], unreadable: null },
+      ],
+    }
+    await paint()
+
+    await waitFor(() => {
+      // Takeable — ADR 0018 relaxes ADR 0006 to "at least one destination". The
+      // old rule would grey this out, which means one un-staged asset on the
+      // overflow feed stops the programme feed getting its lower third.
+      expect(screen.getByRole('button', { name: /^Take$/ }).hasAttribute('disabled')).toBe(false)
+      // And it must say which one will not fire, BEFORE the press. Afterwards
+      // the aggregated ack reports it, which is too late to be a choice.
+      expect(screen.getByText(/will not reach booth-2 out-0\/Wall/)).toBeDefined()
+    })
+  })
 })
 
 describe('what is on air', () => {

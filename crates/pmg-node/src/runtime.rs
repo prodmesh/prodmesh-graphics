@@ -117,6 +117,67 @@ pub enum Backend {
     DeckLink(Box<pmg_out_decklink::Sender>),
 }
 
+/// What this node can say about one Item, destination by destination.
+///
+/// Free and pure so it can be tested without a CAS, a GPU, or a link — the
+/// interesting cases are an Item at two revisions where only one is staged, and
+/// that has nothing to do with any of them.
+///
+/// `staged` answers whether a revision loaded; `rev_problem` says why one did
+/// not, and distinguishes a missing byte (`None`, resolves itself by waiting)
+/// from a version refusal (`Some`, never will).
+pub fn readiness_of(
+    it: &pmg_proto::ItemRef,
+    staged: impl Fn(&str) -> bool,
+    rev_problem: &std::collections::HashMap<String, Option<String>>,
+) -> pmg_proto::ItemReadiness {
+    // An Item with no destination list predates ADR 0018, or came from a server
+    // that does. Its own output/layer/template_rev ARE the one destination, so
+    // it becomes a list of one and the rest is a single code path — a second
+    // branch here is one that would drift out of step with the first.
+    let dests: Vec<(String, String, String)> = if it.destinations.is_empty() {
+        vec![(
+            it.output.clone().unwrap_or_default(),
+            it.layer.clone().unwrap_or_default(),
+            it.template_rev.clone(),
+        )]
+    } else {
+        it.destinations
+            .iter()
+            .map(|d| (d.output.clone(), d.layer.clone(), d.template_rev.clone()))
+            .collect()
+    };
+
+    pmg_proto::ItemReadiness {
+        item: it.id.clone(),
+        destinations: dests
+            .into_iter()
+            .map(|(output, layer, rev)| {
+                let ok = staged(&rev);
+                let unreadable = rev_problem.get(&rev).cloned().flatten();
+                pmg_proto::DestinationReadiness {
+                    ready: ok,
+                    // Empty when it is staged, and ALSO empty when it was
+                    // refused: a refused template is not outstanding, it is
+                    // decided. Listing it in `missing` puts "still copying"
+                    // under a graphic that will never copy — a sentence that
+                    // tells an operator to wait through something that has
+                    // already failed. `unreadable` is the answer there.
+                    missing: if ok || unreadable.is_some() {
+                        Vec::new()
+                    } else {
+                        vec![rev.clone()]
+                    },
+                    unreadable,
+                    output,
+                    layer,
+                    template_rev: rev,
+                }
+            })
+            .collect(),
+    }
+}
+
 /// One physical output this node drives.
 #[derive(Clone)]
 pub struct OutputSpec {
@@ -265,7 +326,13 @@ impl Runtime {
         // Load templates, refusing anything too new to read HERE, at assignment
         // time — loudly, with both numbers, so you find out Saturday and not at
         // 10:15 Sunday (pmg-link.md §4).
-        let mut blocked = Vec::new();
+        //
+        // Keyed by revision, NOT by item. A revision is what fails; an item
+        // merely points at one, and several destinations of one item can point
+        // at different ones. The old shape put a `template_rev` in a field
+        // called `item`, which read as an item id to everything downstream.
+        let mut rev_problem: std::collections::HashMap<String, Option<String>> =
+            std::collections::HashMap::new();
         self.assigned.templates.clear();
         for t in &a.templates {
             match self.load_template(&t.template_rev) {
@@ -276,26 +343,21 @@ impl Runtime {
                         have = pmg_proto::SCENE_READER_MAJOR,
                         "REFUSING this template: it needs a newer reader than this node has"
                     );
-                    blocked.push(pmg_proto::BlockedItem {
-                        item: t.template_rev.clone(),
-                        missing: Vec::new(),
-                        unreadable: Some(format!(
+                    rev_problem.insert(
+                        t.template_rev.clone(),
+                        Some(format!(
                             "needs reader {}, this node is {}",
                             doc.min_reader,
                             pmg_proto::SCENE_READER_MAJOR
                         )),
-                    });
+                    );
                 }
                 Ok(doc) => {
                     self.assigned.templates.insert(t.template_rev.clone(), doc);
                 }
                 Err(e) => {
                     tracing::warn!(rev = %t.template_rev, error = %e, "template not readable");
-                    blocked.push(pmg_proto::BlockedItem {
-                        item: t.template_rev.clone(),
-                        missing: vec![t.template_rev.clone()],
-                        unreadable: None,
-                    });
+                    rev_problem.insert(t.template_rev.clone(), None);
                 }
             }
         }
@@ -353,29 +415,36 @@ impl Runtime {
         }
 
         self.assigned.items.clear();
-        let mut ready = Vec::new();
+        let mut items = Vec::new();
         for it in &a.items {
-            let armable = self.assigned.templates.contains_key(&it.template_rev);
             self.assigned.items.insert(
                 it.id.clone(),
                 (it.label.clone(), it.template_rev.clone(), it.data.clone()),
             );
-            if armable {
-                ready.push(it.id.clone());
-            } else {
-                blocked.push(pmg_proto::BlockedItem {
-                    item: it.id.clone(),
-                    missing: vec![it.template_rev.clone()],
-                    unreadable: None,
-                });
-            }
+
+            items.push(readiness_of(
+                it,
+                |rev| self.assigned.templates.contains_key(rev),
+                &rev_problem,
+            ));
+        }
+
+        for i in items.iter().filter(|i| i.is_partial()) {
+            // Worth a line each: this is the state where the take button works
+            // and does less than the operator expects, so it should be findable
+            // in the log afterwards.
+            tracing::warn!(
+                item = %i.item,
+                blocked = ?i.destinations.iter().filter(|d| !d.ready)
+                    .map(|d| format!("{}/{}", d.output, d.layer)).collect::<Vec<_>>(),
+                "armable, but not everywhere"
+            );
         }
 
         if let Some(tx) = tx {
             let _ = tx.send(ToLink::Ready(pmg_proto::Ready {
                 assignment_gen: a.gen,
-                items_ready: ready,
-                items_blocked: blocked,
+                items,
             }));
         }
     }

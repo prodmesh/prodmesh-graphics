@@ -115,6 +115,10 @@
 .show__item-label { font-weight: 600; }
 .show__item-actions { display: flex; gap: 0.5rem; flex-shrink: 0; }
 .show__staging { color: var(--warn-text); font-size: 0.8rem; }
+/* Takeable, and it will not reach everywhere. Warn-coloured rather than
+   error-coloured on purpose: the take works, and colouring it like a failure
+   would teach an operator to hesitate over a button that fires. */
+.show__partial { color: var(--warn-text); font-size: 0.8rem; }
 .show__clear { margin-top: 0.5rem; }
 
 .show__problem {

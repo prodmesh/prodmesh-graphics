@@ -29,7 +29,7 @@ import { useQuery } from '../../lib/useQuery'
 import { keys, topics } from '../../lib/keys'
 import { ApiError, newCueId, takeCue } from '../../lib/api'
 import { RundownPanel } from './Rundown'
-import type { Item, LayersSnapshot, NodeSummary, CueLogSnapshot } from './types'
+import type { Item, LayersSnapshot, NodeSummary, CueLogSnapshot, Readiness } from './types'
 
 const SHOW = 'default'
 
@@ -276,14 +276,20 @@ function ItemRow({
   onFire: (key: string, req: Parameters<typeof takeCue>[0]) => void
   disabled: boolean
 }) {
-  const readiness = useTopic<{ ready: boolean; missing: string[] }>(topics.itemReadiness(item.id))
+  const readiness = useTopic<Readiness>(topics.itemReadiness(item.id))
   const layer = item.destination?.layer ?? 'Lower Third'
 
   // Not "warns" — NOT ARMABLE. An item whose node has not finished staging its
   // assets cannot be taken, and the button says why rather than failing later
   // (ADR 0006).
+  //
+  // `ready` now means at least ONE destination is ready (ADR 0018). The take
+  // works and does less than it looks like it will, so `partial` gets its own
+  // line naming the destinations that will not fire. Said BEFORE the press:
+  // afterwards it is just the ack reporting something that was knowable.
   const staging = readiness ? !readiness.ready : false
   const blocked = disabled || staging
+  const notFiring = (readiness?.destinations ?? []).filter((d) => !d.ready)
 
   return (
     <li className="show__item">
@@ -291,8 +297,19 @@ function ItemRow({
         <span className="show__item-label">{item.label}</span>
         <span className="show__dim">{layer}</span>
         {staging ? (
+          // Two different sentences, because they are two different futures.
+          // "Still copying" resolves itself by waiting; a template this node is
+          // too old to read never will, and saying "still copying" about it
+          // sends an operator to wait through something already decided.
           <span className="show__staging">
-            still copying{readiness?.missing?.length ? ` · ${readiness.missing.length} file(s)` : ''}
+            {readiness?.unreadable
+              ? `cannot be played here — ${readiness.unreadable}`
+              : `still copying${readiness?.missing?.length ? ` · ${readiness.missing.length} file(s)` : ''}`}
+          </span>
+        ) : null}
+        {readiness?.partial ? (
+          <span className="show__partial">
+            will not reach {notFiring.map((d) => `${d.node} ${d.output}/${d.layer}`).join(', ')}
           </span>
         ) : null}
       </div>

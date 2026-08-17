@@ -85,6 +85,59 @@ function session(nodeId) {
 const isOnline = (s) => Boolean(s.ws && s.ws.readyState === 1)
 
 /**
+ * What every node together says about one Item, as one answer.
+ *
+ * **Ready means at least one destination is ready** — ADR 0018's deliberate
+ * relaxation of ADR 0006. All-or-nothing was right when an Item had one
+ * destination and wrong the moment it had two: one un-staged asset on a
+ * secondary feed would grey out the button for the feed that is actually going
+ * out. ADR 0006's real promise — never put a half-loaded graphic on air — still
+ * holds, enforced per destination by the node, which refuses to arm one whose
+ * template it does not have.
+ *
+ * `partial` is the state worth naming: armable, and not everywhere. The
+ * interface has to say so BEFORE the take, because afterwards is just the
+ * aggregated ack telling the operator something they could have known.
+ */
+export function readinessOf(id) {
+  const destinations = []
+  for (const s of sessions.values()) {
+    const i = (s.ready?.items ?? []).find((x) => x.item === id)
+    if (!i) continue
+    for (const d of i.destinations ?? []) {
+      destinations.push({
+        node: s.nodeId,
+        output: d.output,
+        layer: d.layer,
+        ready: !!d.ready,
+        missing: d.missing ?? [],
+        unreadable: d.unreadable ?? null,
+      })
+    }
+  }
+
+  // No node has reported on it at all. Not ready, and deliberately without a
+  // reason: "we have not heard" is not the same as "something is missing", and
+  // inventing a cause here would put a wrong sentence under the button.
+  if (!destinations.length) {
+    return { item: id, ready: false, partial: false, missing: [], unreadable: null, destinations: [] }
+  }
+
+  const blocked = destinations.filter((d) => !d.ready)
+  return {
+    item: id,
+    ready: destinations.some((d) => d.ready),
+    partial: destinations.some((d) => d.ready) && blocked.length > 0,
+    // The union over what is actually outstanding, so the existing
+    // "still copying · N file(s)" count stays true rather than counting a
+    // ready destination's satisfied requirements.
+    missing: [...new Set(blocked.flatMap((d) => d.missing))],
+    unreadable: blocked.find((d) => d.unreadable)?.unreadable ?? null,
+    destinations,
+  }
+}
+
+/**
  * The address a node dialled us from, which is the address a browser on the
  * same network can reach its preview at.
  *
@@ -159,18 +212,11 @@ function republish(s) {
       })
     }
   }
-  if (s.ready) {
-    for (const id of s.ready.items_ready ?? []) {
-      publish(`item:${id}:readiness`, { item: id, ready: true, missing: [] })
-    }
-    for (const b of s.ready.items_blocked ?? []) {
-      publish(`item:${b.item}:readiness`, {
-        item: b.item,
-        ready: false,
-        missing: b.missing ?? [],
-        unreadable: b.unreadable ?? null,
-      })
-    }
+  // Republish every Item this node mentioned, aggregated across ALL nodes.
+  // Publishing this node's own view would make the last report win, and with
+  // two nodes that is a coin flip rather than an answer.
+  for (const i of s.ready?.items ?? []) {
+    publish(`item:${i.item}:readiness`, readinessOf(i.item))
   }
   if (s.staging) publish(`node:${s.nodeId}:staging`, { node: s.nodeId, ...s.staging })
 }
@@ -543,14 +589,7 @@ export function registerTopics() {
   registerTopic('item:*:readiness', {
     valid: () => true,
     start: () => null, stop: () => {},
-    snapshot: ([id]) => {
-      for (const s of sessions.values()) {
-        if (s.ready?.items_ready?.includes(id)) return { item: id, ready: true, missing: [] }
-        const b = s.ready?.items_blocked?.find((x) => x.item === id)
-        if (b) return { item: id, ready: false, missing: b.missing ?? [], unreadable: b.unreadable ?? null }
-      }
-      return { item: id, ready: false, missing: [], unreadable: null }
-    },
+    snapshot: ([id]) => readinessOf(id),
   })
 }
 

@@ -89,3 +89,29 @@ export type CueLogEntry = {
 
 /** `{ head_seq, entries[] }` — a log tail as a snapshot, never a bare event. */
 export type CueLogSnapshot = { head_seq: number; entries: CueLogEntry[] }
+
+/**
+ * What every node together says about one Item (ADR 0018).
+ *
+ * `ready` is **at least one destination ready**, not all of them — which is why
+ * `partial` has to exist beside it. Without that second flag the operator's
+ * only two states are "take it" and "cannot take it", and the interesting one
+ * — takeable, but it will not reach the wall — has nowhere to live.
+ */
+export type Readiness = {
+  item: string
+  ready: boolean
+  partial: boolean
+  missing: string[]
+  unreadable: string | null
+  destinations: DestinationReadiness[]
+}
+
+export type DestinationReadiness = {
+  node: string
+  output: string
+  layer: string
+  ready: boolean
+  missing: string[]
+  unreadable: string | null
+}

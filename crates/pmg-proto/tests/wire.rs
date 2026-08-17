@@ -293,3 +293,75 @@ fn frames_from_the_javascript_server_decode() {
         other => panic!("expected Assignment, got {other:?}"),
     }
 }
+
+// ---------------------------------------------------------------------------
+// Readiness, once an Item can be in more than one place — ADR 0018.
+// ---------------------------------------------------------------------------
+
+fn dest(layer: &str, ready: bool) -> DestinationReadiness {
+    DestinationReadiness {
+        output: "out-0".into(),
+        layer: layer.into(),
+        template_rev: "blake3:aa".into(),
+        ready,
+        missing: if ready { Vec::new() } else { vec!["blake3:aa".into()] },
+        unreadable: None,
+    }
+}
+
+#[test]
+fn one_ready_destination_is_enough_to_arm() {
+    // ADR 0018 relaxing ADR 0006, and the whole reason it had to: all-or-nothing
+    // means an un-staged asset on the overflow feed stops the lower third
+    // reaching the programme feed, which is the feed people are watching.
+    let i = ItemReadiness {
+        item: "i".into(),
+        destinations: vec![dest("Lower Third", true), dest("Wall", false)],
+    };
+    assert!(i.is_armable());
+    assert!(i.is_partial(), "armable and incomplete is a state of its own");
+}
+
+#[test]
+fn nothing_ready_is_not_partial() {
+    // "Partial" has to mean some of it works. Reporting it here would put
+    // "it will be incomplete" under a button that cannot fire at all.
+    let i = ItemReadiness {
+        item: "i".into(),
+        destinations: vec![dest("Lower Third", false), dest("Wall", false)],
+    };
+    assert!(!i.is_armable());
+    assert!(!i.is_partial());
+}
+
+#[test]
+fn every_destination_ready_is_not_partial() {
+    let i = ItemReadiness {
+        item: "i".into(),
+        destinations: vec![dest("Lower Third", true), dest("Wall", true)],
+    };
+    assert!(i.is_armable());
+    assert!(!i.is_partial());
+}
+
+#[test]
+fn an_item_with_no_destinations_is_not_armable() {
+    // A node that was assigned nothing for this Item must not report it
+    // takeable. `any()` over an empty list is false, which is the answer we
+    // want — this test is here so it stays that answer.
+    let i = ItemReadiness { item: "i".into(), destinations: Vec::new() };
+    assert!(!i.is_armable());
+    assert!(!i.is_partial());
+}
+
+#[test]
+fn readiness_round_trips_on_the_wire() {
+    let r = ToServer::Ready(Ready {
+        assignment_gen: 42,
+        items: vec![ItemReadiness {
+            item: "i".into(),
+            destinations: vec![dest("Lower Third", true), dest("Wall", false)],
+        }],
+    });
+    assert_eq!(decode::<ToServer>(&encode(&r).unwrap()).unwrap(), r);
+}

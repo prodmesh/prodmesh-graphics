@@ -364,3 +364,98 @@ fn a_take_of_only_on_request_destinations_is_refused() {
     assert_eq!(ack.result, CueResult::Rejected);
     assert_eq!(ack.reason, Some(RejectReason::NotReady));
 }
+
+// ---------------------------------------------------------------------------
+// Per-destination readiness, at the node — ADR 0018.
+//
+// The case that motivates the whole change: ONE Item, on ONE node, at TWO
+// revisions, only one of them staged. Nothing about it involves a second
+// machine, which is why the old per-item bit could not express it.
+// ---------------------------------------------------------------------------
+
+fn item_at(id: &str, dests: &[(&str, &str)]) -> ItemRef {
+    ItemRef {
+        id: id.into(),
+        label: "Verse".into(),
+        template_rev: dests.first().map(|d| d.1.to_string()).unwrap_or_default(),
+        data: BTreeMap::new(),
+        output: Some("out-0".into()),
+        layer: Some("Lower Third".into()),
+        destinations: dests
+            .iter()
+            .map(|(layer, rev)| Destination {
+                output: "out-0".into(),
+                layer: (*layer).into(),
+                template_rev: (*rev).into(),
+                mode: "auto".into(),
+                blank: false,
+            })
+            .collect(),
+    }
+}
+
+#[test]
+fn one_item_at_two_revisions_is_ready_at_the_staged_one_only() {
+    let it = item_at("i", &[("Lower Third", "rev-staged"), ("Wall", "rev-missing")]);
+    let r = pmg_node::runtime::readiness_of(&it, |rev| rev == "rev-staged", &Default::default());
+
+    assert_eq!(r.destinations.len(), 2);
+    assert!(r.destinations[0].ready);
+    assert!(!r.destinations[1].ready);
+    assert_eq!(r.destinations[1].missing, vec!["rev-missing".to_string()]);
+    // Takeable. The lower third reaches the programme feed even though the
+    // wall's revision has not finished copying.
+    assert!(r.is_armable());
+    assert!(r.is_partial());
+}
+
+#[test]
+fn a_ready_destination_lists_nothing_outstanding() {
+    let it = item_at("i", &[("Lower Third", "rev-staged")]);
+    let r = pmg_node::runtime::readiness_of(&it, |_| true, &Default::default());
+    // Echoing the rev back would make a ready destination look like it were
+    // still waiting on its own template.
+    assert!(r.destinations[0].missing.is_empty());
+    assert!(!r.is_partial());
+}
+
+#[test]
+fn an_item_with_no_destinations_becomes_a_list_of_one() {
+    // Predates ADR 0018, or came from a server that does. It must behave
+    // exactly as it did before, which is what lets the old shape keep working
+    // through the migration rather than reading as "no destinations, not
+    // armable anywhere".
+    let it = ItemRef {
+        id: "old".into(),
+        label: "Verse".into(),
+        template_rev: "rev".into(),
+        data: BTreeMap::new(),
+        output: Some("out-0".into()),
+        layer: Some("Lower Third".into()),
+        destinations: Vec::new(),
+    };
+    let r = pmg_node::runtime::readiness_of(&it, |_| true, &Default::default());
+    assert_eq!(r.destinations.len(), 1);
+    assert_eq!(r.destinations[0].output, "out-0");
+    assert_eq!(r.destinations[0].layer, "Lower Third");
+    assert!(r.is_armable());
+}
+
+#[test]
+fn a_version_refusal_travels_as_a_reason_and_not_as_a_missing_byte() {
+    let mut problems = std::collections::HashMap::new();
+    problems.insert(
+        "rev-new".to_string(),
+        Some("needs reader 2, this node is 1".to_string()),
+    );
+    let it = item_at("i", &[("Lower Third", "rev-new")]);
+    let r = pmg_node::runtime::readiness_of(&it, |_| false, &problems);
+
+    // `missing` is EMPTY and `unreadable` carries it. A refused template is not
+    // outstanding, it is decided — putting it in `missing` renders as "still
+    // copying · 1 file(s)", which tells an operator to wait through something
+    // that has already failed and will still be failed on Sunday.
+    assert!(r.destinations[0].missing.is_empty());
+    assert!(r.destinations[0].unreadable.as_deref().unwrap().contains("needs reader 2"));
+    assert!(!r.is_armable());
+}
