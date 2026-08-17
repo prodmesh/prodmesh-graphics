@@ -26,12 +26,14 @@ pub mod parity;
 pub mod scene;
 pub mod text_source;
 pub mod timeline;
+pub mod tween;
 
 pub use draw::SceneRenderer;
 pub use scene::{
     CoverageAtlas, FrameNode, GlyphSource, PlacedGlyph, RenderContent, RenderNode, RunGlyph,
     SceneInstance,
 };
+pub use tween::{ease, tween_frames, TweenFrames};
 
 /// Set on a rendered instance when the document contained something this
 /// reader did not understand.

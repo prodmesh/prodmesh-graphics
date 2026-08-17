@@ -195,14 +195,23 @@ pub fn draw(
     load: pmg_render::Load,
 ) {
     let frame_nodes = pmg_render::scene::apply_tracks(inst, values);
-    renderer.render_with(
-        &gpu.device,
-        &gpu.queue,
-        inst,
-        &frame_nodes,
-        target.view(),
-        load,
-    );
+    draw_frames(gpu, renderer, inst, &frame_nodes, target, load);
+}
+
+/// Draw a frame list that has already been computed.
+///
+/// The tween path builds its two lists together — the morphed geometry and the
+/// dissolving content have to agree on `t` — so it cannot go through `draw`,
+/// which computes its own.
+pub fn draw_frames(
+    gpu: &Gpu,
+    renderer: &SceneRenderer,
+    inst: &SceneInstance,
+    frames: &[pmg_render::scene::FrameNode],
+    target: &Target,
+    load: pmg_render::Load,
+) {
+    renderer.render_with(&gpu.device, &gpu.queue, inst, frames, target.view(), load);
 }
 
 /// A renderer per occupied layer, kept across frames.

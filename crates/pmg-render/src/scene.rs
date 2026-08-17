@@ -526,6 +526,7 @@ pub fn apply_tracks(inst: &SceneInstance, values: &BTreeMap<String, f32>) -> Vec
             FrameNode {
                 transform: t,
                 opacity,
+                rect: None,
             }
         })
         .collect()
@@ -536,6 +537,18 @@ pub fn apply_tracks(inst: &SceneInstance, values: &BTreeMap<String, f32>) -> Vec
 pub struct FrameNode {
     pub transform: Transform2D,
     pub opacity: f32,
+    /// Where to draw this node, when that is **not** where layout solved it.
+    ///
+    /// `None` — the overwhelmingly common case — means use the solved rect, and
+    /// the arm/take split stands: layout happened once and a frame only applies
+    /// transforms.
+    ///
+    /// `Some` exists for exactly one thing: a box that **grows or shrinks to fit
+    /// new text while it is on air**. That is not a transform — scaling a band
+    /// stretches its corner radii and its text with it — it is a different
+    /// layout. The tween solves both ends at rebind and interpolates between
+    /// them (see [`crate::tween`]), so this is still not a relayout per frame.
+    pub rect: Option<pmg_layout::Rect>,
 }
 
 #[cfg(test)]

@@ -122,6 +122,9 @@ fn every_visible_op_names_its_output() {
             layer: "l".into(),
         },
         CueOp::Update {
+            // A rebind with no duration takes DEFAULT_TWEEN_MS; the field only
+            // travels when a cue asks for something else.
+            tween_ms: None,
             output: "out-1".into(),
             layer: "l".into(),
             data: BTreeMap::new(),

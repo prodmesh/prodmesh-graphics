@@ -623,6 +623,9 @@ struct LayerPlan {
     inst: Arc<pmg_render::scene::SceneInstance>,
     values: std::collections::BTreeMap<String, f32>,
     players: Option<Arc<std::sync::Mutex<engine::PlayerSet>>>,
+    /// A live rebind morphing to this instance: what was on screen, and how far
+    /// through. `None` in the steady state, which is almost always.
+    tween: Option<(Arc<pmg_render::scene::SceneInstance>, f32)>,
 }
 
 /// Pull this frame's picture for every clip on a layer and upload it.
@@ -709,6 +712,9 @@ fn render_group(
         target: Target,
         backend: Backend,
         renderers: crate::render::RendererCache,
+        /// Atlases for instances being morphed AWAY from. Separate cache because
+        /// they are keyed the same as the live ones and must not evict them.
+        tween_renderers: crate::render::RendererCache,
         preview: Option<pmg_preview::Preview>,
         /// H.264 for `VideoDecoder`, which is what the browser actually uses.
         /// MJPEG stays available because it needs no decoder at all and is
@@ -780,6 +786,7 @@ fn render_group(
             target,
             backend,
             renderers: crate::render::RendererCache::default(),
+            tween_renderers: crate::render::RendererCache::default(),
             audio: Vec::new(),
             async_: None,
             aclock: match spec.audio_channels {
@@ -836,6 +843,7 @@ fn render_group(
                             // An Arc clone, so the players come out of the lock
                             // with everything else and are touched outside it.
                             players: occ.armed.players.clone(),
+                            tween: occ.tween.as_ref().map(|t| (t.from.clone(), t.t())),
                         })
                     })
                     .collect();
@@ -897,12 +905,49 @@ fn render_group(
                 } else {
                     pmg_render::Load::Over
                 };
-                crate::render::draw(&gpu, renderer, &p.inst, &p.values, &out.target, load);
+
+                match &p.tween {
+                    // A rebind in flight: the new layout carrying the geometry,
+                    // then the outgoing content dissolved over it. Two passes,
+                    // and only while a tween is actually running.
+                    Some((from, t)) => {
+                        let from_renderer = out.tween_renderers.get(&gpu, &p.layer, &p.key, from);
+                        let frames = pmg_render::tween_frames(from, &p.inst, *t, &p.values);
+                        crate::render::draw_frames(
+                            &gpu,
+                            renderer,
+                            &p.inst,
+                            &frames.to,
+                            &out.target,
+                            load,
+                        );
+                        crate::render::draw_frames(
+                            &gpu,
+                            from_renderer,
+                            from,
+                            &frames.from,
+                            &out.target,
+                            pmg_render::Load::Over,
+                        );
+                    }
+                    None => {
+                        crate::render::draw(&gpu, renderer, &p.inst, &p.values, &out.target, load);
+                    }
+                }
             }
             if plan.is_empty() {
                 out.target.clear(&gpu);
             }
             out.renderers.retain(&live);
+            // Outgoing atlases live only as long as their tween. Retaining on
+            // the same set as the live ones would hold a second atlas per layer
+            // for the rest of the service.
+            let morphing: std::collections::HashSet<String> = plan
+                .iter()
+                .filter(|p| p.tween.is_some())
+                .map(|p| p.layer.clone())
+                .collect();
+            out.tween_renderers.retain(&morphing);
 
             let mut rgba = out.target.read(&gpu)?;
             if let Some(name) = &pattern {

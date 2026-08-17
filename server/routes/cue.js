@@ -52,7 +52,10 @@ function buildOp(body, item) {
     case 'take':      return [{ Take: { item: item.id, output, layer } }, null]
     case 'arm':       return [{ Arm: { item: item.id, output, layer } }, null]
     case 'take_out':  return [{ TakeOut: { output, layer } }, null]
-    case 'update':    return [{ Update: { output, layer, data: toWireData(body.data ?? {}) } }, null]
+    // tween_ms rides through untouched. 0 is a hard cut — correcting a
+    // misspelled name should not be a 400 ms animation about itself.
+    case 'update':    return [{ Update: { output, layer, data: toWireData(body.data ?? {}),
+                                          tween_ms: body.tween_ms ?? null } }, null]
     case 'clear_layer': return [{ ClearLayer: { output, layer } }, null]
     case 'clear_all': return [{ ClearAll: { output } }, null]
     case 'preload':   return [{ Preload: { item: item.id } }, null]

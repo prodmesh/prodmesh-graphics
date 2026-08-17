@@ -36,6 +36,10 @@ pmgctl take — render an Item on air (M1)
                 [--png <dir>]           Also write frames as PNGs
                 [--frames-only]         Skip NDI; just render and report
                 [--clip key=<file>]     Bind a clip to an asset key (repeatable)
+                [--update k=v ...]      Rebind these fields mid-hold and MORPH
+                                        to the new layout — the box grows or
+                                        shrinks to fit. Repeatable.
+                [--tween <ms>]          Morph duration. Default 400
 
 Plays In, holds, then plays Out. Everything expensive happens once at arm;
 per frame only timelines are evaluated and transforms applied.
@@ -235,6 +239,47 @@ pub fn main(args: &[String]) -> Result<()> {
     );
     let arm_ms = arm_start.elapsed().as_secs_f64() * 1000.0;
 
+    // The rebind, solved NOW rather than mid-hold. This is the whole trick: both
+    // ends are finished layouts and the frames between them are arithmetic.
+    let mut updates: pmg_scene::bind::Data = data.clone();
+    let mut has_update = false;
+    let mut i = 1;
+    while i < args.len() {
+        if args[i] == "--update" {
+            if let Some((k, v)) = args.get(i + 1).and_then(|kv| kv.split_once('=')) {
+                updates.insert(k.to_string(), v.to_string());
+                has_update = true;
+            }
+            i += 2;
+        } else {
+            i += 1;
+        }
+    }
+    let tween_ms: f64 = arg(args, "--tween")
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(400.0);
+
+    let rebound = if has_update {
+        let t0 = std::time::Instant::now();
+        let measurer2 = Measurer::new(engine);
+        let solved2 = pmg_layout::solve(&doc, &updates, &measurer2)?;
+        let mut e2 = measurer2.into_engine();
+        let inst2 = SceneInstance::build_with(
+            &doc,
+            &solved2,
+            &mut TextEngineGlyphs::new(&mut e2),
+            &mut clips,
+        );
+        println!(
+            "rebind solved in {:.1} ms — the same cost as an arm, paid once",
+            t0.elapsed().as_secs_f64() * 1000.0
+        );
+        engine = e2;
+        Some(inst2)
+    } else {
+        None
+    };
+
     println!("armed in {arm_ms:.1} ms");
     println!("  canvas        {}x{}", inst.canvas_w, inst.canvas_h);
     println!("  nodes         {}", inst.nodes.len());
@@ -288,6 +333,11 @@ pub fn main(args: &[String]) -> Result<()> {
     println!("adapter: {}", adapter.get_info().name);
 
     let renderer = SceneRenderer::new(&device, &queue, &inst);
+    // A second renderer for the rebound instance: it has its own glyph atlas,
+    // because it has its own text.
+    let renderer2 = rebound
+        .as_ref()
+        .map(|i| SceneRenderer::new(&device, &queue, i));
     let (w, h) = (inst.canvas_w, inst.canvas_h);
 
     let tex = device.create_texture(&wgpu::TextureDescriptor {
@@ -398,8 +448,44 @@ pub fn main(args: &[String]) -> Result<()> {
         let values = tl
             .map(|t| timeline::evaluate(t, local as f32))
             .unwrap_or_default();
-        let frame_nodes = pmg_render::scene::apply_tracks(&inst, &values);
-        renderer.render(&device, &queue, &inst, &frame_nodes, &view);
+
+        // The rebind fires halfway through the hold, which is where it happens
+        // in a service: the verse is up, the pastor moves on, the box follows.
+        let update_at = in_ms + hold_ms * 0.5;
+        match (&rebound, &renderer2) {
+            (Some(to), Some(r2)) if t >= update_at => {
+                let raw = ((t - update_at) / tween_ms.max(1.0)) as f32;
+                let tw = pmg_render::ease(raw);
+                if tw >= 1.0 {
+                    // Landed. Draw the new instance alone — a finished tween
+                    // must cost exactly what no tween costs.
+                    let f = pmg_render::scene::apply_tracks(to, &values);
+                    r2.render(&device, &queue, to, &f, &view);
+                } else {
+                    let frames = pmg_render::tween_frames(&inst, to, tw, &values);
+                    r2.render_with(
+                        &device,
+                        &queue,
+                        to,
+                        &frames.to,
+                        &view,
+                        pmg_render::Load::Clear,
+                    );
+                    renderer.render_with(
+                        &device,
+                        &queue,
+                        &inst,
+                        &frames.from,
+                        &view,
+                        pmg_render::Load::Over,
+                    );
+                }
+            }
+            _ => {
+                let frame_nodes = pmg_render::scene::apply_tracks(&inst, &values);
+                renderer.render(&device, &queue, &inst, &frame_nodes, &view);
+            }
+        }
 
         // Read back.
         let mut enc = device.create_command_encoder(&Default::default());
@@ -447,7 +533,12 @@ pub fn main(args: &[String]) -> Result<()> {
         }
         if let Some(d) = &png_dir {
             // Sample frames only — 240 PNGs of a 4-second take helps nobody.
-            if frame % 20 == 0 {
+            // EXCEPT through a rebind: a morph is 30 frames and sampling every
+            // 20th would step over the whole thing and report it as flat.
+            let morphing = rebound.is_some()
+                && t >= in_ms + hold_ms * 0.5
+                && t <= in_ms + hold_ms * 0.5 + tween_ms;
+            if frame % 20 == 0 || morphing {
                 crate::golden::write_png_rgba(
                     Path::new(&format!("{d}/frame-{frame:04}-{phase}.png")),
                     &rgba,

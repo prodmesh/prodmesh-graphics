@@ -83,6 +83,13 @@ pub const DEAD_AFTER_MS: u64 = 3_000;
 /// full resync.
 pub const REPLAY_RING: usize = 1024;
 
+/// How long a live rebind takes to morph from the old layout to the new one.
+///
+/// 400 ms reads as the graphic responding rather than as a cut or as a wait.
+/// The value is on the wire rather than compiled in because a verse moving to
+/// its next section and a typo being corrected want different answers.
+pub const DEFAULT_TWEEN_MS: u32 = 400;
+
 /// Default deadline for a take.
 ///
 /// **A take whose deadline has passed is rejected, not fired late.** A graphic
@@ -418,6 +425,13 @@ pub enum CueOp {
         output: String,
         layer: String,
         data: std::collections::BTreeMap<String, DataValue>,
+        /// How long the rebind takes to morph, in milliseconds.
+        ///
+        /// `None` means [`DEFAULT_TWEEN_MS`]. `Some(0)` is a hard cut, which is
+        /// what a correction wants — fixing a misspelled name should not be a
+        /// 400 ms animation drawing attention to itself.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        tween_ms: Option<u32>,
     },
     ClearLayer {
         output: String,

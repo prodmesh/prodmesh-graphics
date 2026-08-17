@@ -577,11 +577,65 @@ impl SceneRenderer {
             let f = frame.get(i).copied().unwrap_or(FrameNode {
                 transform: n.base_transform,
                 opacity: n.opacity,
+                rect: None,
             });
-            let local = affine(&f.transform, &n.rect);
+            // The anchor is a fraction of the node's rect, so a morphing node
+            // has to rotate and scale about its CURRENT rect, not the one
+            // layout produced.
+            let local = affine(&f.transform, &f.rect.unwrap_or(n.rect));
             world.push(match n.parent.and_then(|p| world.get(p).copied()) {
                 Some(parent) => compose(parent, local),
                 None => local,
+            });
+        }
+
+        // Scissor per node: the intersection of every clipping ancestor.
+        //
+        // `clip` was declared by the scene format and ignored by this renderer
+        // until 2026-08-16. It stopped being cosmetic with the live rebind: a
+        // band that grows to fit new text must REVEAL that text as it grows,
+        // and without clipping the new line is simply drawn at its final width
+        // outside a box that has not got there yet.
+        //
+        // Axis-aligned, from the transformed rect's bounding box. That is exact
+        // for translation and scale — every case a lower third uses — and an
+        // over-estimate under rotation, which errs towards drawing too much
+        // rather than clipping away something that should be visible.
+        let mut clips: Vec<Option<[f32; 4]>> = Vec::with_capacity(inst.nodes.len());
+        for (i, n) in inst.nodes.iter().enumerate() {
+            let inherited = n.parent.and_then(|p| clips.get(p).copied().flatten());
+            let mine = if n.clip {
+                let f = frame.get(i).copied();
+                let r = f.and_then(|f| f.rect).unwrap_or(n.rect);
+                let (m, t) = world[i];
+                // The rect's four corners through the affine, then their bounds.
+                let pts = [
+                    (r.x, r.y),
+                    (r.x + r.w, r.y),
+                    (r.x, r.y + r.h),
+                    (r.x + r.w, r.y + r.h),
+                ]
+                .map(|(x, y)| (m[0] * x + m[2] * y + t[0], m[1] * x + m[3] * y + t[1]));
+                let xs = pts.map(|p| p.0);
+                let ys = pts.map(|p| p.1);
+                Some([
+                    xs.iter().copied().fold(f32::MAX, f32::min),
+                    ys.iter().copied().fold(f32::MAX, f32::min),
+                    xs.iter().copied().fold(f32::MIN, f32::max),
+                    ys.iter().copied().fold(f32::MIN, f32::max),
+                ])
+            } else {
+                None
+            };
+            clips.push(match (inherited, mine) {
+                (Some(a), Some(b)) => Some([
+                    a[0].max(b[0]),
+                    a[1].max(b[1]),
+                    a[2].min(b[2]),
+                    a[3].min(b[3]),
+                ]),
+                (Some(a), None) => Some(a),
+                (None, b) => b,
             });
         }
 
@@ -589,12 +643,14 @@ impl SceneRenderer {
             let f = frame.get(i).copied().unwrap_or(FrameNode {
                 transform: n.base_transform,
                 opacity: n.opacity,
+                rect: None,
             });
+            let rect = f.rect.unwrap_or(n.rect);
             let (m, t) = world[i];
             let color = n.fill.map(|c| c.rgba).unwrap_or([1.0, 1.0, 1.0, 1.0]);
 
             let u = NodeUniform {
-                rect: [n.rect.x, n.rect.y, n.rect.w, n.rect.h],
+                rect: [rect.x, rect.y, rect.w, rect.h],
                 color,
                 xform: m,
                 xform_t: t,
@@ -711,8 +767,34 @@ impl SceneRenderer {
             pass.set_vertex_buffer(0, vbuf.slice(..));
 
             // Painter's algorithm, tree order.
+            let (cw, ch) = (inst.canvas_w, inst.canvas_h);
+            let mut scissor_set = false;
             for (i, n) in inst.nodes.iter().enumerate() {
                 let offset = (stride as usize * i) as u32;
+
+                match clips[i] {
+                    Some([x0, y0, x1, y1]) => {
+                        // Clamped to the target, and skipped entirely when the
+                        // rect has collapsed — a zero-width scissor is a
+                        // validation error, and a box mid-morph can genuinely
+                        // be zero wide.
+                        let x = x0.max(0.0).min(cw as f32) as u32;
+                        let y = y0.max(0.0).min(ch as f32) as u32;
+                        let w = (x1.min(cw as f32) - x0.max(0.0)).max(0.0) as u32;
+                        let h = (y1.min(ch as f32) - y0.max(0.0)).max(0.0) as u32;
+                        if w == 0 || h == 0 {
+                            continue;
+                        }
+                        pass.set_scissor_rect(x, y, w, h);
+                        scissor_set = true;
+                    }
+                    None if scissor_set => {
+                        pass.set_scissor_rect(0, 0, cw, ch);
+                        scissor_set = false;
+                    }
+                    None => {}
+                }
+
                 match &n.content {
                     RenderContent::Unknown => {
                         pass.set_pipeline(&self.pipeline_unknown);

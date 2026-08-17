@@ -98,11 +98,39 @@ impl Phase {
     }
 }
 
+/// A live rebind in progress: what was on screen, and how far through.
+///
+/// Holding the OLD instance is what makes the morph possible — both ends were
+/// solved, and every frame in between is arithmetic on rectangles rather than a
+/// third layout (`pmg_render::tween`).
+#[derive(Clone)]
+pub struct Tween {
+    pub from: std::sync::Arc<SceneInstance>,
+    pub t_ms: f64,
+    pub duration_ms: f64,
+}
+
+impl Tween {
+    /// Eased progress, 0 to 1.
+    pub fn t(&self) -> f32 {
+        if self.duration_ms <= 0.0 {
+            return 1.0;
+        }
+        pmg_render::tween::ease((self.t_ms / self.duration_ms) as f32)
+    }
+
+    pub fn done(&self) -> bool {
+        self.t_ms >= self.duration_ms
+    }
+}
+
 pub struct Occupant {
     pub armed: Armed,
     pub phase: Phase,
     /// Milliseconds since this phase began.
     pub t_ms: f64,
+    /// A rebind morphing to a new layout, if one is running.
+    pub tween: Option<Tween>,
 }
 
 #[derive(Default)]
@@ -372,6 +400,7 @@ impl LayerEngine {
                         armed,
                         phase: Phase::In,
                         t_ms: 0.0,
+                        tween: None,
                     });
                     Ok(Some(frame))
                 } else {
@@ -416,13 +445,72 @@ impl LayerEngine {
                 Ok(Some(frame))
             }
 
-            CueOp::Update { output, layer, .. } => {
-                // Rebinding a live instance needs a relayout, which M1's engine
-                // does not do without re-arming. Refusing is honest; silently
-                // showing stale text would not be.
+            CueOp::Update {
+                output,
+                layer,
+                data,
+                tween_ms,
+            } => {
+                // Rebind a live Item and MORPH to the new layout.
+                //
+                // This returned Unsupported from M1 until 2026-08-16, honestly:
+                // rebinding needs a relayout and the engine would not do one
+                // without re-arming. It is now the feature the flexbox solver
+                // was built for — a lower third whose box grows to fit new text
+                // while it is on air, which is the one thing in an hour of real
+                // service the current tooling cannot do
+                // (`docs/reference/canyon-hills-service-rundown.md`).
+                //
+                // The arm/take split still holds. Solving here costs what an arm
+                // costs, once, and every frame after it interpolates between two
+                // finished layouts rather than solving a third.
+                let out_id = output.clone();
+                let occupied = self
+                    .outputs
+                    .iter()
+                    .find(|o| &o.id == output)
+                    .and_then(|o| o.layers.iter().find(|l| &l.name == layer))
+                    .ok_or(RejectReason::NoSuchLayer)?
+                    .occupant
+                    .as_ref()
+                    .map(|o| (o.armed.item_id.clone(), o.armed.template_rev.clone()));
+                let Some((item_id, _)) = occupied else {
+                    // Nothing to rebind. An Update to an empty layer is a
+                    // mistake worth naming rather than a silent no-op.
+                    return Err(RejectReason::NotReady);
+                };
+
+                let fps = self
+                    .outputs
+                    .iter()
+                    .find(|o| o.id == out_id)
+                    .map(|o| (o.fps_num, o.fps_den))
+                    .ok_or(RejectReason::NoSuchLayer)?;
+                let rebound = self.arm_with(&item_id, lib, Some(fps), Some(data))?;
+
+                let ms = tween_ms.unwrap_or(pmg_proto::DEFAULT_TWEEN_MS) as f64;
                 let out = self.output_mut(output).ok_or(RejectReason::NoSuchLayer)?;
-                out.layer_mut(layer).ok_or(RejectReason::NoSuchLayer)?;
-                Err(RejectReason::Unsupported)
+                let frame = out.frame;
+                let l = out.layer_mut(layer).ok_or(RejectReason::NoSuchLayer)?;
+                let occ = l.occupant.as_mut().ok_or(RejectReason::NotReady)?;
+
+                // A rebind arriving mid-rebind morphs from what is ON SCREEN
+                // now, not from the state it was heading towards. Otherwise a
+                // fast correction snaps backwards before moving forwards.
+                let showing = occ
+                    .tween
+                    .as_ref()
+                    .filter(|t| t.t_ms < t.duration_ms)
+                    .map(|t| t.from.clone())
+                    .unwrap_or_else(|| occ.armed.instance.clone());
+
+                occ.tween = (ms > 0.0).then_some(Tween {
+                    from: showing,
+                    t_ms: 0.0,
+                    duration_ms: ms,
+                });
+                occ.armed = rebound;
+                Ok(Some(frame))
             }
 
             CueOp::Timeline {
@@ -478,6 +566,21 @@ impl LayerEngine {
         lib: &dyn Library,
         out_fps: Option<(u32, u32)>,
     ) -> Result<Armed, RejectReason> {
+        self.arm_with(item_id, lib, out_fps, None)
+    }
+
+    /// Arm, optionally with data that overrides the Item's own.
+    ///
+    /// The override is what a live `Update` binds: same Item, same template,
+    /// new values. Everything else about arming is identical, which is the
+    /// point — a rebind is an arm, and it costs what an arm costs.
+    fn arm_with(
+        &self,
+        item_id: &str,
+        lib: &dyn Library,
+        out_fps: Option<(u32, u32)>,
+        overrides: Option<&BTreeMap<String, DataValue>>,
+    ) -> Result<Armed, RejectReason> {
         let (label, template_rev, data) = lib.item(item_id).ok_or(RejectReason::NoSuchItem)?;
         let doc = lib.template(template_rev).ok_or(RejectReason::NotReady)?;
 
@@ -488,10 +591,17 @@ impl LayerEngine {
             return Err(RejectReason::UnreadableTemplate);
         }
 
-        let bound: pmg_scene::bind::Data = data
+        // The Item's data, then anything a live rebind overrode. Merged rather
+        // than replaced: an Update that names one field must not blank the rest.
+        let mut bound: pmg_scene::bind::Data = data
             .iter()
             .map(|(k, v)| (k.clone(), v.as_binding_str()))
             .collect();
+        if let Some(over) = overrides {
+            for (k, v) in over {
+                bound.insert(k.clone(), v.as_binding_str());
+            }
+        }
 
         let engine = lib.text_engine().map_err(|_| RejectReason::NotReady)?;
         let measurer = Measurer::new(engine);
@@ -605,6 +715,17 @@ impl LayerEngine {
                 continue;
             };
             o.t_ms += dt;
+
+            // A rebind advances on the OUTPUT's clock like everything else, and
+            // is dropped the moment it lands so the steady state costs one
+            // Option check rather than a second draw pass forever.
+            if let Some(tw) = &mut o.tween {
+                tw.t_ms += dt;
+                if tw.done() {
+                    o.tween = None;
+                }
+            }
+
             match o.phase {
                 // In runs to its end and then HOLDS at that end state. It is
                 // not re-evaluated from zero, which would restart the animation
