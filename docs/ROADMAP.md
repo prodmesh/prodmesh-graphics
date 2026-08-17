@@ -144,6 +144,31 @@ Where it stops being a graphics toy and starts being broadcast equipment.
 
 ---
 
+## M3g — The responsive tween
+
+**Added 2026-08-16, and it jumps the queue.** The Canyon Hills rundown
+(`docs/reference/`) marks exactly one thing in sixty minutes as impossible on the
+current system: a lower third whose box **grows and shrinks to fit new text while
+it is on air**, cross-fading between two states. That is what this project's
+flexbox solver was built for, and today the node returns
+`RejectReason::Unsupported` for `CueOp::Update`.
+
+The refusal is honest and the fix is already shaped by the architecture: layout
+is solved at arm in 0.3–2 ms, so **solve both states at arm and interpolate
+between two solved rect sets**. Not a relayout per frame — the arm/take split
+still forbids that, for measured reasons — but two layouts and a tween, which is
+why it is affordable.
+
+**Ships:** an `Update` cue that rebinds live, both layouts solved at arm, rect
+interpolation with an easing, glyph cross-fade. **Verification:** a Bible verse
+moving to its next section on air, with the box tweening, watched on SDI.
+
+**Also missing and not yet placed:** an audio-only output backend. A quarter of
+that rundown's audio goes to a Dante Virtual Soundcard — a CoreAudio device —
+and today audio only leaves this system embedded in SDI or NDI.
+
+---
+
 ## M4 — Control surfaces
 
 **Blocked on two model changes, deliberately.** ADR 0017 (playout mode per
@@ -165,6 +190,9 @@ with adapters on top.
   `ross-dashboard-grid` skill).
 - GPI, OSC, and MIDI — **terminating at the node**, not at the server, because
   that is what makes them work when the server is down.
+- LTC / MIDI timecode as a **clock the rundown follows**, which is a different
+  thing from a surface that presses a button, and is how advanced services run
+  the worship set.
 - Surfaces report `Superseded` distinctly from `Rejected` (ADR 0017), and a
   partly-delivered take distinctly from a failed one (ADR 0018). A panel with
   three lamps needs those to be different lamps.

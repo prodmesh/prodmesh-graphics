@@ -136,6 +136,31 @@ scope: it re-opens "which one is the real Item" and there is no request for it.
 The binding language's `visible_if` and per-template layout already let two
 templates present the same data very differently, which covers the real cases.
 
+## Amendment — 2026-08-16, from the Canyon Hills rundown
+
+A minute-by-minute description of a real service
+(`docs/reference/canyon-hills-service-rundown.md`) arrived after this was
+accepted. It confirms the decision — nearly every graphic in the hour has two or
+three destinations, so the list is the normal shape rather than the exception —
+and adds two requirements that are cheap now and expensive later.
+
+**A destination can be deliberately blank.** *"Full screen graphics typically
+blank out the LED wall leaving only a background."* An Item may name a
+destination and intend nothing to be rendered there. That is a third state
+alongside *rendered* and *unavailable*, and it is an **instruction** rather than
+an absence: clearing the wall is part of what taking that graphic means. It has
+to travel as one and the interface has to distinguish it from a feed that simply
+did not receive the take.
+
+**Not every destination fires on every take.** *"Lower thirds always have a full
+screen version we can take if we need to, and a LED wall version."* The key feed
+and the wall go together; the full-screen version is available on demand. So each
+destination carries a default — **automatic** or **on request** — and the
+operator gets one action for "take it" and another for "also put it full screen".
+
+Both are one field per destination, not a redesign, which is the argument for
+folding them in before implementation rather than after.
+
 ## Seam
 
 The destination list is what makes a **Destination Group** an addition rather
