@@ -368,6 +368,31 @@ impl LayerEngine {
         }
     }
 
+    /// Ack a take that a newer take for the same layers replaced before it
+    /// fired (ADR 0017).
+    ///
+    /// Called instead of `apply`, never as well as it — the whole point is that
+    /// the layer does not flash through every slide the operator scrolled past.
+    ///
+    /// Dedupe still wins. A replay of a cue that already fired must say
+    /// `Deduped`: it DID go on air, and calling that superseded would report a
+    /// graphic as never shown while it was on the programme feed.
+    pub fn supersede(&mut self, cue: &Cue, now_ms: u64) -> CueAck {
+        let deduped = cue.seq <= self.last_applied_seq || self.applied.contains(&cue.cue_id);
+        CueAck {
+            seq: cue.seq,
+            cue_id: cue.cue_id.clone(),
+            result: if deduped {
+                CueResult::Deduped
+            } else {
+                CueResult::Superseded
+            },
+            reason: None,
+            fired_at_frame: None,
+            at_utc: now_ms,
+        }
+    }
+
     fn dispatch(&mut self, op: &CueOp, lib: &dyn Library) -> Result<Option<u64>, RejectReason> {
         match op {
             // A take that fans out (ADR 0018).

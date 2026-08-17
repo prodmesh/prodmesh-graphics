@@ -459,3 +459,97 @@ fn a_version_refusal_travels_as_a_reason_and_not_as_a_missing_byte() {
     assert!(r.destinations[0].unreadable.as_deref().unwrap().contains("needs reader 2"));
     assert!(!r.is_armable());
 }
+
+// ---------------------------------------------------------------------------
+// Superseding — ADR 0017.
+//
+// Follow mode fires cues several times a second. Cue n+1 arrives while n is
+// still in flight, and queueing them all makes the layer flash through every
+// slide the operator scrolled past — wrong, and slower the faster they work.
+// ---------------------------------------------------------------------------
+
+fn take(item: &str, layer: &str) -> CueOp {
+    CueOp::Take {
+        item: item.into(),
+        output: "out-0".into(),
+        layer: layer.into(),
+        destinations: Vec::new(),
+    }
+}
+
+#[test]
+fn a_take_names_the_layers_it_would_supersede() {
+    assert_eq!(
+        take("i", "Lower Third").take_layers(),
+        Some(vec![("out-0".to_string(), "Lower Third".to_string())]),
+    );
+    // Narrow on purpose. Superseding an Update would throw away words somebody
+    // typed, and superseding a TakeOut would leave up a graphic that was
+    // explicitly cleared.
+    assert_eq!(
+        CueOp::TakeOut { output: "out-0".into(), layer: "Lower Third".into() }.take_layers(),
+        None,
+    );
+    assert_eq!(
+        CueOp::Update {
+            output: "out-0".into(), layer: "Lower Third".into(),
+            data: BTreeMap::new(), tween_ms: None,
+        }
+        .take_layers(),
+        None,
+    );
+}
+
+#[test]
+fn two_takes_to_the_same_layers_in_a_different_order_still_match() {
+    // Destination order is not meaningful (ADR 0018), so a take that fans to
+    // the wall and the programme feed must supersede one that fanned to the
+    // programme feed and the wall — otherwise both fire and the layer flashes.
+    let d = |layer: &str| Destination {
+        output: "out-0".into(), layer: layer.into(), template_rev: "r".into(),
+        mode: "auto".into(), blank: false,
+    };
+    let a = CueOp::Take {
+        item: "a".into(), output: "out-0".into(), layer: "L".into(),
+        destinations: vec![d("Wall"), d("Lower Third")],
+    };
+    let b = CueOp::Take {
+        item: "b".into(), output: "out-0".into(), layer: "L".into(),
+        destinations: vec![d("Lower Third"), d("Wall")],
+    };
+    assert_eq!(a.take_layers(), b.take_layers());
+}
+
+#[test]
+fn takes_to_different_layers_do_not_supersede_each_other() {
+    // The bug this prevents is a lower third killing a pending bug graphic
+    // because both happened to be in flight.
+    assert_ne!(
+        take("a", "Lower Third").take_layers(),
+        take("b", "Bug").take_layers(),
+    );
+}
+
+#[test]
+fn a_superseded_cue_is_acked_as_superseded_and_never_as_late() {
+    let mut e = engine();
+    let ack = e.supersede(&cue(1, "c-1", take("i", "Lower Third")), 0);
+
+    // The distinction ADR 0017 insists on: superseded is the system working —
+    // the operator's intent is their latest position — and late is the system
+    // refusing. A panel with three lamps lights a different one for each.
+    assert_eq!(ack.result, CueResult::Superseded);
+    assert_eq!(ack.reason, None);
+    assert_eq!(ack.fired_at_frame, None);
+    assert_eq!(ack.cue_id, "c-1");
+}
+
+#[test]
+fn a_replay_of_a_cue_that_already_fired_is_deduped_not_superseded() {
+    // It DID go on air. Reporting it superseded would tell an operator a
+    // graphic never showed while it was on the programme feed.
+    let mut e = engine();
+    let c = cue(1, "c-1", clear_all());
+    assert_eq!(e.apply(&c, &Empty, 0, false).result, CueResult::Applied);
+    assert_eq!(e.supersede(&c, 0).result, CueResult::Deduped);
+}

@@ -572,6 +572,39 @@ impl CueOp {
         }
     }
 
+    /// Every layer a take claims, sorted — the key ADR 0017 supersedes on.
+    ///
+    /// `None` for everything that is not a `Take`. Deliberately narrow: an
+    /// operator arrowing through a chorus sends take after take to one layer,
+    /// and that is the whole case. Letting a take supersede a pending `Update`
+    /// would throw away words somebody typed, and letting it supersede a
+    /// `TakeOut` would leave a graphic up that was explicitly cleared.
+    ///
+    /// Sorted so two takes that fan to the same destinations in a different
+    /// order still compare equal (ADR 0018).
+    pub fn take_layers(&self) -> Option<Vec<(String, String)>> {
+        let CueOp::Take {
+            output,
+            layer,
+            destinations,
+            ..
+        } = self
+        else {
+            return None;
+        };
+        let mut keys: Vec<(String, String)> = if destinations.is_empty() {
+            vec![(output.clone(), layer.clone())]
+        } else {
+            destinations
+                .iter()
+                .map(|d| (d.output.clone(), d.layer.clone()))
+                .collect()
+        };
+        keys.sort();
+        keys.dedup();
+        Some(keys)
+    }
+
     /// Ops that put something on air, or take it off, are the ones a deadline
     /// protects. Arming and preloading are invisible, so being late costs
     /// nothing and rejecting them would be pointless strictness.
@@ -595,6 +628,21 @@ pub enum CueResult {
     Applied,
     /// Already applied. Not an error — this is the mechanism working.
     Deduped,
+    /// **Replaced by a newer intent for the same layer, before it fired**
+    /// (ADR 0017).
+    ///
+    /// Distinct from `Rejected`/`DeadlinePassed`, and the distinction is the
+    /// point: superseded is the system working — an operator on the arrow keys
+    /// through a chorus means their latest position, not every slide they
+    /// passed through — and late is the system refusing. A control surface with
+    /// three lamps needs to light a different one for each, and a cue log has to
+    /// be able to show "eight requests, five superseded, three on air" rather
+    /// than either eight takes or a mysterious gap.
+    ///
+    /// Never silent. An operator in Follow can outrun the node, which means not
+    /// every slide they touched appeared on air; that has to be true and
+    /// visible rather than hidden.
+    Superseded,
     Rejected,
 }
 

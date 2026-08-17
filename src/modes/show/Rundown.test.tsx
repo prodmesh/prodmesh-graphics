@@ -21,8 +21,14 @@ const item = (id: string, label: string) => ({
 const RUNDOWN = {
   id: 'rd1',
   name: 'Sunday',
-  playlists: [{ id: 'p1', name: 'Welcome', items: [item('i1', 'Welcome'), item('i2', 'Pastor Dan')] }],
+  playlists: [{ id: 'p1', name: 'Welcome', mode: 'cue', items: [item('i1', 'Welcome'), item('i2', 'Pastor Dan')] }],
   cursor: { rundown: 'rd1', item: 'i2', index: 1, total: 2, label: 'Pastor Dan', next: null, previous: 'i1' },
+}
+
+/** The fixture's single playlist, so tests can vary its playout mode. */
+const setMode = (mode: string) => {
+  const p = RUNDOWN.playlists[0]
+  if (p) p.mode = mode
 }
 
 let topicValues: Record<string, unknown> = {}
@@ -58,6 +64,7 @@ beforeEach(() => {
   topicValues = {}
   vi.stubGlobal('EventSource', FakeEventSource)
   vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify(RUNDOWN), { status: 200 })))
+  setMode('cue')
 })
 afterEach(() => vi.unstubAllGlobals())
 
@@ -105,5 +112,73 @@ describe('the two marks', () => {
       // state the panel exists to show.
       expect(cursor).not.toBe(live)
     })
+  })
+})
+
+describe('playout mode — ADR 0017', () => {
+  /** Re-serve the rundown with a different playlist mode. */
+  const withMode = (mode: string) => {
+    setMode(mode)
+    const calls: { url: string; body: unknown }[] = []
+    vi.stubGlobal('fetch', vi.fn(async (url: string, init?: RequestInit) => {
+      calls.push({ url, body: init?.body ? JSON.parse(String(init.body)) : null })
+      return new Response(JSON.stringify(RUNDOWN), { status: 200 })
+    }))
+    return calls
+  }
+
+  test('cue mode says the arrows move, and they only move', async () => {
+    const calls = withMode('cue')
+    await paint()
+
+    expect(screen.getByText(/Cue — arrows move/)).toBeDefined()
+    const panel = screen.getByRole('region', { name: 'Rundown' })
+    await act(async () => {
+      panel.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowUp', bubbles: true }))
+      await Promise.resolve()
+    })
+
+    // The cursor moved and nothing fired. The arm step is the whole reason
+    // this mode exists, and the stated objection to ProPresenter.
+    expect(calls.some((c) => c.url.includes('/cursor'))).toBe(true)
+    expect(calls.some((c) => c.url.includes('/api/cue'))).toBe(false)
+  })
+
+  test('follow mode takes on navigation, and takes the slide it is moving TO', async () => {
+    const calls = withMode('follow')
+    await paint()
+
+    expect(screen.getByText(/Follow — arrows take/)).toBeDefined()
+    const panel = screen.getByRole('region', { name: 'Rundown' })
+    await act(async () => {
+      panel.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowUp', bubbles: true }))
+      await Promise.resolve()
+    })
+
+    const cue = calls.find((c) => c.url.includes('/api/cue'))
+    expect(cue).toBeDefined()
+    // The cursor is on i2; ArrowUp goes to i1, so i1 is what goes on air.
+    // Firing what the cursor was ON would put the operator a slide behind the
+    // band, which in a chorus is the entire problem.
+    expect((cue!.body as { item: string }).item).toBe('i1')
+  })
+
+  test('an unknown mode is refused loudly and the keyboard goes quiet', async () => {
+    const calls = withMode('timed-auto-advance')
+    await paint()
+
+    // Refused, not guessed at. Falling back to cue would give the operator an
+    // arm step in a playlist authored to fire on navigation, with nothing on
+    // screen saying so.
+    const alert = await screen.findByRole('alert')
+    expect(alert.textContent).toContain('timed-auto-advance')
+
+    const panel = screen.getByRole('region', { name: 'Rundown' })
+    await act(async () => {
+      panel.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowDown', bubbles: true }))
+      await Promise.resolve()
+    })
+    expect(calls.some((c) => c.url.includes('/api/cue'))).toBe(false)
+    expect(calls.some((c) => c.url.includes('/cursor'))).toBe(false)
   })
 })

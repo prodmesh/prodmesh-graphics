@@ -336,6 +336,21 @@ const MIGRATIONS = [
           FROM items;
     `)
   },
+
+  // 9 — a playlist decides whether navigating is taking (ADR 0017).
+  //
+  // On the PLAYLIST, not the node, the output, the rundown, or a preference on
+  // someone's screen. A song is followed and a cuelist is cued — that is a fact
+  // about the content, so it belongs to the content. As an operator preference
+  // it would mean two stations disagreeing about whether clicking fires, with
+  // the answer depending on who logged in last.
+  //
+  // `cue` is the default because it is the safe one: it has an arm step, and a
+  // playlist that silently became `follow` would put a graphic on air the first
+  // time someone clicked a row to look at it.
+  (d) => {
+    d.exec(`ALTER TABLE playlists ADD COLUMN mode TEXT NOT NULL DEFAULT 'cue';`)
+  },
 ]
 
 /**

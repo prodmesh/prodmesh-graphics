@@ -120,6 +120,15 @@ function whyNot(a) {
   switch (a.result) {
     case 'offline':      return 'it is offline'
     case 'unknown_node': return 'there is no node by that name'
+    // Not an error and not a success: a newer take for the same layer replaced
+    // this one before it fired (ADR 0017). 200, because the system did exactly
+    // what it should have — the operator's intent is their latest position, not
+    // every slide they passed through on the way. The distinction from a
+    // rejected-as-late cue has to survive to here, because one is the system
+    // working and the other is the system refusing.
+    case 'superseded':
+      return { http: 200, payload: { result: 'superseded', seq: entry.seq,
+        label: 'Replaced by a newer take before it fired.' } }
     case 'not_adopted':  return 'it has not been adopted yet'
     case 'not_acked':    return 'it did not confirm in time'
     // rejectLabel() would be tempting here and is wrong: it names the node

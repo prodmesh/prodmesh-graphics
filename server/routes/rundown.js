@@ -34,10 +34,38 @@ router.get('/api/playlists/:id', (req, res) => {
   res.json(p)
 })
 
+/** The one place a mode string from outside is judged. */
+const badMode = (mode) =>
+  rundown.PLAYLIST_MODES.includes(mode)
+    ? null
+    : `There is no playout mode called “${mode}”. Use ${rundown.PLAYLIST_MODES.join(' or ')}.`
+
 router.post('/api/playlists', mayEdit, (req, res) => {
   const name = String(req.body?.name ?? '').trim()
   if (!name) return fail(res, 422, 'validation_failed', 'A playlist needs a name.')
-  res.status(201).json(rundown.createPlaylist(name))
+  // Defaults to `cue`, the mode with an arm step. A playlist that silently came
+  // up in `follow` would put a graphic on air the first time someone clicked a
+  // row to see what was in it.
+  const mode = req.body?.mode ?? 'cue'
+  const problem = badMode(mode)
+  if (problem) return fail(res, 422, 'validation_failed', problem)
+  res.status(201).json(rundown.createPlaylist(name, undefined, mode))
+})
+
+/**
+ * `PUT /api/playlists/:id/mode` — change what navigating means here.
+ *
+ * Separate from a rename on purpose: this changes what the arrow keys DO for
+ * whoever is running the show, which is worth an explicit act rather than a
+ * field that rides along with an edit nobody thought was dangerous.
+ */
+router.put('/api/playlists/:id/mode', mayEdit, (req, res) => {
+  const mode = String(req.body?.mode ?? '')
+  const problem = badMode(mode)
+  if (problem) return fail(res, 422, 'validation_failed', problem)
+  const p = rundown.setPlaylistMode(req.params.id, mode)
+  if (!p) return fail(res, 404, 'not_found', 'There is no playlist with that id.')
+  res.json(p)
 })
 
 router.put('/api/playlists/:id/items', mayEdit, (req, res) => {

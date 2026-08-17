@@ -258,6 +258,20 @@
 }
 .rundown__head { display: flex; align-items: baseline; justify-content: space-between; gap: 1rem; }
 .rundown__head h2 { margin: 0; font-size: 0.95rem; }
+/* Persistent, not a menu item. What the arrow keys DO changes when the cursor
+   crosses a playlist boundary mid-service, and an operator has to be able to
+   see which mode they are in without going to look for it (ADR 0017). */
+.rundown__mode {
+  margin-right: auto; padding: 0.1rem 0.45rem; border-radius: var(--radius);
+  font-size: 0.72rem; letter-spacing: 0.02em;
+  background: var(--bg-tile); border: 1px solid var(--border); color: var(--text-dim);
+}
+/* Follow is the one where navigating puts something on air, so it is the one
+   that gets the colour. */
+.rundown__mode--follow {
+  background: var(--warn-soft); border-color: var(--warn-border); color: var(--warn-text);
+}
+
 .rundown__transport { display: flex; gap: 0.5rem; align-items: center; }
 .rundown__transport .btn--take { flex: 1; justify-content: center; }
 

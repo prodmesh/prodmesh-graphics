@@ -160,3 +160,48 @@ test('the cursor survives the item it points at being removed', async () => {
   assert.equal(c.index, -1)
   assert.equal(c.total, 2)
 })
+
+// ---------------------------------------------------------------------------
+// Playout mode — ADR 0017.
+// ---------------------------------------------------------------------------
+
+test('a playlist is created in cue mode unless it asks for otherwise', async () => {
+  const pl = (await req('POST', '/api/playlists', { name: 'Message' })).json
+  // Cue is the safe default: it has an arm step. A playlist that silently came
+  // up in follow would put a graphic on air the first time someone clicked a
+  // row to see what was in it.
+  assert.equal(pl.mode, 'cue')
+
+  const song = (await req('POST', '/api/playlists', { name: 'Song', mode: 'follow' })).json
+  assert.equal(song.mode, 'follow')
+})
+
+test('mode is changed through its own endpoint, not as a field on a rename', async () => {
+  const pl = (await req('POST', '/api/playlists', { name: 'Song' })).json
+  const r = await req('PUT', `/api/playlists/${pl.id}/mode`, { mode: 'follow' })
+  assert.equal(r.status, 200)
+  assert.equal(r.json.mode, 'follow')
+  assert.equal((await req('GET', `/api/playlists/${pl.id}`)).json.mode, 'follow')
+})
+
+test('an unknown mode is refused rather than stored', async () => {
+  const pl = (await req('POST', '/api/playlists', { name: 'Song' })).json
+  const r = await req('PUT', `/api/playlists/${pl.id}/mode`, { mode: 'whatever' })
+  assert.equal(r.status, 422)
+  // Names what IS allowed. "Invalid mode" tells an operator nothing they can
+  // act on, and this endpoint is one a control surface will call.
+  assert.match(r.json.label, /cue or follow/)
+  assert.equal((await req('GET', `/api/playlists/${pl.id}`)).json.mode, 'cue', 'unchanged')
+})
+
+test('the mode travels with the rundown, because the keyboard depends on it', async () => {
+  const { rd, pl2 } = await service()
+  await req('PUT', `/api/playlists/${pl2.id}/mode`, { mode: 'follow' })
+  const detail = (await req('GET', `/api/rundowns/${rd.id}`)).json
+  // The browser decides what the arrow keys do from the playlist the cursor is
+  // in, so the mode has to arrive with the running order rather than needing a
+  // second fetch per playlist.
+  // A rundown mixes both kinds — that is the normal Sunday — so what the
+  // arrow keys do changes as the cursor crosses a boundary.
+  assert.deepEqual(detail.playlists.map((p) => p.mode), ['cue', 'follow'])
+})

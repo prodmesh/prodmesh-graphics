@@ -507,30 +507,6 @@ impl Runtime {
         let mut last_state = Instant::now();
         loop {
             match rx.recv_timeout(Duration::from_millis(200)) {
-                Ok(FromLink::Connected { epoch }) => {
-                    self.engine.lock().unwrap().set_epoch(epoch);
-                    let _ = tx.send(ToLink::State(self.engine.lock().unwrap().state_report()));
-                }
-                Ok(FromLink::Tick) => {
-                    let _ = tx.send(ToLink::State(self.engine.lock().unwrap().state_report()));
-                }
-                Ok(FromLink::Disconnected) => {
-                    // Deliberately nothing. What is on air stays on air.
-                    tracing::warn!("link down — still playing");
-                }
-                Ok(FromLink::Assignment(a)) => {
-                    // Persist FIRST, then adopt, then ack. Acking before the
-                    // fsync would claim durability we do not have (ADR 0009).
-                    match self.store.save_assignment(&a) {
-                        Ok(()) => {
-                            self.adopt(&a, Some(&tx));
-                            let _ = tx.send(ToLink::AssignmentSaved { gen: a.gen });
-                        }
-                        Err(e) => {
-                            tracing::error!(error = %e, "could not persist assignment; NOT acking")
-                        }
-                    }
-                }
                 Ok(FromLink::Cue(c, received_at)) => {
                     // Arming happens under the engine lock, which briefly stalls
                     // every render thread. An arm is 0.3–2 ms against a 16.68 ms
@@ -556,18 +532,84 @@ impl Runtime {
                     // the frame carries no issue timestamp and the server's
                     // clock is not ours to trust. Closing that needs an
                     // `issued_at` on the wire and is worth doing separately.
-                    let received_late = is_late(c.deadline_ms, received_at.elapsed());
-                    let ack = {
-                        let mut e = self.engine.lock().unwrap();
-                        e.apply(&c, &self.assigned, crate::link::now_ms(), received_late)
-                    };
-                    tracing::info!(cue = %c.cue_id, result = ?ack.result, reason = ?ack.reason, "cue");
-                    let _ = tx.send(ToLink::Ack(ack));
-                    let _ = tx.send(ToLink::State(self.engine.lock().unwrap().state_report()));
+                    // Everything else already waiting, so a run of takes to one
+                    // layer can be collapsed to the last one (ADR 0017).
+                    //
+                    // `try_recv` only: this NEVER waits to see whether a newer
+                    // cue might arrive. Superseding requires that the newer
+                    // intent is already in hand, which means this can only make
+                    // the node faster than it was, never later. An operator
+                    // holding the arrow keys through a chorus gets the slide
+                    // they stopped on instead of the layer flashing through
+                    // every one they passed.
+                    let mut batch = vec![FromLink::Cue(c, received_at)];
+                    while let Ok(m) = rx.try_recv() {
+                        batch.push(m);
+                    }
+
+                    // Which entries a LATER take in the same batch replaces.
+                    // Computed up front, then the batch is walked in order —
+                    // non-cue messages included — because reordering an
+                    // assignment past a cue would apply a take against content
+                    // it was not written for.
+                    let mut dead = vec![false; batch.len()];
+                    for i in 0..batch.len() {
+                        let FromLink::Cue(a, _) = &batch[i] else {
+                            continue;
+                        };
+                        let Some(keys) = a.op.take_layers() else {
+                            continue;
+                        };
+                        dead[i] = batch[i + 1..].iter().any(|m| {
+                            matches!(m, FromLink::Cue(b, _)
+                                if b.op.take_layers().as_ref() == Some(&keys))
+                        });
+                    }
+
+                    let mut acted = false;
+                    for (i, m) in batch.into_iter().enumerate() {
+                        match m {
+                            FromLink::Cue(c, received_at) if dead[i] => {
+                                let ack = self
+                                    .engine
+                                    .lock()
+                                    .unwrap()
+                                    .supersede(&c, crate::link::now_ms());
+                                tracing::info!(cue = %c.cue_id, result = ?ack.result,
+                                               "superseded before it fired");
+                                let _ = tx.send(ToLink::Ack(ack));
+                                let _ = received_at;
+                            }
+                            FromLink::Cue(c, received_at) => {
+                                let received_late =
+                                    is_late(c.deadline_ms, received_at.elapsed());
+                                let ack = {
+                                    let mut e = self.engine.lock().unwrap();
+                                    e.apply(
+                                        &c,
+                                        &self.assigned,
+                                        crate::link::now_ms(),
+                                        received_late,
+                                    )
+                                };
+                                tracing::info!(cue = %c.cue_id, result = ?ack.result,
+                                               reason = ?ack.reason, "cue");
+                                let _ = tx.send(ToLink::Ack(ack));
+                                acted = true;
+                            }
+                            // Anything that is not a cue goes back through the
+                            // ordinary path, in the position it arrived in.
+                            other => self.handle(other, &tx),
+                        }
+                    }
+                    // One state report for the whole batch. Sending one per cue
+                    // would publish the intermediate slides an operator scrolled
+                    // past as though each had been on air.
+                    if acted {
+                        let _ = tx.send(ToLink::State(self.engine.lock().unwrap().state_report()));
+                    }
                 }
-                Ok(FromLink::Resync(reason)) => {
-                    tracing::warn!(%reason, "server asked for a resync");
-                }
+                Ok(other) => self.handle(other, &tx),
                 Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
                 Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break,
             }
@@ -583,6 +625,47 @@ impl Runtime {
             let _ = h.join();
         }
         Ok(())
+    }
+
+    /// Everything that is not a cue.
+    ///
+    /// Split out so a batch of cues can replay the non-cue messages that were
+    /// interleaved with them IN ORDER (ADR 0017). Handling them out of order
+    /// would let a take be applied against an assignment it was not written
+    /// for, which is a far worse bug than the one superseding solves.
+    fn handle(&mut self, m: FromLink, tx: &Sender<ToLink>) {
+        match m {
+            FromLink::Connected { epoch } => {
+                self.engine.lock().unwrap().set_epoch(epoch);
+                let _ = tx.send(ToLink::State(self.engine.lock().unwrap().state_report()));
+            }
+            FromLink::Tick => {
+                let _ = tx.send(ToLink::State(self.engine.lock().unwrap().state_report()));
+            }
+            FromLink::Disconnected => {
+                // Deliberately nothing. What is on air stays on air.
+                tracing::warn!("link down — still playing");
+            }
+            FromLink::Assignment(a) => {
+                // Persist FIRST, then adopt, then ack. Acking before the fsync
+                // would claim durability we do not have (ADR 0009).
+                match self.store.save_assignment(&a) {
+                    Ok(()) => {
+                        self.adopt(&a, Some(tx));
+                        let _ = tx.send(ToLink::AssignmentSaved { gen: a.gen });
+                    }
+                    Err(e) => {
+                        tracing::error!(error = %e, "could not persist assignment; NOT acking")
+                    }
+                }
+            }
+            FromLink::Resync(reason) => {
+                tracing::warn!(%reason, "server asked for a resync");
+            }
+            // Handled by the batching path in `run`, which is the only place
+            // that can see a later cue superseding this one.
+            FromLink::Cue(..) => unreachable!("cues are handled in the batch loop"),
+        }
     }
 
     pub fn engine(&self) -> &Arc<Mutex<LayerEngine>> {

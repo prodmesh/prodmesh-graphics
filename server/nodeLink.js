@@ -447,7 +447,7 @@ export function offerAssignment(nodeId, assignment) {
  * because it teaches an operator to trust something untrue.
  *
  * Resolves `{ result, reason, fired_at_frame, at_utc }`, where result is
- * `applied` | `deduped` | `rejected` | `not_acked` | `offline`.
+ * `applied` | `deduped` | `superseded` | `rejected` | `not_acked` | `offline`.
  */
 export function cue(nodeId, { cue_id, op, deadline_ms, at = null }) {
   const s = find(nodeId)

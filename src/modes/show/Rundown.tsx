@@ -34,12 +34,25 @@ type Cursor = {
   previous: string | null
 }
 
+type Playlist = { id: string; name: string; mode: string; items: Item[] }
+
 type RundownDetail = {
   id: string
   name: string
-  playlists: { id: string; name: string; items: Item[] }[]
+  playlists: Playlist[]
   cursor: Cursor
 }
+
+/**
+ * The playout modes this build understands (ADR 0017).
+ *
+ * A mode it does not know is **refused loudly**, never treated as `cue`.
+ * Guessing would mean an old browser silently giving an operator the arm step
+ * in a playlist authored to fire on navigation — the keyboard doing something
+ * other than what the content says it does, with nothing on screen to say so.
+ * Same principle as a template whose reader version is too new.
+ */
+const MODES = ['cue', 'follow']
 
 export function RundownPanel({
   rundownId,
@@ -63,8 +76,16 @@ export function RundownPanel({
 
   const cursor = live ?? rundown?.cursor
   const running = (rundown?.playlists ?? []).flatMap((p) =>
-    p.items.map((it) => ({ ...it, playlist: p.name })),
+    p.items.map((it) => ({ ...it, playlist: p.name, mode: p.mode ?? 'cue' })),
   )
+
+  // Mode belongs to the playlist the cursor is IN, so it changes as the
+  // operator crosses a boundary mid-service. That is a real cognitive cost and
+  // the indicator below is the mitigation, not a decoration.
+  const at = running.find((i) => i.id === cursor?.item)
+  const mode = at?.mode ?? 'cue'
+  const known = MODES.includes(mode)
+  const follow = known && mode === 'follow'
 
   // What the NODE says is showing, by item id. Not what we asked for.
   const onAir = new Set(
@@ -111,6 +132,67 @@ export function RundownPanel({
     }
   }, [cursor, running, nodeId, outputId, show, move])
 
+  /**
+   * Fire a take without waiting for it (ADR 0017).
+   *
+   * Follow mode sends several cues a second. Awaiting each one would queue
+   * blocking requests behind each other and grow latency the faster the
+   * operator works — the opposite of what the mode is for. So this does not
+   * await, and each ack resolves against the cue id it minted.
+   *
+   * **It sets nothing on air locally.** The on-air mark still comes from the
+   * node, exactly as in Cue mode. Optimistic local state is the one thing this
+   * ADR rejects outright: it is the take button lying, in the mode where the
+   * operator is heads-down on the music and will never see the correction.
+   *
+   * A cue the node supersedes resolves 200 and is deliberately silent — that is
+   * the mechanism working, and a message per skipped slide during a chorus is
+   * noise an operator would learn to ignore.
+   */
+  const fireAt = useCallback(
+    (itemId: string | null) => {
+      const item = itemId ? running.find((i) => i.id === itemId) : null
+      if (!item) return
+      takeCue({
+        cue_id: newCueId(),
+        node: nodeId,
+        output: outputId,
+        layer: item.destination?.layer ?? 'Lower Third',
+        op: 'take',
+        item: item.id,
+        show,
+      }).catch((e) => setProblem(e instanceof ApiError ? e.message : String(e)))
+    },
+    [running, nodeId, outputId, show],
+  )
+
+  /**
+   * The keyboard, which is a function of the focused playlist's mode.
+   *
+   * In `cue` the arrows move the cursor and taking is a separate act. In
+   * `follow` they move AND take — an operator following the band has no spare
+   * action, and a beat late in a chorus is the whole problem.
+   */
+  const onKeyDown = useCallback(
+    (e: React.KeyboardEvent) => {
+      if (!known || !reachable) return
+      const delta = e.key === 'ArrowDown' ? 1 : e.key === 'ArrowUp' ? -1 : 0
+      if (!delta) return
+      e.preventDefault()
+      if (!follow) {
+        void move(delta)
+        return
+      }
+      // Where the cursor is ABOUT to be. Read from the cursor we already have
+      // rather than awaiting the move, because waiting for the server to tell
+      // us where we went is the latency this mode cannot afford.
+      const next = delta > 0 ? cursor?.next : cursor?.previous
+      fireAt(next ?? null)
+      void move(delta)
+    },
+    [known, reachable, follow, move, fireAt, cursor],
+  )
+
   if (!rundown) return null
 
   // What counts as a divergence worth a sentence.
@@ -130,13 +212,35 @@ export function RundownPanel({
     .map((id) => (layers?.layers ?? []).find((l) => l.occupant?.item_id === id)?.occupant?.item_label ?? id)
 
   return (
-    <section className="rundown" aria-label="Rundown">
+    // Focusable so the arrow keys reach it, and the handler is a function of
+    // the mode. A rundown mixes playlists of both kinds — that is the normal
+    // Sunday — so what the keyboard does changes as the cursor crosses a
+    // boundary, and the indicator below is how an operator knows without
+    // looking for it.
+    <section className="rundown" aria-label="Rundown" tabIndex={0} onKeyDown={onKeyDown}>
       <header className="rundown__head">
         <h2>{rundown.name}</h2>
+        {known ? (
+          <span className={follow ? 'rundown__mode rundown__mode--follow' : 'rundown__mode'}>
+            {follow ? 'Follow — arrows take' : 'Cue — arrows move'}
+          </span>
+        ) : null}
         <span className="show__dim">
           {cursor && cursor.index >= 0 ? `${cursor.index + 1} of ${cursor.total}` : `${running.length} items`}
         </span>
       </header>
+
+      {!known ? (
+        // Refused, not guessed at. Falling back to `cue` would give the
+        // operator an arm step in a playlist authored to fire on navigation,
+        // with nothing on screen saying the keyboard is not doing what the
+        // content asked for.
+        <p className="show__problem" role="alert">
+          <AlertTriangle size={15} aria-hidden /> This playlist uses a playout
+          mode this version does not know (“{mode}”). Its keyboard shortcuts are
+          off until you update.
+        </p>
+      ) : null}
 
       {problem ? (
         <p className="show__problem" role="alert">

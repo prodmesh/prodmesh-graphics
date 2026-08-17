@@ -79,12 +79,38 @@ export function getPlaylist(id) {
   }
 }
 
-export function createPlaylist(name, id = newId()) {
+/**
+ * The playout modes this server knows (ADR 0017).
+ *
+ * `cue`    — the cursor is what I intend to arm. Taking is a separate action.
+ * `follow` — the cursor is where I am in the content. Navigating IS taking.
+ *
+ * A list rather than a boolean because a third is anticipated (timed
+ * auto-advance, a countdown roll) and the seam only works if adding one is an
+ * addition here rather than a migration everywhere.
+ */
+export const PLAYLIST_MODES = ['cue', 'follow']
+
+export function createPlaylist(name, id = newId(), mode = 'cue') {
   const now = Date.now()
   handle()
-    .prepare('INSERT INTO playlists (id, name, created_at, updated_at) VALUES (?, ?, ?, ?)')
-    .run(id, name, now, now)
-  return { id, name, created_at: now, updated_at: now, items: [] }
+    .prepare('INSERT INTO playlists (id, name, mode, created_at, updated_at) VALUES (?, ?, ?, ?, ?)')
+    .run(id, name, mode, now, now)
+  return { id, name, mode, created_at: now, updated_at: now, items: [] }
+}
+
+/**
+ * Change what navigating means in this playlist.
+ *
+ * Its own endpoint rather than a field on a general update, because it changes
+ * what the operator's arrow keys DO. That is worth an explicit act and an
+ * explicit permission check, not something that rides along with a rename.
+ */
+export function setPlaylistMode(id, mode) {
+  const info = handle()
+    .prepare('UPDATE playlists SET mode = ?, updated_at = ? WHERE id = ?')
+    .run(mode, Date.now(), id)
+  return info.changes ? getPlaylist(id) : null
 }
 
 /** Replace a playlist's contents and order in one go. */
