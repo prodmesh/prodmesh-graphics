@@ -37,6 +37,55 @@ build and a series of takes.
 
 ---
 
+## Found: text does not wrap, and never has
+
+**The finding of the rehearsal, and it is not small.** `pmg-text`'s `measure()`
+returns a single line height in both of its branches, and the renderer calls
+`shape()` once for the whole string. There is no code path anywhere that
+produces a second line. `max_lines` is declared in the scene format, carried
+through the document, and **ignored**. A hard `\n` in the data is shaped as
+part of the run rather than breaking it.
+
+It is written down — `crates/pmg-text/src/lib.rs:373`, *"M1c does not wrap: a
+single line, clipped by the box. Real line breaking arrives with parley in
+M5"* — and the reasoning was sound at the time: an overflowing template is a
+design-time problem an editor can show.
+
+What the rehearsal changes is **when** it is needed. The reference frames from
+the real broadcast are:
+
+| Graphic | Lines |
+|---|---|
+| Lyric slide | 2, with a deliberate break the worship team chose |
+| Name tag | 2, but they are two separate fields — this one is fine |
+| Scripture chyron | 3–4 of wrapped body text |
+
+Two of the three primary graphics of the service cannot be drawn. Song lyrics
+are the single most common thing on screen across a Sunday, and a lyric slide
+is two lines by definition. **Line breaking is not authoring maturity, it is
+the first content type.** M5 is the wrong milestone for it.
+
+Two distinct pieces of work hide behind one heading, and the cheaper one buys
+most of the value:
+
+1. **Honour explicit breaks.** A lyric slide's line breaks are *chosen* — "WE
+   ARE HERE TO WITNESS / TO SHARE AND TESTIFY" is a decision about phrasing,
+   not an artefact of the box width. Splitting on `\n` and stacking the runs
+   needs no line-breaking algorithm at all.
+2. **Wrap to a width.** The scripture body block genuinely needs it, and it is
+   what makes the box grow and shrink against the words — the 29:30 tween.
+   This is the parley-shaped job.
+
+### Correction
+
+Earlier in this same session I reported the rehearsal templates "solve sensibly
+with wrapping" and read line counts out of the solved box heights — *"name
+h = 101, 278, 343 = 2, 3, 3 lines"*. That was wrong. Those heights are one
+line each, of differing natural line heights, and I inferred wrapping from a
+number instead of checking whether the code could do it.
+
+---
+
 ## Found: the assignment named an output the node does not have
 
 **Fixed.** `assignment.build()` falls back to a single output called `out-0` for
@@ -100,8 +149,14 @@ of ADR 0018 that the model describes and the system cannot do.
 
 These need a person, not a script:
 
-- **Follow at chorus speed.** Sixteen slides of a real song, arrowed at the
-  pace of a band. Superseding has unit tests and has never been provoked.
+- **Follow at the real pace.** Corrected by the operator: an arrow is pressed
+  once at the end of each line, not held down. That is roughly one cue every
+  5–15 seconds, and **ADR 0017's stated premise — "an operator holding an
+  arrow key through a chorus would queue blocking HTTP requests behind each
+  other" — is wrong.** Superseding may still be right for the *jump* case,
+  where scrubbing to find a section fires several takes quickly, but the ADR
+  currently justifies itself with a rate that does not occur. The ADR needs
+  amending rather than the code needing reverting.
 - **Jump to a named section.** The reference rundown calls this required. The
   song's real structure — Verse 1, Chorus 1, Verse 2, Bridge 1, Chorus 2, Tag 1,
   Ending — is in the import and goes nowhere: sections survive only as a prefix

@@ -18,6 +18,9 @@ import json
 import subprocess
 import sys
 
+sys.path.insert(0, "/Users/jbeale/Code/prodmesh-graphics/tools")
+import rehearsal_looks as looks   # noqa: E402
+
 REPO = "/Users/jbeale/Code/prodmesh-graphics"
 OUT = sys.argv[1]
 
@@ -113,19 +116,38 @@ def look(doc_id, name, build):
     return path
 
 
-# --- 1. The lower third -----------------------------------------------------
-# The fixture already is one. Nothing to do but keep it honest.
+def proto_text(d):
+    """A known-good text node to clone, so the schema stays right."""
+    return find(BASE["root"], "name")
+
+
+# --- The looks Canyon Hills actually uses ------------------------------------
+#
+# Drawn from three reference frames rather than from the fixture. The fixture
+# is a demonstration of the format — one plate with a name and a title — and
+# building four variations of it was a way of testing the plumbing while
+# showing the operator nothing they recognise.
+
 def lower_third(d):
-    # Up to three lines. At 29:30 the verse grows and shrinks against this
-    # box — with one line it can only ever get wider, which is half the effect.
-    restyle(d["root"], "name", 46.0, max_lines=3)
-    # The narrowest of the three, and therefore the one that decides how long a
-    # line an operator can type for an Item that also goes to the wall.
-    text_field(d, "name", "Line", 160)
+    looks.lyric(d, proto_text(d))
+    text_field(d, "name", "Lines", 160)
+    text_field(d, "title", "Song", None)
+
+
+def name_tag(d):
+    looks.nametag(d, proto_text(d))
+    text_field(d, "name", "Name", 40)
+    text_field(d, "title", "Role", None)
+
+
+def scripture(d):
+    looks.scripture(d, proto_text(d))
+    text_field(d, "name", "Verse", 400)
     text_field(d, "title", "Reference", None)
 
 
-# --- 2. The full-screen version ---------------------------------------------
+# --- The other two destinations of the same Item -----------------------------
+
 def full_screen(d):
     """The same words, centred, over a full-frame plate.
 
@@ -136,8 +158,6 @@ def full_screen(d):
     root["layout"]["justify"] = "center"
     root["layout"]["align"] = "center"
     root["layout"]["padding"] = {"top": 0.0, "right": 160.0, "bottom": 0.0, "left": 160.0}
-    # A full-frame plate rather than a band. A full-screen graphic is not keyed
-    # over camera — it replaces the picture — so it needs its own ground.
     root["style"]["fill"] = {"rgba": [0.02, 0.03, 0.05, 1.0]}
 
     band = find(root, "band")
@@ -153,14 +173,11 @@ def full_screen(d):
     text_field(d, "title", "Reference", None)
 
 
-# --- 3. The LED wall --------------------------------------------------------
 def led_wall(d):
     """*"LED Wall also has its own look with the lyric."*
 
-    Bigger and higher-contrast than either: it is read from across a room, at
-    an angle, competing with house lights. Deliberately not a scaled copy of
-    the full-screen look — that is why it is a third template and not a
-    resolution setting.
+    Bigger and higher-contrast than either: read from across a room, at an
+    angle, competing with house lights.
     """
     root = d["root"]
     root["layout"]["justify"] = "center"
@@ -181,26 +198,12 @@ def led_wall(d):
     text_field(d, "title", "Reference", None)
 
 
-# --- 4. The name tag --------------------------------------------------------
-def name_tag(d):
-    """Worship leader and pastor: a narrower band that never needs to grow.
-
-    Kept distinct from the verse look even though they are close, because the
-    rundown treats them as different objects and an operator picking "name tag"
-    should not get a template sized for four lines of scripture.
-    """
-    band = find(d["root"], "band")
-    band["layout"]["max_width"] = {"Px": 900.0}
-    # A name really is short, so this one keeps the cap. It is also never a
-    # destination of the same Item as a verse look.
-    text_field(d, "name", "Name", 40)
-
-
 LOOKS = [
-    ("01JCHREHEARSALLOWER3RD01", "Lower third", lower_third),
+    ("01JCHREHEARSALLOWER3RD01", "Lyric", lower_third),
     ("01JCHREHEARSALFULLSCRN01", "Full screen", full_screen),
     ("01JCHREHEARSALLEDWALL001", "LED wall", led_wall),
     ("01JCHREHEARSALNAMETAG001", "Name tag", name_tag),
+    ("01JCHREHEARSALSCRIPTUR01", "Scripture", scripture),
 ]
 
 print(json.dumps([
