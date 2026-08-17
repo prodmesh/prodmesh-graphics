@@ -279,3 +279,114 @@ test('ids sort in creation order', () => {
   assert.ok(early < late, 'lexicographic order is creation order')
   assert.match(early, ids.ID_RE)
 })
+
+// ---------------------------------------------------------------------------
+// Destinations (ADR 0018)
+// ---------------------------------------------------------------------------
+
+test('an item created the old way becomes a list of one', async () => {
+  const { m } = await publishFixture()
+  const made = await req('POST', '/api/items', {
+    template_id: m.template_id,
+    data: { name: 'Pastor Dan', title: 'Lead Pastor' },
+    destination: { output: 'out-0', layer: 'Lower Third' },
+  })
+  assert.equal(made.status, 201)
+  assert.equal(made.json.destinations.length, 1, 'one destination is still a one-line answer')
+  assert.equal(made.json.destinations[0].output, 'out-0')
+  assert.equal(made.json.destinations[0].template_rev, m.template_rev, 'pinned per destination')
+  assert.equal(made.json.destinations[0].mode, 'auto')
+})
+
+test('the same words go to the key feed and to the wall', async () => {
+  const { m } = await publishFixture()
+  const made = await req('POST', '/api/items', {
+    template_id: m.template_id,
+    data: { name: 'Pastor Dan', title: 'Lead Pastor' },
+    destinations: [
+      { output: 'sdi-key', layer: 'Lower Third', template_rev: m.template_rev },
+      { output: 'wall-ndi', layer: 'Fullscreen', template_rev: m.template_rev },
+    ],
+  })
+  assert.equal(made.status, 201)
+  assert.equal(made.json.destinations.length, 2)
+  // Ordinals are stable, so "the first destination" means something.
+  assert.deepEqual(
+    made.json.destinations.map((d) => d.output),
+    ['sdi-key', 'wall-ndi'],
+  )
+
+  const read = await req('GET', `/api/items/${made.json.id}`)
+  assert.equal(read.json.destinations.length, 2, 'and they survive a round trip')
+})
+
+test('a blank destination is an instruction, not an absence', async () => {
+  const { m } = await publishFixture()
+  // A full-screen graphic blanks the LED wall and leaves the background
+  // running. That destination renders nothing on purpose, so it demands
+  // nothing of the Item's data — and must not be confused with a feed that
+  // simply failed.
+  const made = await req('POST', '/api/items', {
+    template_id: m.template_id,
+    data: { name: 'Pastor Dan', title: 'Lead Pastor' },
+    destinations: [
+      { output: 'sdi-key', layer: 'Lower Third', template_rev: m.template_rev },
+      { output: 'wall-ndi', layer: 'Fullscreen', blank: true },
+    ],
+  })
+  assert.equal(made.status, 201)
+  assert.equal(made.json.destinations[1].blank, true)
+})
+
+test('a destination can be available on request rather than automatic', async () => {
+  const { m } = await publishFixture()
+  // "Lower thirds always have a full screen version we can take if we need to."
+  const made = await req('POST', '/api/items', {
+    template_id: m.template_id,
+    data: { name: 'Pastor Dan', title: 'Lead Pastor' },
+    destinations: [
+      { output: 'sdi-key', layer: 'Lower Third', template_rev: m.template_rev },
+      { output: 'sdi-key', layer: 'Fullscreen', template_rev: m.template_rev, mode: 'on_request' },
+    ],
+  })
+  assert.equal(made.status, 201)
+  assert.deepEqual(
+    made.json.destinations.map((d) => d.mode),
+    ['auto', 'on_request'],
+  )
+})
+
+test('every destination template must accept the data, and the failure names which', async () => {
+  const { m } = await publishFixture()
+  const bad = await req('POST', '/api/items', {
+    template_id: m.template_id,
+    data: { name: 'Pastor Dan', title: 'Lead Pastor' },
+    destinations: [
+      { output: 'sdi-key', layer: 'Lower Third', template_rev: m.template_rev },
+      { output: 'wall-ndi', layer: 'Fullscreen', template_rev: 'blake3:' + '0'.repeat(64) },
+    ],
+  })
+  assert.equal(bad.status, 422)
+  assert.match(bad.json.label, /wall-ndi/, 'the failing destination is named, not just the failure')
+})
+
+test('a patch that only changes data does not drop the other destinations', async () => {
+  const { m } = await publishFixture()
+  const made = await req('POST', '/api/items', {
+    template_id: m.template_id,
+    data: { name: 'Pastor Dan', title: 'Lead Pastor' },
+    destinations: [
+      { output: 'sdi-key', layer: 'Lower Third', template_rev: m.template_rev },
+      { output: 'wall-ndi', layer: 'Fullscreen', template_rev: m.template_rev },
+    ],
+  })
+  // Editing the words is the whole point of shared data: fix a typo once and
+  // both feeds follow. Losing the wall while doing it would be the bug that
+  // makes people go back to two Items.
+  const patched = await req('PATCH', `/api/items/${made.json.id}`, {
+    data: { name: 'Pastor Daniel Whitfield', title: 'Lead Pastor' },
+  })
+  assert.equal(patched.status, 200)
+  assert.equal(patched.json.destinations.length, 2)
+  assert.equal(patched.json.data.name, 'Pastor Daniel Whitfield')
+})

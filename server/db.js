@@ -285,6 +285,57 @@ const MIGRATIONS = [
   (d) => {
     d.exec(`ALTER TABLE assets ADD COLUMN media TEXT`)
   },
+
+  // 8 — an Item has several destinations (ADR 0018).
+  //
+  // The template moves out of the Item's identity and into its ROUTING. Same
+  // data — the name, the title, the two lines of the verse — rendered by a
+  // different template to each place it goes: a narrow strip over the key feed,
+  // full-bleed type on the LED wall.
+  //
+  // `items.template_rev` and `items.destination` are left in place rather than
+  // dropped. They are the one-destination answer, every existing row already
+  // has them, and SQLite would rewrite the table to remove them. They stay as
+  // the migration's source of truth and are no longer read once a row has been
+  // expanded below.
+  (d) => {
+    d.exec(`
+      CREATE TABLE item_destinations (
+        item_id      TEXT NOT NULL REFERENCES items(id) ON DELETE CASCADE,
+        -- Stable order, so "the first destination" means something to an
+        -- operator reading a row and to an API returning one.
+        ordinal      INTEGER NOT NULL,
+        -- Which node, or NULL for "whichever node has this output". Null is the
+        -- common case with one node and the honest answer before Configure can
+        -- name them.
+        node_id      TEXT,
+        output       TEXT NOT NULL,
+        layer        TEXT NOT NULL,
+        -- PINNED per destination, for the same reason it was pinned per Item.
+        template_rev TEXT NOT NULL REFERENCES template_revisions(template_rev),
+        -- 'auto'       fires with the take
+        -- 'on_request' available, but only when asked for — the full-screen
+        --              version of a lower third that is taken "if we need it"
+        mode         TEXT NOT NULL DEFAULT 'auto',
+        -- This destination renders NOTHING for this Item, deliberately.
+        -- An instruction, not an absence: full-screen graphics blank the LED
+        -- wall and leave the background running, and clearing that feed is part
+        -- of what taking this graphic means.
+        blank        INTEGER NOT NULL DEFAULT 0,
+        PRIMARY KEY (item_id, ordinal)
+      );
+      CREATE INDEX item_destinations_by_item ON item_destinations(item_id);
+
+      -- Every existing Item becomes a list of one. Nothing changes for them.
+      INSERT INTO item_destinations (item_id, ordinal, node_id, output, layer,
+                                     template_rev, mode, blank)
+        SELECT id, 0, NULL,
+               COALESCE(json_extract(destination, '$.output'), 'out-0'),
+               COALESCE(json_extract(destination, '$.layer'),  'Lower Third'),
+               template_rev, 'auto', 0
+          FROM items;
+    `)
+  },
 ]
 
 /**
