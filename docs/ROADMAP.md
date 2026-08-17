@@ -144,9 +144,18 @@ Where it stops being a graphics toy and starts being broadcast equipment.
 
 ---
 
-## M3g — The responsive tween
+## M3g — The responsive tween ✅
 
-**Added 2026-08-16, and it jumps the queue.** The Canyon Hills rundown
+**Done 2026-08-17, verified on SDI.** The rebind solves in 0.2–0.7 ms, no frame
+goes over budget with a morph running, and the box grows and shrinks to fit —
+watched on a DeckLink at 1080p59.94. Implementing it also implemented `clip`,
+which the scene format had declared and the renderer had ignored since M1d.
+
+Two bugs reached the card that the frame harness structurally could not find —
+a renderer cache keyed on a name rather than on the instance, and an outgoing
+pass clipped by the rect it started at. Both are in INTEGRATION-NOTES.
+
+**Added 2026-08-16, and it jumped the queue.** The Canyon Hills rundown
 (`docs/reference/`) marks exactly one thing in sixty minutes as impossible on the
 current system: a lower third whose box **grows and shrinks to fit new text while
 it is on air**, cross-fading between two states. That is what this project's

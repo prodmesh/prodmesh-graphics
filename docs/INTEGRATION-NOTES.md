@@ -1571,3 +1571,55 @@ behaviour working exactly as described. Held frames are cumulative from the
 player's creation, so the check now takes the first sample as a baseline and
 asks whether the decoder fell behind **again**. A test that fails every run for
 the one thing behaving as designed teaches people to ignore it.
+
+## M3g on SDI: the box grows to fit, and two bugs only a person could find
+*2026-08-17 · DeckLink Quad 2 sub-device 1 · 1080p59.94 · M3g*
+
+A lower third rebinding live, six sections of a verse, each morphing over
+600 ms — watched on the card. **Confirmed working.** The one thing
+`canyon-hills-service-rundown.md` marks as impossible on the current tooling now
+happens on real SDI.
+
+Measured, before it ever reached a card: the rebind solves in **0.2–0.7 ms** —
+the same as an arm, paid once — and 193 frames with a morph running had **zero
+over a 16.68 ms budget**. Frame by frame the band travels 306 → 654 px over 32
+frames, monotonic, slow at the ends and fast through the middle.
+
+**Two bugs got through all of that and were caught by eye in seconds.**
+
+**1. Corrupt text, perfect box.** The renderer cache was keyed on
+`item_id|template_rev`. A live rebind changes neither — same Item, same template
+— but it produces a **new glyph atlas**, so the stale renderer drew the new
+instance with the old text's atlas. Boxes were unaffected because boxes do not
+touch the atlas, which is why the symptom was so specific.
+
+The key had been correct for two milestones. It stopped being correct the moment
+an instance could change **without its name changing**, which is precisely what
+M3g introduced. It is now keyed on the *identity* of the instance: the cache
+holds the `Arc` and compares with `ptr_eq`, so a freed instance cannot have its
+allocation reused and silently match. The `key` parameter is gone — the API let
+a caller describe an instance inaccurately, and that was the shape of the bug.
+
+**2. Outgoing text hanging outside a shrinking box.** The outgoing pass was
+clipped by the rect it *started* at rather than the one it is passing through.
+The code even said so: *"it does not morph: there is nothing to morph it to"* —
+true of the glyphs, which are placed in absolute design space and correctly do
+not move, and false of the **box that clips them**. Both passes now agree on the
+geometry at every point, which is what makes it one box rather than two.
+
+**Why the harness could not have found either**, which is the part worth
+keeping. The frame captures drive `pmgctl take`, which builds its two renderers
+explicitly and never touches the cache — so bug 1 was outside the code it
+exercised. And every capture happened to be a box *growing*, so bug 2 was
+outside the cases it covered. **It validated the maths and the pixels while
+bypassing the code that was wrong, twice.**
+
+This is the same failure recorded three times already in this file under
+different names: a harness that shares assumptions with the code it tests will
+agree with it. The difference here is that the assumptions were structural — not
+a wrong regex or a missing metric, but a test path that ran different code. The
+only thing that found it was a person looking at the output.
+
+Tests now cover both directions, and the growing case is pinned specifically so
+a later fix for shrinking cannot quietly break it. `tools/demo-tween.sh` runs
+the sequence on demand, with `--minutes N` to loop it.

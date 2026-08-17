@@ -5,7 +5,7 @@ change that makes something real — not afterwards.
 
 `docs/ROADMAP.md` is where we are going. This is where we are.
 
-**Last updated: 2026-08-16 · M0 and M1 complete · **M2 complete**: layers, playlists and a rundown, adoption, auth, SDI output, preview — and S8 gating it.**
+**Last updated: 2026-08-17 · M0 and M1 complete · **M2 complete**: layers, playlists and a rundown, adoption, auth, SDI output, preview — and S8 gating it.**
 
 ---
 
@@ -110,6 +110,7 @@ other than what they were.
 | `pmg-media` | 🟢 **stills and video.** PNG/JPEG in process; clips via a child ffmpeg over a pipe, premultiplied at the boundary, VFR refused. Exact-rational A/V clock. 9 tests |
 | Images on air | 🟢 `kind: "image"` with `fit: cover \| contain \| stretch`, decoded once at assignment, soft alpha composites correctly over a key |
 | M3 two-hour soak | 🟢 **passed.** 894 cues all applied, **zero late frames over 432,000**, audio drift +2.3 ms with the whole excursion inside one frame, zero warnings. Recovery from a stall proved separately by injecting one |
+| Live rebind (M3g) | 🟢 **the differentiator, working on SDI.** `Update` morphs between two solved layouts — the box grows and shrinks to fit new text while on air. Rebind solves in 0.2–0.7 ms, zero frames over budget, verified on the card by eye. `clip` is now implemented, which it had not been since M1d |
 | Video on air | 🟢 `kind: "video"` with `fit` and `loop`. **21 s of keyed 1080p ProRes 4444 at 59.94: 0 held, 0 frames over budget**, worst 15.17 ms of 16.68. The upload costs ~2.7 ms of headroom. A clip starts up to 120 ms after the take, holding its first frame — pre-arm is the fix and needs the preview slot |
 | Video audio | 🟢 **frame-synced and self-correcting.** A 2 h soak found a hiccup left audio +168 ms ahead permanently; the card's buffer level now drives the sample count. Verified by INJECTING a 1 s stall: settles to **−0.6 ms of target**, where it used to stay 164.8 ms out. Otherwise: Exact 801/801/801/801/800 cadence at 59.94; two hours drifts zero samples. **SDI verified on a Quad 2** — flat card buffer over 2 min, and a deliberately naive cadence drains it, so the instrument is proven. **NDI verified by send-and-probe** — 801 samples, level unchanged at −12.0 dBFS |
 | `pmg-audio` | 🟢 the audio clock and layer→pair mixing. Sums and clips rather than averaging. 10 tests, two-hour non-drift in `--selftest` |
