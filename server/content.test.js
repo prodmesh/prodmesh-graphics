@@ -390,3 +390,56 @@ test('a patch that only changes data does not drop the other destinations', asyn
   assert.equal(patched.json.destinations.length, 2)
   assert.equal(patched.json.data.name, 'Pastor Daniel Whitfield')
 })
+
+test('an assignment carries only the destinations this node can serve', async () => {
+  const { m } = await publishFixture()
+  const asg = await import('./assignment.js')
+
+  await req('POST', '/api/items', {
+    id: 'both-feeds',
+    template_id: m.template_id,
+    data: { name: 'Pastor Dan', title: 'Lead Pastor' },
+    destinations: [
+      { output: 'out-0', layer: 'Lower Third', template_rev: m.template_rev },
+      { output: 'wall', layer: 'Fullscreen', template_rev: m.template_rev },
+    ],
+  })
+  await req('POST', '/api/items', {
+    id: 'wall-only',
+    template_id: m.template_id,
+    data: { name: 'Wall', title: 'Only' },
+    destinations: [{ output: 'wall', layer: 'Fullscreen', template_rev: m.template_rev }],
+  })
+
+  // A node with only out-0 sees one destination of the first Item, and does
+  // not see the second Item at all — it could never take it.
+  const built = asg.build({ nodeId: 'booth-1', outputId: 'out-0' })
+  const ids = built.items.map((i) => i.id)
+  assert.ok(ids.includes('both-feeds'))
+  assert.ok(!ids.includes('wall-only'), 'a row it can never take is not sent')
+
+  const item = built.items.find((i) => i.id === 'both-feeds')
+  assert.equal(item.destinations.length, 1, 'only the destination it can serve')
+  assert.equal(item.destinations[0].output, 'out-0')
+})
+
+test('a blank destination stages no template', async () => {
+  const { m } = await publishFixture()
+  const asg = await import('./assignment.js')
+  await req('POST', '/api/items', {
+    id: 'blanks-the-wall',
+    template_id: m.template_id,
+    data: { name: 'Full screen', title: 'Graphic' },
+    // The wall is cleared deliberately. There is nothing to render there, so
+    // there is nothing for the node to fetch for it.
+    destinations: [{ output: 'out-0', layer: 'Lower Third', blank: true }],
+  })
+  const built = asg.build({ nodeId: 'booth-1', outputId: 'out-0' })
+  const item = built.items.find((i) => i.id === 'blanks-the-wall')
+  assert.equal(item.destinations[0].blank, true)
+  assert.ok(
+    !built.templates.some((t) => t.template_rev === m.template_rev) ||
+      built.items.some((i) => i.destinations.some((d) => !d.blank)),
+    'a blank destination alone pulls no template into the assignment',
+  )
+})

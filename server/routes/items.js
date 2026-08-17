@@ -74,7 +74,7 @@ function destinationsOf(db, itemId) {
 function normaliseDestinations(body, fallbackRev) {
   const list = Array.isArray(body.destinations)
     ? body.destinations
-    : [{ ...(body.destination ?? {}), template_rev: body.template_rev }]
+    : [{ ...body.destination, template_rev: body.template_rev }]
 
   return list.map((d, i) => ({
     ordinal: i,

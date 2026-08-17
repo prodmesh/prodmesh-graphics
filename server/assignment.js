@@ -102,7 +102,35 @@ export function build({ nodeId = null, outputId = 'out-0', mode = '1920x1080', l
     )
     .all()
 
-  const revs = [...new Set(items.map((i) => i.template_rev))]
+  // Destinations, and only the ones THIS node can serve (ADR 0018).
+  //
+  // A destination naming another node is not this node's business: sending it
+  // anyway would have a node stage assets for a feed it does not drive, and
+  // report readiness for a graphic it can never put on air. A destination
+  // naming no node belongs to whoever has that output, which with one node is
+  // every destination and is the honest answer before Configure can name them.
+  const outputIds = new Set(outputs.map((o) => o.id))
+  const allDests = db
+    .prepare(
+      `SELECT item_id, ordinal, node_id, output, layer, template_rev, mode, blank
+         FROM item_destinations ORDER BY item_id, ordinal`,
+    )
+    .all()
+  const mine = new Map()
+  for (const d of allDests) {
+    if (d.node_id && nodeId && d.node_id !== nodeId) continue
+    if (!outputIds.has(d.output)) continue
+    if (!mine.has(d.item_id)) mine.set(d.item_id, [])
+    mine.get(d.item_id).push(d)
+  }
+
+  // Every template any of MY destinations pins — not every template on the
+  // server. A node stages what it can be asked to render and nothing else.
+  const revs = [
+    ...new Set(
+      [...mine.values()].flat().filter((d) => !d.blank).map((d) => d.template_rev),
+    ),
+  ].toSorted()
   const templates = revs.length
     ? db
         .prepare(
@@ -128,20 +156,34 @@ export function build({ nodeId = null, outputId = 'out-0', mode = '1920x1080', l
       name: t.name,
       min_reader: t.min_reader,
     })),
-    items: items.map((i) => {
-      const dest = JSON.parse(i.destination)
-      // An item names its destination; falling back to the first output and
-      // its bottom layer keeps a half-configured rundown usable.
-      const out = outputs.find((o) => o.id === dest.output) ?? outputs[0]
-      return {
-        id: i.id,
-        label: i.label,
-        template_rev: i.template_rev,
-        data: toWireData(JSON.parse(i.data)),
-        output: out?.id ?? outputId,
-        layer: dest.layer ?? out?.layers[0] ?? null,
-      }
-    }),
+    // An Item with no destination on this node is omitted entirely rather than
+    // sent with an empty list: a node's assignment is what it can play, and a
+    // row it can never take is noise in Show and a staging cost for nothing.
+    items: items
+      .filter((i) => (mine.get(i.id) ?? []).length > 0)
+      .map((i) => {
+        const dests = mine.get(i.id)
+        const first = dests[0]
+        const out = outputs.find((o) => o.id === first.output) ?? outputs[0]
+        return {
+          id: i.id,
+          label: i.label,
+          data: toWireData(JSON.parse(i.data)),
+          destinations: dests.map((d) => ({
+            output: d.output,
+            layer: d.layer,
+            template_rev: d.template_rev,
+            mode: d.mode,
+            blank: !!d.blank,
+          })),
+          // The one-destination shape, kept beside the list so a node that has
+          // not learned about destinations yet still works. Removed once
+          // nothing reads it.
+          template_rev: first.template_rev,
+          output: out?.id ?? outputId,
+          layer: first.layer ?? out?.layers[0] ?? null,
+        }
+      }),
     assets,
   }
 
