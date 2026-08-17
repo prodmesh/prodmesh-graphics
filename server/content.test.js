@@ -414,9 +414,9 @@ test('an assignment carries only the destinations this node can serve', async ()
   // A node with only out-0 sees one destination of the first Item, and does
   // not see the second Item at all — it could never take it.
   const built = asg.build({ nodeId: 'booth-1', outputId: 'out-0' })
-  const ids = built.items.map((i) => i.id)
-  assert.ok(ids.includes('both-feeds'))
-  assert.ok(!ids.includes('wall-only'), 'a row it can never take is not sent')
+  const assigned = built.items.map((i) => i.id)
+  assert.ok(assigned.includes('both-feeds'))
+  assert.ok(!assigned.includes('wall-only'), 'a row it can never take is not sent')
 
   const item = built.items.find((i) => i.id === 'both-feeds')
   assert.equal(item.destinations.length, 1, 'only the destination it can serve')
