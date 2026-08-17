@@ -19,7 +19,7 @@
 //!   dark background — which is exactly why the pattern uses both.
 
 use anyhow::{Context, Result};
-use pmg_render::scene::{GlyphSource, RunGlyph, SceneInstance};
+use pmg_render::scene::SceneInstance;
 use pmg_render::SceneRenderer;
 use pmg_scene::doc::*;
 use pmg_text::{FontDb, TextEngine};
@@ -36,38 +36,12 @@ Measures the three hazards in risk R3:
   F  ticker cost  glyph-cache behaviour at full-screen-ticker scale
 ";
 
-struct Glyphs<'a> {
-    eng: &'a mut TextEngine,
-}
+// The glyph bridge is `pmg_render::text_source::TextEngineGlyphs` — this spike
+// had its own copy, which is the fourth one that module exists to prevent. A
+// copy here is worse than elsewhere: S2 measures sub-pixel motion, so a spike
+// that quantises differently from the renderer would be measuring itself.
+type Glyphs<'a> = pmg_render::text_source::TextEngineGlyphs<'a>;
 
-impl GlyphSource for Glyphs<'_> {
-    fn run(&mut self, text: &str, font: &FontSpec) -> Option<(Vec<RunGlyph>, f32)> {
-        let face = self.eng.db.select(&font.family, font.weight)?;
-        let shaped = self
-            .eng
-            .shape(face, text, font.size, &font.features, font.tracking)?;
-        let ascent = shaped.metrics.ascent;
-        let mut out = Vec::new();
-        for g in &shaped.glyphs {
-            let (whole, phase) = pmg_text::quantize(g.x);
-            let Some(b) = self.eng.glyph(face, g.id, font.size, phase) else {
-                continue;
-            };
-            if b.is_empty() {
-                continue;
-            }
-            out.push(RunGlyph {
-                x: whole as f32,
-                left: b.left,
-                top: b.top,
-                width: b.width,
-                height: b.height,
-                coverage: b.coverage.clone(),
-            });
-        }
-        Some((out, ascent))
-    }
-}
 
 /// A minimal document: one text node, optionally over a background box.
 fn text_doc(text_size: f32, canvas: (u32, u32), bg: Option<[f32; 4]>) -> SceneDoc {
@@ -388,7 +362,7 @@ fn shudder(gpu: &Gpu, font: &[u8]) -> Result<()> {
     let solved = pmg_layout::solve(&doc, &data, &measurer)?;
     let mut eng = measurer.into_engine();
     let inst = {
-        let mut g = Glyphs { eng: &mut eng };
+        let mut g = Glyphs::new(&mut eng);
         SceneInstance::build(&doc, &solved, &mut g)
     };
     let renderer = SceneRenderer::new(&gpu.device, &gpu.queue, &inst);
@@ -406,7 +380,7 @@ fn shudder(gpu: &Gpu, font: &[u8]) -> Result<()> {
     let bsolved = pmg_layout::solve(&bdoc, &bdata, &bm)?;
     let mut beng = bm.into_engine();
     let binst = {
-        let mut g = Glyphs { eng: &mut beng };
+        let mut g = Glyphs::new(&mut beng);
         SceneInstance::build(&bdoc, &bsolved, &mut g)
     };
     let brend = SceneRenderer::new(&gpu.device, &gpu.queue, &binst);
@@ -517,7 +491,7 @@ fn fringing(gpu: &Gpu, font: &[u8]) -> Result<()> {
         let solved = pmg_layout::solve(&doc_t, &data, &m)?;
         let mut eng = m.into_engine();
         let inst_t = {
-            let mut g = Glyphs { eng: &mut eng };
+            let mut g = Glyphs::new(&mut eng);
             SceneInstance::build(&doc_t, &solved, &mut g)
         };
         let r_t = SceneRenderer::new(&gpu.device, &gpu.queue, &inst_t);
@@ -531,7 +505,7 @@ fn fringing(gpu: &Gpu, font: &[u8]) -> Result<()> {
         let solved2 = pmg_layout::solve(&doc_b, &data, &m2)?;
         let mut eng2 = m2.into_engine();
         let inst_b = {
-            let mut g = Glyphs { eng: &mut eng2 };
+            let mut g = Glyphs::new(&mut eng2);
             SceneInstance::build(&doc_b, &solved2, &mut g)
         };
         let r_b = SceneRenderer::new(&gpu.device, &gpu.queue, &inst_b);

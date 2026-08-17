@@ -221,6 +221,7 @@ fn a_different_measurer_changes_the_layout() {
             text: &str,
             font: &pmg_scene::doc::FontSpec,
             _max: Option<f32>,
+            _max_lines: usize,
         ) -> (f32, f32) {
             (text.chars().count() as f32 * font.size * 2.0, font.size)
         }

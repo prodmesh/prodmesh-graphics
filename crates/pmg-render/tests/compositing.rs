@@ -16,7 +16,14 @@ const H: u32 = 256;
 /// No text in these scenes; boxes are enough to see who covered whom.
 struct NoGlyphs;
 impl GlyphSource for NoGlyphs {
-    fn run(&mut self, _text: &str, _font: &FontSpec) -> Option<(Vec<RunGlyph>, f32)> {
+    fn run(
+        &mut self,
+        _text: &str,
+        _font: &FontSpec,
+        _max_width: Option<f32>,
+        _max_lines: usize,
+        _align: pmg_scene::doc::Align,
+    ) -> Option<(Vec<RunGlyph>, f32)> {
         None
     }
 }

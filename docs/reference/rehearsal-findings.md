@@ -37,9 +37,9 @@ build and a series of takes.
 
 ---
 
-## Found: text does not wrap, and never has
+## Found: text did not wrap, and never had — FIXED
 
-**The finding of the rehearsal, and it is not small.** `pmg-text`'s `measure()`
+**The finding of the rehearsal, and it was not small.** `pmg-text`'s `measure()`
 returns a single line height in both of its branches, and the renderer calls
 `shape()` once for the whole string. There is no code path anywhere that
 produces a second line. `max_lines` is declared in the scene format, carried
@@ -65,16 +65,32 @@ are the single most common thing on screen across a Sunday, and a lyric slide
 is two lines by definition. **Line breaking is not authoring maturity, it is
 the first content type.** M5 is the wrong milestone for it.
 
-Two distinct pieces of work hide behind one heading, and the cheaper one buys
-most of the value:
+Both halves are now built:
 
-1. **Honour explicit breaks.** A lyric slide's line breaks are *chosen* — "WE
-   ARE HERE TO WITNESS / TO SHARE AND TESTIFY" is a decision about phrasing,
-   not an artefact of the box width. Splitting on `\n` and stacking the runs
-   needs no line-breaking algorithm at all.
-2. **Wrap to a width.** The scripture body block genuinely needs it, and it is
-   what makes the box grow and shrink against the words — the 29:30 tween.
-   This is the parley-shaped job.
+1. **Hard breaks are honoured.** A `\n` in the data is a break the author
+   chose — "WE ARE HERE TO WITNESS / TO SHARE AND TESTIFY" is a decision about
+   phrasing — and it breaks with no width constraint at all.
+2. **Greedy wrapping to the solved box width.** Lines are cut out of ONE shaped
+   run at cluster boundaries rather than shaped word by word, so kerning inside
+   a word is identical whether or not a later word wrapped, and a line that fits
+   does not shift when a later line does.
+
+`measure()` and the renderer now call **the same** `shape_lines()`, which is
+what stops a box being sized for a different number of lines than it draws.
+
+**Whitespace only — this is not UAX #14.** No hyphenation, no CJK, no
+break-after-slash. The Unicode algorithm still wants parley. For English lyrics
+and scripture, a space is where a line breaks.
+
+Verified: the lyric slide now solves 146 px tall (two lines) and centres at
+x = 619 of 1920, matching the reference frame; the scripture body grows 2 → 4
+lines with the length of the verse and stops at its declared cap.
+
+**The line breaking happens in the pure set**, on the CPU, so native and the
+browser cannot disagree about where a line breaks — only about how the glyphs
+rasterize, which is what S1 already measures. Note also that the S1 corpus is
+explicitly *"the glyph-atlas path, minus the text stack"*, so its three goldens
+are bit-identical before and after this change and could not have caught it.
 
 ### Correction
 

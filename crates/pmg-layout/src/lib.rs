@@ -54,7 +54,16 @@ impl Rect {
 pub trait TextMeasure {
     /// Measure a run, optionally constrained to `max_width`. Returns
     /// `(width, height)` in design-space pixels.
-    fn measure(&self, text: &str, font: &FontSpec, max_width: Option<f32>) -> (f32, f32);
+    /// `max_lines` caps the wrap. It is part of the measurement rather than a
+    /// clip applied afterwards: a block capped at two lines must be laid out
+    /// two lines tall, or the box is sized for text it will never show.
+    fn measure(
+        &self,
+        text: &str,
+        font: &FontSpec,
+        max_width: Option<f32>,
+        max_lines: usize,
+    ) -> (f32, f32);
 }
 
 /// The result of laying out a document against one Item's data.
@@ -116,7 +125,7 @@ pub fn solve(
 /// What a taffy leaf needs to measure itself.
 struct Ctx {
     id: String,
-    text: Option<(String, FontSpec)>,
+    text: Option<(String, FontSpec, usize)>,
 }
 
 /// Measure a text leaf.
@@ -132,7 +141,7 @@ fn measure_leaf(
     let Some(ctx) = ctx else {
         return tf::Size::ZERO;
     };
-    let Some((text, font)) = &ctx.text else {
+    let Some((text, font, max_lines)) = &ctx.text else {
         return tf::Size::ZERO;
     };
     if let (Some(w), Some(h)) = (known.width, known.height) {
@@ -146,7 +155,7 @@ fn measure_leaf(
         // MinContent/MaxContent: measure unconstrained and let flexbox decide.
         _ => None,
     });
-    let (w, h) = measure.measure(text, font, max_width);
+    let (w, h) = measure.measure(text, font, max_width, *max_lines);
     tf::Size {
         width: known.width.unwrap_or(w),
         height: known.height.unwrap_or(h),
@@ -173,10 +182,18 @@ fn build(
     // Resolve text once, here, and carry it in Solved so the renderer never
     // re-evaluates a binding.
     let text = match &node.content {
-        Some(Content::Text { binding, font, .. }) => {
+        Some(Content::Text {
+            binding,
+            font,
+            max_lines,
+            ..
+        }) => {
             let resolved = bind::eval(&binding.expr, &binding.transform, data);
             out.text.insert(node.id.clone(), resolved.clone());
-            Some((resolved, font.clone()))
+            // Absent means unbounded — the box decides. Defaulting it to 1
+            // would silently reimpose the single-line behaviour this replaces.
+            let cap = max_lines.map_or(usize::MAX, |n| n.max(1) as usize);
+            Some((resolved, font.clone(), cap))
         }
         _ => None,
     };
@@ -344,18 +361,38 @@ impl Default for StubMeasure {
 }
 
 impl TextMeasure for StubMeasure {
-    fn measure(&self, text: &str, font: &FontSpec, max_width: Option<f32>) -> (f32, f32) {
+    fn measure(
+        &self,
+        text: &str,
+        font: &FontSpec,
+        max_width: Option<f32>,
+        max_lines: usize,
+    ) -> (f32, f32) {
         let advance = font.size * self.advance_ratio;
-        let natural = text.chars().count() as f32 * advance;
         let line_h = font.size * font.line_height;
-        match max_width {
-            Some(mw) if mw > 0.0 && natural > mw => {
-                let per_line = (mw / advance).floor().max(1.0);
-                let lines = (text.chars().count() as f32 / per_line).ceil();
-                (mw, lines * line_h)
+
+        // Hard breaks first, then wrap each segment — the same order the real
+        // measurer uses. A stub that models a different rule than the engine it
+        // stands in for makes the solver's tests prove the wrong thing.
+        let mut lines = 0usize;
+        let mut widest = 0.0f32;
+        for segment in text.split('\n') {
+            let chars = segment.chars().count() as f32;
+            let natural = chars * advance;
+            match max_width {
+                Some(mw) if mw > 0.0 && natural > mw => {
+                    let per_line = (mw / advance).floor().max(1.0);
+                    lines += (chars / per_line).ceil() as usize;
+                    widest = widest.max(mw);
+                }
+                _ => {
+                    lines += 1;
+                    widest = widest.max(natural);
+                }
             }
-            _ => (natural, line_h),
         }
+        let lines = lines.clamp(1, max_lines.max(1));
+        (widest, lines as f32 * line_h)
     }
 }
 

@@ -222,8 +222,21 @@ pub fn fit_uv(
 
 pub trait GlyphSource {
     /// Shape and rasterize a run, returning glyphs placed relative to the run
-    /// origin (baseline-left), plus the ascent used to position that baseline.
-    fn run(&mut self, text: &str, font: &pmg_scene::doc::FontSpec) -> Option<(Vec<RunGlyph>, f32)>;
+    /// origin (baseline-left of the FIRST line), plus the ascent used to
+    /// position that baseline.
+    ///
+    /// `max_width` is the box the solver already decided on, so the wrap the
+    /// renderer draws is the wrap the solver measured. Passing anything else
+    /// here — the natural width, or nothing — is how a box ends up sized for a
+    /// different number of lines than it shows.
+    fn run(
+        &mut self,
+        text: &str,
+        font: &pmg_scene::doc::FontSpec,
+        max_width: Option<f32>,
+        max_lines: usize,
+        align: pmg_scene::doc::Align,
+    ) -> Option<(Vec<RunGlyph>, f32)>;
 }
 
 /// A glyph from [`GlyphSource`], before atlas packing.
@@ -231,6 +244,13 @@ pub trait GlyphSource {
 pub struct RunGlyph {
     /// Offset from the run origin, in pixels. Fractional — that is the point.
     pub x: f32,
+    /// Which line this glyph is on, as a baseline offset in pixels.
+    ///
+    /// Whole pixels, unlike `x`. Text slides horizontally and never vertically,
+    /// so the sub-pixel treatment that stops sliding text shuddering (R3) buys
+    /// nothing on this axis and a fractional baseline would just soften every
+    /// line differently.
+    pub y: f32,
     /// Placement of the coverage bitmap relative to the pen, from rasterization.
     pub left: i32,
     pub top: i32,
@@ -310,7 +330,15 @@ fn flatten(
             // The solver already evaluated the binding; re-evaluating here would
             // invite the two answers to differ.
             let text = solved.text.get(&node.id).cloned().unwrap_or_default();
-            match glyphs.run(&text, font) {
+            // The solved box, so the renderer wraps exactly where the solver
+            // measured it would.
+            let (cap, align) = match &node.content {
+                Some(Content::Text {
+                    max_lines, align, ..
+                }) => (max_lines.map_or(usize::MAX, |n| n.max(1) as usize), *align),
+                _ => (usize::MAX, pmg_scene::doc::Align::Start),
+            };
+            match glyphs.run(&text, font, Some(rect.w), cap, align) {
                 Some((run, ascent)) if !run.is_empty() => {
                     pending.push((inst.nodes.len(), run, ascent));
                     RenderContent::Text(Vec::new()) // filled in by pack_atlas
@@ -470,7 +498,7 @@ fn pack_atlas(inst: &mut SceneInstance, pending: Vec<(usize, Vec<RunGlyph>, f32)
                     // bitmap relative to it, and the baseline sits `ascent`
                     // below the box top.
                     x: origin.x + g.x + g.left as f32,
-                    y: origin.y + ascent - g.top as f32,
+                    y: origin.y + ascent + g.y - g.top as f32,
                     w: g.width as f32,
                     h: g.height as f32,
                     u,

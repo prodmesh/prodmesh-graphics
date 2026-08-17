@@ -129,7 +129,7 @@ other than what they were.
 | Web app | 🟡 four-mode shell, routing, tokens, `useTopic` + `useQuery`. 6 tests. No functionality |
 | `pmg-scene` | 🟢 **full document model**, canonical CBOR + JSON mirror, `template_rev`, validation, manifest, total binding evaluation. 25 tests |
 | `pmg-layout` | 🟢 **flexbox solver** over `TextMeasure` (taffy, ADR 0016). Shrink-and-grow and `visible_if` removal verified as numbers. 12 tests |
-| `pmg-text` | 🟢 fonts **from bytes**, swash shaping, subpixel glyph atlas at ⅛ px, real `TextMeasure`. 18 tests. R3's three hazards structurally answered; quality still needs S2 |
+| `pmg-text` | 🟢 fonts **from bytes**, swash shaping, subpixel glyph atlas at ⅛ px, real `TextMeasure`, **and line breaking** — hard `\n` plus greedy wrapping to the solved box, lines cut out of one shaped run so kerning does not shift when a later word wraps. Whitespace only: not UAX #14, so no hyphenation or CJK — that still wants parley. 20 tests. R3's three hazards structurally answered; quality still needs S2 |
 | `pmg-render` | 🟢 **scene rendering** — boxes with analytic-AA rounded corners, text from the coverage atlas, composed transforms, timeline animation. Plus the S1 parity corpus |
 | `pmg-wasm` | 🟡 the parity harness — renders the corpus in-browser and posts raw RGBA back. 244 KB |
 | `pmg-out-ndi` / `pmg-out-decklink` | ⬜ not started — `pmgctl` drives `sys/` directly for now |

@@ -191,6 +191,13 @@ pub struct PositionedGlyph {
     pub x: f32,
     /// Vertical offset from the baseline, in pixels.
     pub y: f32,
+    /// Byte offset in the source string of the cluster this glyph came from.
+    ///
+    /// Carried so a shaped run can be **split into lines after shaping** rather
+    /// than shaped word by word. Shaping each word separately would lose the
+    /// kerning between the last letter of one word and the space after it, and
+    /// would measure differently from the same string drawn unwrapped.
+    pub cluster: u32,
 }
 
 /// A shaped run of text.
@@ -280,11 +287,13 @@ impl TextEngine {
         let mut glyphs = Vec::new();
         let mut pen = 0.0f32;
         shaper.shape_with(|cluster| {
+            let source = cluster.source.start;
             for g in cluster.glyphs {
                 glyphs.push(PositionedGlyph {
                     id: g.id,
                     x: pen + g.x,
                     y: g.y,
+                    cluster: source,
                 });
                 // Tracking is a fraction of em, applied per glyph advance.
                 pen += g.advance + tracking * size_px;
@@ -350,12 +359,206 @@ impl Measurer {
     }
 }
 
+/// Where a line may be broken: the byte offset of each word start after a run
+/// of whitespace, plus 0.
+///
+/// **Whitespace only — this is not UAX #14.** No hyphenation, no CJK, no
+/// break-after-slash. That is a real limitation and it is the honest shape of
+/// what a greedy space-breaker can promise; the Unicode algorithm arrives with
+/// parley. For English lyrics and scripture — every line in the reference
+/// service — a space is where a line breaks, and it is worth having that now
+/// rather than one-line graphics until M5.
+fn break_offsets(s: &str) -> Vec<u32> {
+    let mut out = vec![0u32];
+    let mut prev_space = false;
+    for (i, c) in s.char_indices() {
+        if prev_space && !c.is_whitespace() {
+            out.push(i as u32);
+        }
+        prev_space = c.is_whitespace();
+    }
+    out
+}
+
+/// How a run may be broken into lines.
+///
+/// One value rather than two loose arguments because they are always decided
+/// together — a width with no cap and a cap with no width are both meaningful,
+/// and threading them separately through four call sites invited them to drift
+/// apart.
+#[derive(Debug, Clone, Copy)]
+pub struct Wrap {
+    /// The box the solver already decided on. `None` measures unconstrained,
+    /// so only a hard `\n` breaks.
+    pub max_width: Option<f32>,
+    /// Lines to keep. Truncates; it does not ellipsize — the format has an
+    /// `ellipsize` binding transform and two mechanisms for one decision is
+    /// one too many.
+    pub max_lines: usize,
+}
+
+impl Default for Wrap {
+    fn default() -> Self {
+        // Unbounded, because a default that clipped would silently reimpose
+        // the single-line behaviour this replaced.
+        Self { max_width: None, max_lines: usize::MAX }
+    }
+}
+
+impl TextEngine {
+    /// Shape into lines, honouring hard breaks and wrapping to a width.
+    ///
+    /// Two different things, and the first is the one that matters most for a
+    /// lyric slide: **a `\n` in the data is a break the author chose.** "We are
+    /// here to witness / to share and testify" is a decision about phrasing,
+    /// and re-flowing it to the box width would be overriding the person who
+    /// wrote the slide.
+    ///
+    /// Wrapping is greedy and splits an ALREADY-SHAPED run at cluster
+    /// boundaries, rather than shaping word by word. That keeps kerning inside
+    /// each word identical to the unwrapped string, so a line that fits does
+    /// not shift when a later line wraps.
+    ///
+    /// `max_lines` truncates. It does not ellipsize: the format has an
+    /// `ellipsize` binding transform for that, and doing it here as well would
+    /// be two mechanisms for one decision.
+    pub fn shape_lines(
+        &mut self,
+        face: FaceId,
+        text: &str,
+        size_px: f32,
+        features: &[String],
+        tracking: f32,
+        wrap: Wrap,
+    ) -> Option<Vec<ShapedRun>> {
+        let Wrap { max_width, max_lines } = wrap;
+        let mut lines: Vec<ShapedRun> = Vec::new();
+        for segment in text.split('\n') {
+            if lines.len() >= max_lines.max(1) {
+                break;
+            }
+            let run = self.shape(face, segment, size_px, features, tracking)?;
+            let room = match max_width {
+                Some(w) if w > 0.0 => w,
+                // No constraint: the hard break is the only break.
+                _ => {
+                    lines.push(run);
+                    continue;
+                }
+            };
+            if run.width <= room || run.glyphs.is_empty() {
+                lines.push(run);
+                continue;
+            }
+            wrap_run(&run, segment, room, max_lines.max(1), &mut lines);
+        }
+        lines.truncate(max_lines.max(1));
+        Some(lines)
+    }
+}
+
+/// Split one shaped run into lines no wider than `room`.
+fn wrap_run(
+    run: &ShapedRun,
+    segment: &str,
+    room: f32,
+    max_lines: usize,
+    out: &mut Vec<ShapedRun>,
+) {
+    let breaks = break_offsets(segment);
+    let mut start_glyph = 0usize;
+    let mut line_origin = 0.0f32;
+
+    while start_glyph < run.glyphs.len() && out.len() < max_lines {
+        // The first glyph that would overflow this line.
+        let over = run.glyphs[start_glyph..]
+            .iter()
+            .position(|g| g.x - line_origin > room)
+            .map(|i| start_glyph + i);
+
+        let Some(over) = over else {
+            out.push(slice_run(run, segment, start_glyph, run.glyphs.len(), line_origin));
+            return;
+        };
+
+        // Break at the last opportunity at or before the overflowing cluster.
+        // Strictly after this line's own start, or a word longer than the box
+        // would break at its own start and loop forever.
+        let cut = breaks
+            .iter()
+            .copied()
+            .filter(|b| *b > run.glyphs[start_glyph].cluster && *b <= run.glyphs[over].cluster)
+            .next_back();
+
+        let at = |b: u32| run.glyphs.iter().position(|g| g.cluster >= b);
+        let end_glyph = match cut {
+            Some(b) => at(b).unwrap_or(run.glyphs.len()),
+            // No break opportunity inside the overflowing span: this is one
+            // word wider than the box. Extend to the END of that word rather
+            // than cutting at the overflowing glyph — cutting there chops a
+            // long word into one line per glyph, which is what this did first.
+            // Overflowing on one line is clipped and visible; a designer can
+            // see a word is too long and cannot see one silently shredded.
+            None => breaks
+                .iter()
+                .copied()
+                .find(|b| *b > run.glyphs[over].cluster)
+                .and_then(at)
+                .unwrap_or(run.glyphs.len()),
+        };
+        let end_glyph = end_glyph.max(start_glyph + 1).min(run.glyphs.len());
+
+        out.push(slice_run(run, segment, start_glyph, end_glyph, line_origin));
+        if end_glyph >= run.glyphs.len() {
+            return;
+        }
+        line_origin = run.glyphs[end_glyph].x;
+        start_glyph = end_glyph;
+    }
+}
+
+/// One line's glyphs, re-origined to x = 0.
+fn slice_run(run: &ShapedRun, segment: &str, from: usize, to: usize, origin: f32) -> ShapedRun {
+    let glyphs: Vec<PositionedGlyph> = run.glyphs[from..to]
+        .iter()
+        .map(|g| PositionedGlyph { x: g.x - origin, ..*g })
+        .collect();
+
+    // Width to the end of the last VISIBLE glyph. A line broken at a space
+    // carries that space, and counting its advance would widen the line by a
+    // space — which pushes a centred lyric off centre by half a space, on every
+    // line, differently. Trailing whitespace is measured as nothing.
+    let last_ink = run.glyphs[from..to].iter().rposition(|g| {
+        segment[g.cluster as usize..]
+            .chars()
+            .next()
+            .is_none_or(|c| !c.is_whitespace())
+    });
+    let width = match last_ink {
+        None => 0.0,
+        Some(i) => {
+            let after = from + i + 1;
+            if after < run.glyphs.len() {
+                run.glyphs[after].x - origin
+            } else {
+                run.width - origin
+            }
+        }
+    };
+    ShapedRun {
+        glyphs,
+        width: width.max(0.0),
+        metrics: run.metrics,
+    }
+}
+
 impl pmg_layout::TextMeasure for Measurer {
     fn measure(
         &self,
         text: &str,
         font: &pmg_scene::doc::FontSpec,
         max_width: Option<f32>,
+        max_lines: usize,
     ) -> (f32, f32) {
         let mut eng = self.0.borrow_mut();
         let Some(face) = eng.db.select(&font.family, font.weight) else {
@@ -364,20 +567,27 @@ impl pmg_layout::TextMeasure for Measurer {
             // concern rather than a render-thread failure.
             return (0.0, 0.0);
         };
-        let Some(run) = eng.shape(face, text, font.size, &font.features, font.tracking) else {
+        // Measured the same way it is drawn — the SAME call the renderer makes.
+        // Measuring one way and drawing another is how a box ends up the wrong
+        // size for the words in it, and it is the bug this replaced: measure
+        // reported one line while the format declared four, so a lyric slide
+        // and a scripture block were laid out for text that would not fit.
+        let Some(lines) = eng.shape_lines(
+            face,
+            text,
+            font.size,
+            &font.features,
+            font.tracking,
+            Wrap { max_width, max_lines },
+        ) else {
             return (0.0, 0.0);
         };
-        let line_h = run.metrics.natural_line_height() * font.line_height;
-        match max_width {
-            Some(mw) if mw > 0.0 && run.width > mw => {
-                // M1c does not wrap: a single line, clipped by the box. Real
-                // line breaking arrives with parley in M5, and until then a
-                // template that overflows is a design-time problem the editor
-                // can show rather than a silent runtime reflow.
-                (mw, line_h)
-            }
-            _ => (run.width, line_h),
-        }
+        let Some(first) = lines.first() else {
+            return (0.0, 0.0);
+        };
+        let line_h = first.metrics.natural_line_height() * font.line_height;
+        let widest = lines.iter().fold(0.0f32, |a, l| a.max(l.width));
+        (widest, line_h * lines.len() as f32)
     }
 }
 

@@ -24,8 +24,8 @@
 //! so a caller can substitute something else.
 
 use crate::scene::{GlyphSource, RunGlyph};
-use pmg_scene::doc::FontSpec;
-use pmg_text::TextEngine;
+use pmg_scene::doc::{Align, FontSpec};
+use pmg_text::{TextEngine, Wrap};
 
 /// Shapes and rasterizes with a [`TextEngine`], at sub-pixel phases.
 pub struct TextEngineGlyphs<'a> {
@@ -39,14 +39,50 @@ impl<'a> TextEngineGlyphs<'a> {
 }
 
 impl GlyphSource for TextEngineGlyphs<'_> {
-    fn run(&mut self, text: &str, font: &FontSpec) -> Option<(Vec<RunGlyph>, f32)> {
+    fn run(
+        &mut self,
+        text: &str,
+        font: &FontSpec,
+        max_width: Option<f32>,
+        max_lines: usize,
+        align: Align,
+    ) -> Option<(Vec<RunGlyph>, f32)> {
         let face = self.engine.db.select(&font.family, font.weight)?;
-        let shaped = self
-            .engine
-            .shape(face, text, font.size, &font.features, font.tracking)?;
-        let ascent = shaped.metrics.ascent;
+        // The SAME call the solver measured with, so the wrap drawn is the wrap
+        // the box was sized for.
+        let lines = self.engine.shape_lines(
+            face,
+            text,
+            font.size,
+            &font.features,
+            font.tracking,
+            Wrap { max_width, max_lines },
+        )?;
+        let first = lines.first()?;
+        let ascent = first.metrics.ascent;
+        let line_h = first.metrics.natural_line_height() * font.line_height;
+        let widest = lines.iter().fold(0.0f32, |a, l| a.max(l.width));
 
         let mut out = Vec::new();
+        for (n, shaped) in lines.iter().enumerate() {
+            // Rounded, because a baseline at a fractional y would rasterize
+            // each line at a different vertical phase and they would not look
+            // like one block of type.
+            let baseline = (n as f32 * line_h).round();
+            // Each line is aligned independently, which single-line text never
+            // needed: a centred two-line lyric has two different line widths
+            // and centring only the block would leave the shorter line
+            // left-aligned inside it.
+            //
+            // Relative to the WIDEST line rather than to `max_width`, because a
+            // content-sized text node is exactly as wide as its widest line and
+            // the parent box has already centred that node. Using max_width
+            // here would centre twice.
+            let align_dx = match align {
+                Align::Center => ((widest - shaped.width) * 0.5).round(),
+                Align::End => (widest - shaped.width).round(),
+                _ => 0.0,
+            };
         for g in &shaped.glyphs {
             // Split the fractional position into a whole pixel and a phase, and
             // rasterize AT that phase. Rounding here instead is precisely what
@@ -59,13 +95,15 @@ impl GlyphSource for TextEngineGlyphs<'_> {
                 continue;
             }
             out.push(RunGlyph {
-                x: whole as f32,
+                x: whole as f32 + align_dx,
+                y: baseline,
                 left: bmp.left,
                 top: bmp.top,
                 width: bmp.width,
                 height: bmp.height,
                 coverage: bmp.coverage.clone(),
             });
+        }
         }
         Some((out, ascent))
     }
