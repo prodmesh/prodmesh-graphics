@@ -190,6 +190,37 @@ function send(s, msg) {
   return true
 }
 
+/**
+ * Record the outputs a node reports, for a node nobody has configured yet.
+ *
+ * Only when it has none. Configure is authoritative once an operator has been
+ * there — overwriting their layer stack every time a node reconnects would
+ * undo their work on a reboot, which is worse than the problem this solves.
+ */
+function seedOutputs(s) {
+  const outs = s.state?.outputs ?? []
+  if (!outs.length) return
+  const db = handle()
+  const have = db.prepare('SELECT COUNT(*) n FROM outputs WHERE node_id = ?').get(s.nodeId)
+  if (have.n) return
+
+  const ins = db.prepare(
+    `INSERT OR IGNORE INTO outputs (node_id, output_id, mode, layers, updated_at)
+     VALUES (?, ?, ?, ?, ?)`,
+  )
+  const now = Date.now()
+  for (const o of outs) {
+    // The layer NAMES, in the node's order, because layer order is compositing
+    // order and the node is the one that knows it.
+    const layers = (o.layers ?? []).map((l) => l.name)
+    if (!layers.length) continue
+    ins.run(s.nodeId, o.id, o.mode ?? '1920x1080', JSON.stringify(layers), now)
+  }
+  // Said out loud, because it is a configuration decision the server made and
+  // no operator did.
+  console.log(`link: learned ${s.name}'s outputs — ${outs.map((o) => o.id).join(', ')}`)
+}
+
 /** Publish the snapshot topics this node feeds. All conflate safely. */
 function republish(s) {
   publish(`node:${s.nodeId}:health`, {
@@ -342,6 +373,21 @@ function onFrame(ws, buf, bound) {
 
     case 'StateReport':
       s.state = body
+      // Learn what outputs this node actually has, if nobody has said yet.
+      //
+      // `assignment.build()` falls back to a single output called `out-0` for a
+      // node with no rows in `outputs`, so that a node is usable the moment it
+      // connects. That default is right for a node running the default output
+      // and WRONG for any node started with `--output id=…`: the assignment
+      // names out-0, the node refuses it as an output it does not have, and the
+      // node sits there linked, healthy, adopted, and holding nothing. It says
+      // so in its log and nowhere else.
+      //
+      // The node is the authority on what it is driving (ADR 0009), so the
+      // honest default is to take its word rather than invent a name. An
+      // operator can still change the layer stack in Configure; this only fills
+      // in what was never configured.
+      seedOutputs(s)
       republish(s)
       break
 

@@ -614,3 +614,48 @@ test('a version refusal is carried through as the reason, not as a missing byte'
   assert.match(r.unreadable, /needs reader 2/)
   await a.close()
 })
+
+test('a node with named outputs is usable without a trip to Configure', async () => {
+  // Found in the dress rehearsal. `assignment.build()` falls back to a single
+  // output called `out-0` for a node with no rows in `outputs`, so a node is
+  // usable the moment it connects. That default is right for a node running the
+  // default output and wrong for one started with `--output id=lt,…`: the
+  // assignment named out-0, the node refused it as an output it does not have,
+  // and it then sat there linked, healthy, adopted and holding nothing — saying
+  // so in its own log and nowhere else.
+  const n = await fakeNode({ nodeId: 'named-outs' })
+  n.report({ outputs: [
+    { id: 'lt', mode: '1920x1080', fps: 59.94, late_frames: 0,
+      layers: [{ name: 'Graphics', occupant: null }] },
+    { id: 'wall', mode: '1920x1080', fps: 59.94, late_frames: 0,
+      layers: [{ name: 'Graphics', occupant: null }] },
+  ] })
+  await settle()
+
+  const rows = db.handle()
+    .prepare('SELECT output_id, layers FROM outputs WHERE node_id = ? ORDER BY output_id')
+    .all('named-outs')
+  assert.deepEqual(rows.map((r) => r.output_id), ['lt', 'wall'])
+  assert.deepEqual(JSON.parse(rows[0].layers), ['Graphics'])
+  await n.close()
+})
+
+test('a configured layer stack is not overwritten when the node reconnects', async () => {
+  // Configure is authoritative once an operator has been there. Re-seeding on
+  // every StateReport would undo their layer order on a reboot, which is a
+  // worse bug than the one seeding fixes.
+  db.handle().prepare(
+    `INSERT OR REPLACE INTO outputs (node_id, output_id, mode, layers, updated_at)
+     VALUES ('configured', 'lt', '1920x1080', '["Bug","Lower Third"]', 0)`,
+  ).run()
+  const n = await fakeNode({ nodeId: 'configured' })
+  n.report({ outputs: [{ id: 'lt', mode: '1920x1080', fps: 59.94, late_frames: 0,
+                         layers: [{ name: 'Graphics', occupant: null }] }] })
+  await settle()
+
+  const row = db.handle()
+    .prepare('SELECT layers FROM outputs WHERE node_id = ? AND output_id = ?')
+    .get('configured', 'lt')
+  assert.deepEqual(JSON.parse(row.layers), ['Bug', 'Lower Third'])
+  await n.close()
+})
