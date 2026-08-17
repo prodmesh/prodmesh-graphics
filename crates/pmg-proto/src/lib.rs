@@ -310,6 +310,46 @@ pub struct ItemRef {
     pub data: std::collections::BTreeMap<String, DataValue>,
     pub output: Option<String>,
     pub layer: Option<String>,
+    /// Where this Item goes on THIS node, and how each place renders it
+    /// (ADR 0018).
+    ///
+    /// The server sends only the destinations this node can serve. Empty means
+    /// a node that predates destinations, or a server that does — either way
+    /// `output`/`layer`/`template_rev` above are the one-destination answer and
+    /// the node falls back to them.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub destinations: Vec<Destination>,
+}
+
+/// One place an Item renders, and how.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct Destination {
+    pub output: String,
+    pub layer: String,
+    /// Pinned per destination: two feeds of the same words can move forward
+    /// independently, and neither follows head.
+    pub template_rev: String,
+    /// `auto` fires with the take. `on_request` is available and waits to be
+    /// asked for — the full-screen version of a lower third that is taken "if
+    /// we need it".
+    #[serde(default = "default_dest_mode")]
+    pub mode: String,
+    /// Render **nothing** here, deliberately: a full-screen graphic clearing
+    /// the LED wall. An instruction, not an absence — and distinct on the wire
+    /// from a destination that failed, because an operator has to be able to
+    /// tell those apart.
+    #[serde(default)]
+    pub blank: bool,
+}
+
+fn default_dest_mode() -> String {
+    "auto".to_string()
+}
+
+impl Destination {
+    pub fn is_auto(&self) -> bool {
+        self.mode != "on_request"
+    }
 }
 
 /// A field value. Deliberately a closed set — the same closed set the scene
@@ -414,8 +454,22 @@ pub enum CueOp {
     },
     Take {
         item: String,
+        /// The first destination, and the only one for a single-destination
+        /// Item. Kept as the primary fields so `output_id()` and every existing
+        /// reader still work.
         output: String,
         layer: String,
+        /// Every place this Item goes **on this node** (ADR 0018).
+        ///
+        /// The server fans an operator's one action into one cue per node, each
+        /// carrying that node's destinations. One cue and one ack per node
+        /// keeps the dedupe key meaningful: two cues to the same node sharing a
+        /// `cue_id` would dedupe each other, which is exactly what a lower
+        /// third plus its full-screen version on one card would do.
+        ///
+        /// Empty means the single destination above.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        destinations: Vec<Destination>,
     },
     TakeOut {
         output: String,
@@ -619,6 +673,7 @@ pub fn selftest() -> Result<(), String> {
             item: "01JB".into(),
             output: "out-0".into(),
             layer: "Lower Third".into(),
+            destinations: Vec::new(),
         },
     };
     let bytes = encode(&ToNode::Cue(cue.clone())).map_err(|e| e.to_string())?;

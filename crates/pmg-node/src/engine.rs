@@ -370,10 +370,60 @@ impl LayerEngine {
 
     fn dispatch(&mut self, op: &CueOp, lib: &dyn Library) -> Result<Option<u64>, RejectReason> {
         match op {
+            // A take that fans out (ADR 0018).
+            //
+            // One operator action, several places on this node — a lower third
+            // over the key feed and its full-screen version on another layer.
+            // Applied as a unit: every destination is ARMED before any is put
+            // on air, so a template that will not build cannot leave the key
+            // feed live and the full-screen feed empty.
+            CueOp::Take {
+                item, destinations, ..
+            } if !destinations.is_empty() => {
+                let mut prepared = Vec::new();
+                for d in destinations.iter().filter(|d| d.is_auto()) {
+                    let fps = self
+                        .outputs
+                        .iter()
+                        .find(|o| o.id == d.output)
+                        .map(|o| (o.fps_num, o.fps_den))
+                        .ok_or(RejectReason::NoSuchLayer)?;
+                    // A blank destination clears its layer rather than
+                    // rendering. It is an instruction, so it is carried out —
+                    // and it needs no template, which is why it is not armed.
+                    let armed = if d.blank {
+                        None
+                    } else {
+                        Some(self.arm_at(item, lib, Some(fps), &d.template_rev)?)
+                    };
+                    prepared.push((d.output.clone(), d.layer.clone(), armed));
+                }
+                if prepared.is_empty() {
+                    // Every destination was on_request. Nothing to fire, and
+                    // saying so beats reporting a take that put nothing on air.
+                    return Err(RejectReason::NotReady);
+                }
+
+                let mut frame = None;
+                for (output, layer, armed) in prepared {
+                    let out = self.output_mut(&output).ok_or(RejectReason::NoSuchLayer)?;
+                    frame.get_or_insert(out.frame);
+                    let l = out.layer_mut(&layer).ok_or(RejectReason::NoSuchLayer)?;
+                    l.occupant = armed.map(|armed| Occupant {
+                        armed,
+                        phase: Phase::In,
+                        t_ms: 0.0,
+                        tween: None,
+                    });
+                }
+                Ok(frame)
+            }
+
             CueOp::Take {
                 item,
                 output,
                 layer,
+                ..
             }
             | CueOp::Arm {
                 item,
@@ -574,6 +624,21 @@ impl LayerEngine {
     /// The override is what a live `Update` binds: same Item, same template,
     /// new values. Everything else about arming is identical, which is the
     /// point — a rebind is an arm, and it costs what an arm costs.
+    /// Arm against a destination's own template revision.
+    ///
+    /// The same data rendered by a different template is the whole of ADR 0018:
+    /// a narrow strip over the key feed and full-bleed type on the wall are two
+    /// templates and one Item.
+    fn arm_at(
+        &self,
+        item_id: &str,
+        lib: &dyn Library,
+        out_fps: Option<(u32, u32)>,
+        template_rev: &str,
+    ) -> Result<Armed, RejectReason> {
+        self.arm_inner(item_id, lib, out_fps, None, Some(template_rev))
+    }
+
     fn arm_with(
         &self,
         item_id: &str,
@@ -581,7 +646,19 @@ impl LayerEngine {
         out_fps: Option<(u32, u32)>,
         overrides: Option<&BTreeMap<String, DataValue>>,
     ) -> Result<Armed, RejectReason> {
-        let (label, template_rev, data) = lib.item(item_id).ok_or(RejectReason::NoSuchItem)?;
+        self.arm_inner(item_id, lib, out_fps, overrides, None)
+    }
+
+    fn arm_inner(
+        &self,
+        item_id: &str,
+        lib: &dyn Library,
+        out_fps: Option<(u32, u32)>,
+        overrides: Option<&BTreeMap<String, DataValue>>,
+        rev_override: Option<&str>,
+    ) -> Result<Armed, RejectReason> {
+        let (label, item_rev, data) = lib.item(item_id).ok_or(RejectReason::NoSuchItem)?;
+        let template_rev = rev_override.unwrap_or(item_rev);
         let doc = lib.template(template_rev).ok_or(RejectReason::NotReady)?;
 
         // Refused HERE only as a backstop. The real refusal happens at

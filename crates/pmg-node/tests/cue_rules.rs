@@ -258,3 +258,109 @@ fn phase_names_match_the_wire() {
     assert_eq!(Phase::Hold.as_str(), "hold");
     assert_eq!(Phase::Out.as_str(), "out");
 }
+
+// ---------------------------------------------------------------------------
+// Fan-out (ADR 0018)
+// ---------------------------------------------------------------------------
+
+fn dest(output: &str, layer: &str, rev: &str) -> pmg_proto::Destination {
+    pmg_proto::Destination {
+        output: output.into(),
+        layer: layer.into(),
+        template_rev: rev.into(),
+        mode: "auto".into(),
+        blank: false,
+    }
+}
+
+fn take_to(seq: u64, id: &str, dests: Vec<pmg_proto::Destination>) -> Cue {
+    cue(
+        seq,
+        id,
+        CueOp::Take {
+            item: "item-1".into(),
+            output: dests[0].output.clone(),
+            layer: dests[0].layer.clone(),
+            destinations: dests,
+        },
+    )
+}
+
+/// A destination naming a layer the node does not have must refuse the WHOLE
+/// take, not fire the half it understood. Half a graphic on air with no error
+/// is worse than none.
+#[test]
+fn a_fan_out_naming_an_unknown_layer_fires_nothing() {
+    let mut e = engine();
+    let before = e.state_report();
+
+    let ack = e.apply(
+        &take_to(
+            1,
+            "press",
+            vec![
+                dest("out-0", "Lower Third", "blake3:aaa"),
+                dest("out-0", "No Such Layer", "blake3:aaa"),
+            ],
+        ),
+        &Empty,
+        0,
+        false,
+    );
+    assert_eq!(ack.result, CueResult::Rejected);
+    assert_eq!(
+        e.state_report().outputs[0].layers.len(),
+        before.outputs[0].layers.len(),
+        "and nothing moved"
+    );
+    for l in &e.state_report().outputs[0].layers {
+        assert!(l.occupant.is_none(), "no layer was left occupied");
+    }
+}
+
+/// A blank destination needs no template, which is the distinctive thing about
+/// it: it renders nothing, so it demands nothing.
+///
+/// Asserted as a CONTRAST rather than as "the layer ended up empty" — this
+/// Library owns no templates, so an empty layer proves nothing on its own. The
+/// same destination fires when blank and is refused when not.
+#[test]
+fn a_blank_destination_needs_no_template_where_a_real_one_does() {
+    let mut e = engine();
+
+    let mut blank = dest("out-0", "Lower Third", "");
+    blank.blank = true;
+    let cleared = e.apply(&take_to(1, "blank", vec![blank]), &Empty, 0, false);
+    assert_eq!(
+        cleared.result,
+        CueResult::Applied,
+        "an instruction to clear that feed, carried out"
+    );
+
+    // The same place, the same cue shape, rendering something: refused, because
+    // the template is not staged.
+    let real = e.apply(
+        &take_to(2, "real", vec![dest("out-0", "Lower Third", "blake3:aaa")]),
+        &Empty,
+        0,
+        false,
+    );
+    assert_eq!(real.result, CueResult::Rejected);
+
+    let layers = e.state_report().outputs[0].layers.clone();
+    let l = layers.iter().find(|l| l.name == "Lower Third").unwrap();
+    assert!(l.occupant.is_none());
+}
+
+/// on_request destinations wait to be asked for. A take carrying only those
+/// would put nothing on air, and saying so beats reporting success.
+#[test]
+fn a_take_of_only_on_request_destinations_is_refused() {
+    let mut e = engine();
+    let mut later = dest("out-0", "Lower Third", "blake3:aaa");
+    later.mode = "on_request".into();
+
+    let ack = e.apply(&take_to(1, "press", vec![later]), &Empty, 0, false);
+    assert_eq!(ack.result, CueResult::Rejected);
+    assert_eq!(ack.reason, Some(RejectReason::NotReady));
+}

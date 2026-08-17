@@ -45,11 +45,64 @@ const SURFACES = new Set([
  * index** — an index silently re-points at a different graphic the moment
  * someone reorders the stack.
  */
+/**
+ * The destinations of an Item that a given node can serve.
+ *
+ * Filtered the same way the assignment is, and for the same reason: a cue
+ * naming an output a node does not have is a cue it must refuse, and sending
+ * one is asking a question we already know the answer to.
+ *
+ * Returns `[]` for an Item created before destinations existed, which makes the
+ * caller fall back to the single output/layer it was given.
+ */
+function destinationsFor(itemId, nodeId) {
+  const outs = new Set(
+    handle()
+      .prepare('SELECT output_id FROM outputs WHERE node_id = ?')
+      .all(nodeId ?? '')
+      .map((o) => o.output_id),
+  )
+  return handle()
+    .prepare(
+      `SELECT node_id, output, layer, template_rev, mode, blank
+         FROM item_destinations WHERE item_id = ? ORDER BY ordinal`,
+    )
+    .all(itemId)
+    .filter((d) => !d.node_id || !nodeId || d.node_id === nodeId)
+    // An unconfigured node has no rows in `outputs` yet and still has to work,
+    // so an empty set means "cannot rule anything out" rather than "nothing".
+    .filter((d) => outs.size === 0 || outs.has(d.output))
+    .map((d) => ({
+      output: d.output,
+      layer: d.layer,
+      template_rev: d.template_rev,
+      mode: d.mode,
+      blank: !!d.blank,
+    }))
+}
+
 function buildOp(body, item) {
   const output = body.output
   const layer = body.layer
   switch (body.op) {
-    case 'take':      return [{ Take: { item: item.id, output, layer } }, null]
+    // A take fans out to every AUTO destination this node serves (ADR 0018).
+    // One cue per node carrying that node's destinations, because two cues to
+    // one node sharing a cue_id would dedupe each other — which is exactly
+    // what a lower third plus its full-screen version on one card would be.
+    case 'take': {
+      const dests = destinationsFor(item.id, body.node)
+      return [
+        {
+          Take: {
+            item: item.id,
+            output: dests[0]?.output ?? output,
+            layer: dests[0]?.layer ?? layer,
+            destinations: dests,
+          },
+        },
+        null,
+      ]
+    }
     case 'arm':       return [{ Arm: { item: item.id, output, layer } }, null]
     case 'take_out':  return [{ TakeOut: { output, layer } }, null]
     // tween_ms rides through untouched. 0 is a hard cut — correcting a

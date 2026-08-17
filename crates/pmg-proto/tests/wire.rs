@@ -22,6 +22,7 @@ fn sample_cue() -> Cue {
             item: "01JBQ8Z3K7V2N5R9T1W4Y6B8C0".into(),
             output: "out-0".into(),
             layer: "Lower Third".into(),
+            destinations: Vec::new(),
         },
     }
 }
@@ -120,6 +121,7 @@ fn every_visible_op_names_its_output() {
             item: "i".into(),
             output: "out-1".into(),
             layer: "l".into(),
+            destinations: Vec::new(),
         },
         CueOp::Update {
             // A rebind with no duration takes DEFAULT_TWEEN_MS; the field only
@@ -267,7 +269,10 @@ fn frames_from_the_javascript_server_decode() {
                 CueOp::Take {
                     item: "01JB".into(),
                     output: "out-0".into(),
-                    layer: "Lower Third".into()
+                    layer: "Lower Third".into(),
+                    // A single-destination cue sends no list, so a fixture
+                    // recorded before ADR 0018 decodes unchanged.
+                    destinations: Vec::new(),
                 }
             );
         }
