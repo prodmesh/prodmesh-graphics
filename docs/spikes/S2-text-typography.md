@@ -1,7 +1,10 @@
 # S2 — Text and typography at broadcast quality
 
 **Gates:** M5 · **Risk:** [R3](../RISKS.md#r3) · **ADR:** 0002
-**Status:** **RUN 2026-08-15** — 4 of 5 measured criteria pass; shudder FAILS by measurement, but **2026-08-16: not visible across 446 lower thirds watched on SDI for two hours.** Root cause open; priority reduced. The untested case is slow sustained motion (a ticker), not reveals
+**Status:** **ROOT CAUSE FOUND AND FIXED 2026-08-18** — quad truncation of the
+AA tail, in both the box and the glyph paths. Box 0.2049 → **0.0058 px**, text
+0.3412 → **0.0066 px**, slopes ≈ 1.0; the residual is the 8-bit quantisation
+floor. All five measured criteria now pass. §A3 below has the mechanism
 
 ## Question
 
@@ -174,6 +177,55 @@ What this does and does not establish:
 Root cause remains open. The priority for finding it drops accordingly: it is
 now a known-magnitude blemish rather than a possible blocker, and the test that
 would change that assessment is a crawling ticker, not more lower thirds.
+
+### A3 — root cause found and fixed, 2026-08-18
+
+**The rasterizer was truncating the outer half of every antialiased edge.**
+Both paths, same defect, one mechanism:
+
+- **Boxes.** The coverage ramp `clamp(0.5 − d, 0, 1)` extends half a pixel
+  *outside* the geometric edge — a pixel whose centre sits just past the edge
+  is still partially covered. But `vs_box` emitted a quad sized exactly to the
+  rect, and a rasterizer only shades pixels whose centres the primitive
+  reaches. The outer half of the ramp was therefore never drawn: as a sliding
+  edge crossed a pixel centre, that column snapped from unshaded to ~half
+  coverage in one step. That is the measured staircase — near-flat tracking
+  (~0.6 slope locally) then a **0.429 px jump exactly at the half-pixel**, with
+  a 1 px period. Both edges of the 120 px control box jump together because
+  its width is integer, which is why one jump, not two.
+- **Text.** Glyph quads sit at integer positions when static (the phase is
+  baked into the bitmap), but a run animated by its **transform** lands them
+  at fractional positions. The atlas is sampled bilinearly, and bilinear
+  reconstruction extends half a texel past the bitmap edge — truncated by the
+  tight quad in exactly the same way. More edge columns per glyph than per
+  box is why text measured worse (0.34 vs 0.21).
+
+**The fix is geometric, not a filter change:** outset the box quad by one
+design unit (`AA_OUTSET` in `scene.wgsl` — the SDF already returns zero
+coverage over the surplus), and outset every glyph quad by **exactly half a
+pixel** with the UV rect extended to match. Half a pixel is exact, not
+approximate: the atlas packer keeps a 1-texel zero border around every glyph,
+and interpolated coverage fades to zero at that border's centre — precisely
+where the outset quad now ends. Extending further would read a neighbouring
+glyph; less re-truncates the tail.
+
+| | before | after |
+|---|---|---|
+| box (control) | 0.2049 px, slope 1.0327 | **0.0058 px**, slope 0.9976 |
+| text via atlas | 0.3412 px, slope 1.0392 | **0.0066 px**, slope 0.9986 |
+
+The residual ~0.006 px is consistent with 8-bit alpha quantisation of the
+output — the first open candidate from §A — which was real but two orders of
+magnitude smaller than the truncation sitting in front of it. The ⅛-px phase
+quantisation contributes below that floor. The ticker case stops being a
+worry at this magnitude, though it remains unwatched by eyes.
+
+**Noted in passing, pre-existing:** criterion C now reads 65/255 worst over
+the dark background (1/255 over bright), at the same pixel before and after
+this fix. The 2026-08-15 run recorded 1/255 over both; the coverage-gamma
+stem darkening (2026-08-17) landed in between and its compensation is
+background-dependent by design. Whether the C reference should model it is a
+separate question — it is not a premultiply error and not from this change.
 
 ### C — fringing is clean
 

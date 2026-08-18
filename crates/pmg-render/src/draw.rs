@@ -819,10 +819,32 @@ impl SceneRenderer {
             if let RenderContent::Text(glyphs) = &n.content {
                 let (aw, ah) = (self.atlas_size.0 as f32, self.atlas_size.1 as f32);
                 for g in glyphs {
-                    let (x0, y0) = (g.x, g.y);
-                    let (x1, y1) = (g.x + g.w, g.y + g.h);
-                    let (u0, v0) = (g.u as f32 / aw, g.v as f32 / ah);
-                    let (u1, v1) = ((g.u + g.uw) as f32 / aw, (g.v + g.uh) as f32 / ah);
+                    // Outset every glyph quad by half a pixel, with the UV rect
+                    // extended to match.
+                    //
+                    // A run animated by its transform lands these quads at
+                    // fractional positions, and the bilinearly-reconstructed
+                    // coverage extends half a texel past the bitmap edge — but
+                    // the rasterizer only shades pixels whose centres the quad
+                    // reaches, so a quad cut exactly at the bitmap edge
+                    // truncated that tail. Spike S2 measured the result as a
+                    // 0.34 px stutter: edge columns snapped in and out as the
+                    // quad edge crossed their pixel centres, the same defect
+                    // the box path had from its own tight quad.
+                    //
+                    // Half a pixel is exact, not approximate: the atlas packer
+                    // keeps a 1-texel zero border around every glyph (PAD in
+                    // pack_atlas), and interpolated coverage fades to zero at
+                    // that border's centre — precisely where this quad ends.
+                    // Extending further would read past the pad into a
+                    // neighbouring glyph; extending less re-truncates the tail.
+                    let (x0, y0) = (g.x - 0.5, g.y - 0.5);
+                    let (x1, y1) = (g.x + g.w + 0.5, g.y + g.h + 0.5);
+                    let (u0, v0) = ((g.u as f32 - 0.5) / aw, (g.v as f32 - 0.5) / ah);
+                    let (u1, v1) = (
+                        ((g.u + g.uw) as f32 + 0.5) / aw,
+                        ((g.v + g.uh) as f32 + 0.5) / ah,
+                    );
                     for (px, py, tu, tv) in [
                         (x0, y0, u0, v0),
                         (x1, y0, u1, v0),

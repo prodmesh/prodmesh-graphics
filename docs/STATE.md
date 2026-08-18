@@ -64,10 +64,14 @@ node staging the published blob by its address.
 stacks beyond one, preview, auth, discovery, DeckLink, and media. Those are M2
 and M3.
 
-**Spike S2 ran, and it failed on one criterion.** Fringing, tabular figures, and
-glyph-cache cost all measure clean, but sub-pixel motion deviates from linear by
-0.33 px for text and **0.21 px for a plain box** — so the fault is not text and
-not the atlas. Root cause is open; see `docs/spikes/S2-text-typography.md`.
+**Spike S2's one failure is root-caused and fixed (2026-08-18).** Sub-pixel
+motion deviated from linear by 0.33 px for text and 0.21 px for a plain box; the
+cause was the rasterizer truncating the outer half of every antialiased edge —
+quads sized exactly to their geometry, while the coverage ramp and the bilinear
+reconstruction both extend half a pixel past it. Outsetting the box quad and
+every glyph quad (half a pixel, exact against the atlas's 1-texel pad) brings
+both to **~0.006 px**, the 8-bit quantisation floor. See
+`docs/spikes/S2-text-typography.md` §A3.
 
 `docs/INTEGRATION-NOTES.md` is no longer empty; seven entries came out of one
 afternoon, and three were version-skew failures that each presented as something
@@ -178,7 +182,8 @@ hardware-attributed findings when it runs.
 | S1 render parity | **PASSED on Metal** 2026-08-14 — bit-identical; cross-backend untested | M1 |
 | S3 DeckLink output | **internal-clock leg PASSED** 2026-08-14; reference leg blocked on a generator | M2 |
 | S6 WebGPU in browser | **largely answered** 2026-08-14 — real adapter/device, 16384 texture limit, 244 KB bundle, 5 ms/figure. Not yet on the booth Macs | M1 |
-| S2, S4, S5, S7, S8, S9 | not started | M3–M5 |
+| S2 text quality | **shudder ROOT-CAUSED AND FIXED** 2026-08-18 — quad truncation of the AA tail; box 0.2049 → 0.0058 px, text 0.3412 → 0.0066 px. All measured criteria pass; see the brief's §A3 | M5 |
+| S4, S5, S7, S8, S9 | not started | M3–M5 |
 
 **All three M0 spikes have now returned, and all three passed.** ADR 0003's
 hand-written-shim approach sustains broadcast output with zero late frames; ADR

@@ -62,6 +62,19 @@ fn to_clip(p : vec2<f32>) -> vec4<f32> {
 // Boxes — an analytically antialiased rounded rectangle.
 // ---------------------------------------------------------------------------
 
+// How far the quad extends past the rect, in design units.
+//
+// The coverage ramp reaches half a pixel OUTSIDE the geometric edge — a pixel
+// whose centre sits just past the edge is still partially covered — but the
+// rasterizer only shades pixels whose centres the quad reaches. Sizing the
+// quad exactly to the rect therefore truncated the outer half of the ramp,
+// and the truncation is what spike S2 measured as the 0.21 px stutter: the
+// outermost column snapped from unshaded to ~half coverage at the instant a
+// sliding edge crossed its pixel centre, a staircase with a 1 px period. One
+// unit of outset covers the ramp with margin; the SDF returns zero coverage
+// over the surplus, so the ring costs a few fragments and draws nothing.
+const AA_OUTSET : f32 = 1.0;
+
 @vertex
 fn vs_box(@builtin(vertex_index) i : u32) -> VsOut {
     var corner = array<vec2<f32>, 6>(
@@ -69,13 +82,18 @@ fn vs_box(@builtin(vertex_index) i : u32) -> VsOut {
         vec2<f32>(0.0, 1.0), vec2<f32>(1.0, 0.0), vec2<f32>(1.0, 1.0),
     );
     let c = corner[i];
-    let p = u.rect.xy + c * u.rect.zw;
+    let grown = u.rect.zw + vec2<f32>(2.0 * AA_OUTSET, 2.0 * AA_OUTSET);
+    let p = u.rect.xy - vec2<f32>(AA_OUTSET, AA_OUTSET) + c * grown;
 
     var out : VsOut;
     out.pos   = to_clip(p);
     // Local coordinates run from -half to +half, so the SDF is centred.
-    out.local = (c - vec2<f32>(0.5, 0.5)) * u.rect.zw;
-    out.uv    = c;
+    out.local = (c - vec2<f32>(0.5, 0.5)) * grown;
+    // The image sub-rect is a fraction of the RECT, not of the grown quad, so
+    // an image node keeps sampling exactly the pixels it did before the
+    // outset. Values run slightly past [0,1] over the ring; the sampler
+    // clamps, and the SDF has already faded coverage to zero out there.
+    out.uv    = (out.local + u.rect.zw * 0.5) / u.rect.zw;
     return out;
 }
 
