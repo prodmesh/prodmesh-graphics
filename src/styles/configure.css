@@ -1,0 +1,109 @@
+/* Configure — the console language (ADR 0020) on a scrolling page: adoption,
+   node cards, layer stacks, colour, test patterns. */
+
+.cfg-console {
+  flex-grow: 1;
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+.cfg-console__scroll { display: flex; flex-direction: column; gap: 20px; max-width: 980px; }
+.cfg-console__section { display: flex; flex-direction: column; gap: 8px; }
+
+.cfg-console__dim { margin: 0; font-size: 11px; line-height: 1.6; color: var(--pm-text-muted); }
+.cfg-console__mono { font-family: var(--pm-font-mono); font-size: 11px; color: var(--pm-text-muted); }
+
+.cfg-console__stranger {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  border-radius: var(--pm-radius-6);
+  background: var(--pm-state-armed-bg);
+  box-shadow: var(--pm-ring-armed);
+  padding: 12px 14px;
+}
+.cfg-console__stranger-text { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+.cfg-console__stranger-name { font-weight: 600; font-size: 13px; color: var(--pm-text-primary); }
+
+.cfg-console__node {
+  border-radius: var(--pm-radius-8);
+  background: var(--pm-surface-chrome);
+  box-shadow: var(--pm-hairline);
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.cfg-console__refs { display: flex; flex-direction: column; gap: 6px; }
+.cfg-console__ref { display: flex; gap: 12px; align-items: center; }
+
+.cfg-console__output {
+  border-top: 1px solid var(--pm-border-hairline);
+  padding-top: 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.cfg-console__output-head { display: flex; gap: 12px; align-items: center; }
+.cfg-console__output-name { font-weight: 600; font-size: 14px; color: var(--pm-text-primary); }
+
+.cfg-console__problem {
+  margin: 0;
+  border-radius: var(--pm-radius-6);
+  background: var(--pm-surface-raised);
+  box-shadow: var(--pm-hairline);
+  padding: 10px 12px;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--pm-text-primary);
+}
+
+.cfg-console__layers { display: flex; flex-direction: column; gap: 4px; }
+.cfg-console__layer {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  border-radius: var(--pm-radius-6);
+  background: var(--pm-surface-raised);
+  box-shadow: var(--pm-hairline);
+  padding: 6px 10px;
+}
+.cfg-console__layer .edit-console__iconbtn { font-size: 11px; gap: 3px; }
+.cfg-console__layer-name {
+  flex-grow: 1;
+  min-width: 0;
+  font-weight: 600;
+  font-size: 13px;
+  color: var(--pm-text-primary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.cfg-console__grid {
+  display: grid;
+  grid-template-columns: minmax(220px, 320px) 1fr;
+  gap: 20px;
+  align-items: start;
+}
+@media (max-width: 900px) {
+  .cfg-console__grid { grid-template-columns: 1fr; }
+}
+.cfg-console__fieldset { display: flex; flex-direction: column; gap: 8px; }
+.cfg-console__patterns { display: flex; gap: 6px; flex-wrap: wrap; }
+
+.cfg-console__add { display: flex; gap: 8px; align-items: center; }
+.cfg-console__add input {
+  height: 28px;
+  border: 0;
+  outline: none;
+  border-radius: var(--pm-radius-4);
+  background: var(--pm-surface-field);
+  color: var(--pm-text-primary);
+  font-family: var(--pm-font-ui);
+  font-size: 12px;
+  padding: 0 10px;
+}

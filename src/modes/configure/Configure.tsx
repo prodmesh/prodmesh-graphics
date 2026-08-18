@@ -1,8 +1,8 @@
 /**
  * Configure — for whoever set up the room.
  *
- * Node discovery and adoption, outputs, and layer stacks. Formats, colour, key
- * mode, reference status and test patterns are M3.
+ * Node discovery and adoption, outputs, layer stacks, colour, and test
+ * patterns, in the console language (ADR 0020).
  *
  * # Adoption is a real boundary, not a formality
  *
@@ -21,10 +21,18 @@
  */
 
 import { useCallback, useState } from 'react'
-import { Check, Cpu, Layers, MonitorPlay, Plus, Radio, X } from 'lucide-react'
+import { Check, ChevronDown, ChevronUp, Plus, X } from 'lucide-react'
 import { useQuery, invalidate } from '../../lib/useQuery'
 import { keys } from '../../lib/keys'
 import { ApiError, post, put } from '../../lib/api'
+import {
+  Button,
+  FormGroup,
+  GroupHeader,
+  NodeCard,
+  StatusPill,
+  Tag,
+} from '../../components/console'
 import type { NodeSummary } from '../show/types'
 
 type ColorConfig = {
@@ -59,31 +67,44 @@ export function Configure() {
   const strangers = nodes.filter((n) => !n.adopted)
 
   return (
-    <div className="mode-scroll">
-      {strangers.length > 0 ? (
-        <section className="cfg__strangers" aria-label="New nodes">
-          <h2>New nodes</h2>
-          {strangers.map((n) => (
-            <Stranger key={n.node_id} node={n} />
-          ))}
-        </section>
-      ) : null}
+    <div className="cfg-console">
+      <div className="console__toolbar">
+        <div className="console__toolbar-group">
+          <Tag pill tone="raised">Playout nodes</Tag>
+          <span className="console__toolbar-note">
+            A node finds this server on the network by itself, and can always be given an address
+            by hand — --server &lt;host:port&gt;.
+          </span>
+        </div>
+        <Tag size={10}>{`${adopted.length} adopted`}</Tag>
+      </div>
 
-      <section aria-label="Playout nodes">
-        <h2 className="cfg__h2">Playout nodes</h2>
-        {adopted.length === 0 ? (
-          <div className="mode__stub">
-            <p>No playout node has been adopted yet.</p>
-            <p>
-              Start a node and point it at this server. It finds this server on
-              the network by itself, and you can always give it an address by
-              hand — <code>--server &lt;host:port&gt;</code>.
-            </p>
-          </div>
-        ) : (
-          adopted.map((n) => <NodeCard key={n.node_id} node={n} />)
-        )}
-      </section>
+      <div className="mode-scroll cfg-console__scroll">
+        {strangers.length > 0 ? (
+          <section className="cfg-console__section" aria-label="New nodes">
+            <GroupHeader label="New nodes" trailing={`${strangers.length}`} />
+            {strangers.map((n) => (
+              <Stranger key={n.node_id} node={n} />
+            ))}
+          </section>
+        ) : null}
+
+        <section className="cfg-console__section" aria-label="Playout nodes">
+          <GroupHeader label="Playout nodes" />
+          {adopted.length === 0 ? (
+            <div className="mode__stub">
+              <p>No playout node has been adopted yet.</p>
+              <p>
+                Start a node and point it at this server. It finds this server on the network by
+                itself, and you can always give it an address by hand —{' '}
+                <code>--server &lt;host:port&gt;</code>.
+              </p>
+            </div>
+          ) : (
+            adopted.map((n) => <AdoptedNode key={n.node_id} node={n} />)
+          )}
+        </section>
+      </div>
     </div>
   )
 }
@@ -101,23 +122,27 @@ function Stranger({ node }: { node: FullNode }) {
   }, [node.node_id])
 
   return (
-    <div className="cfg__stranger">
-      <div>
-        <strong>{node.name}</strong>
-        <span className="show__dim"> · {node.node_id.slice(0, 10)}… · v{node.version ?? '?'}</span>
-        <p className="show__dim">
-          This node is asking to join. Until it is adopted it receives no
-          templates, no items, and no cues.
-        </p>
+    <div className="cfg-console__stranger">
+      <div className="cfg-console__stranger-text">
+        <span className="cfg-console__stranger-name">
+          {node.name}
+          <span className="cfg-console__mono">
+            {'  ·  '}{node.node_id.slice(0, 10)}…{'  ·  '}v{node.version ?? '?'}
+          </span>
+        </span>
+        <span className="cfg-console__dim">
+          This node is asking to join. Until it is adopted it receives no templates, no items,
+          and no cues.
+        </span>
       </div>
-      <button type="button" className="btn btn--take" onClick={() => void adopt()} disabled={busy}>
+      <Button onClick={() => void adopt()} disabled={busy}>
         <Check size={15} aria-hidden /> {busy ? 'Adopting…' : 'Adopt'}
-      </button>
+      </Button>
     </div>
   )
 }
 
-function NodeCard({ node }: { node: FullNode }) {
+function AdoptedNode({ node }: { node: FullNode }) {
   const { data } = useQuery<{
     outputs: { output_id: string; mode: string; layers: string[]; color?: ColorConfig }[]
   }>(`${keys.node(node.node_id)}/outputs`)
@@ -126,48 +151,53 @@ function NodeCard({ node }: { node: FullNode }) {
   const liveOutputs = node.state?.outputs ?? []
 
   return (
-    <div className="cfg__node">
-      <header>
-        <span className={node.reachable ? 'cfg__dot cfg__dot--up' : 'cfg__dot'} aria-hidden />
-        <strong>{node.name}</strong>
-        <span className="show__dim">v{node.version ?? '?'}</span>
-        {!node.reachable ? <span className="show__dim">offline</span> : null}
-      </header>
-
-      <dl className="cfg__caps">
-        <div><dt><Cpu size={13} aria-hidden /> GPU</dt><dd>{caps?.gpu ? `${caps.gpu.adapter} (${caps.gpu.backend})` : 'not reported'}</dd></div>
-        <div><dt><MonitorPlay size={13} aria-hidden /> Devices</dt>
-          <dd>
-            {caps?.outputs?.length
+    <div className="cfg-console__node">
+      <NodeCard
+        name={node.name}
+        role={node.reachable ? undefined : 'OFFLINE'}
+        healthy={node.reachable}
+        status={
+          node.reachable
+            ? undefined
+            : `${node.name} is offline. Anything already on air is still on air.`
+        }
+        metrics={[
+          { label: 'Version', value: `v${node.version ?? '?'}` },
+          { label: 'GPU', value: caps?.gpu ? `${caps.gpu.adapter} (${caps.gpu.backend})` : 'not reported' },
+          {
+            label: 'Devices',
+            value: caps?.outputs?.length
               ? caps.outputs.map((o) => `${o.device}${o.supports_key_fill ? ' · key+fill' : ''}`).join(', ')
-              : 'none reported — NDI has no enumerable hardware'}
-          </dd>
-        </div>
-        <div><dt><Layers size={13} aria-hidden /> Max layers</dt><dd>{caps?.max_layers ?? '?'}</dd></div>
-      </dl>
+              : 'none — NDI has no enumerable hardware',
+          },
+          { label: 'Max layers', value: String(caps?.max_layers ?? '?'), accent: true },
+        ]}
+      />
 
       {liveOutputs.some((o) => o.sync) ? (
-        <dl className="cfg__caps">
+        <div className="cfg-console__refs">
           {liveOutputs.filter((o) => o.sync).map((o) => (
-            <div key={o.id}>
-              <dt><Radio size={13} aria-hidden /> Reference · {o.id}</dt>
-              <dd>
-                {o.sync?.locked ? (
-                  <span className="cfg__lock cfg__lock--ok">locked · {o.sync.format || 'unknown format'}</span>
-                ) : o.sync?.present ? (
-                  // Present but not locked is the interesting state: a
-                  // reference is connected and the card is not following it,
-                  // which usually means a format mismatch.
-                  <span className="cfg__lock cfg__lock--warn">
-                    present, not locked{o.sync.format ? ` · ${o.sync.format}` : ''}
-                  </span>
-                ) : (
-                  <span className="cfg__lock">no reference connected — free running</span>
-                )}
-              </dd>
+            <div key={o.id} className="cfg-console__ref">
+              <span className="cfg-console__mono">Reference{'  ·  '}{o.id}</span>
+              {o.sync?.locked ? (
+                <StatusPill tone="ready" variant="subtle" size={10}>
+                  {`LOCKED · ${(o.sync.format || 'unknown format').toUpperCase()}`}
+                </StatusPill>
+              ) : o.sync?.present ? (
+                // Present but not locked is the interesting state: a reference
+                // is connected and the card is not following it, which usually
+                // means a format mismatch.
+                <StatusPill tone="staged" variant="subtle" size={10}>
+                  {`PRESENT, NOT LOCKED${o.sync.format ? ` · ${o.sync.format.toUpperCase()}` : ''}`}
+                </StatusPill>
+              ) : (
+                <StatusPill tone="muted" variant="subtle" size={10}>
+                  NO REFERENCE — FREE RUNNING
+                </StatusPill>
+              )}
             </div>
           ))}
-        </dl>
+        </div>
       ) : null}
 
       {(outputs.length
@@ -248,92 +278,116 @@ function OutputEditor({
   }
 
   return (
-    <div className="cfg__output">
-      <h4>
-        {outputId} <span className="show__dim">{mode || '1920x1080'}</span>
-        {saved ? <span className="cfg__saved"> · pushed to the node</span> : null}
-      </h4>
-      <p className="show__dim">Bottom of the stack first. What is lower is covered by what is above it.</p>
+    <div className="cfg-console__output">
+      <div className="cfg-console__output-head">
+        <span className="cfg-console__output-name">
+          {outputId} <span className="cfg-console__mono">{mode || '1920x1080'}</span>
+        </span>
+        {saved ? (
+          <StatusPill tone="ready" variant="subtle" size={10}>PUSHED TO THE NODE</StatusPill>
+        ) : null}
+      </div>
+      <p className="cfg-console__dim">
+        Bottom of the stack first. What is lower is covered by what is above it.
+      </p>
 
-      {problem ? <p className="show__problem" role="alert">{problem}</p> : null}
+      {problem ? (
+        <p className="cfg-console__problem" role="alert">{problem}</p>
+      ) : null}
 
-      <ol className="cfg__layers">
+      <div className="cfg-console__layers">
         {draft.map((name, i) => (
-          <li key={name}>
-            <span className="running__pos">{i + 1}</span>
-            <span className="running__label">{name}</span>
-            <button type="button" className="btn btn--ghost btn--small" aria-label={`Move ${name} down the stack`}
-                    disabled={i === 0} onClick={() => move(i, -1)}>↓ back</button>
-            <button type="button" className="btn btn--ghost btn--small" aria-label={`Move ${name} up the stack`}
-                    disabled={i === draft.length - 1} onClick={() => move(i, 1)}>↑ front</button>
-            <button type="button" className="btn btn--ghost btn--small" aria-label={`Remove ${name}`}
-                    onClick={() => void save(draft.filter((l) => l !== name))}>
+          <div key={name} className="cfg-console__layer">
+            <span className="cfg-console__mono">{String(i + 1).padStart(2, '0')}</span>
+            <span className="cfg-console__layer-name">{name}</span>
+            <button
+              type="button"
+              className="edit-console__iconbtn"
+              aria-label={`Move ${name} down the stack`}
+              disabled={i === 0}
+              onClick={() => move(i, -1)}
+            >
+              <ChevronDown size={13} aria-hidden /> back
+            </button>
+            <button
+              type="button"
+              className="edit-console__iconbtn"
+              aria-label={`Move ${name} up the stack`}
+              disabled={i === draft.length - 1}
+              onClick={() => move(i, 1)}
+            >
+              <ChevronUp size={13} aria-hidden /> front
+            </button>
+            <button
+              type="button"
+              className="edit-console__iconbtn"
+              aria-label={`Remove ${name}`}
+              onClick={() => void save(draft.filter((l) => l !== name))}
+            >
               <X size={13} aria-hidden />
             </button>
-          </li>
+          </div>
         ))}
-      </ol>
+      </div>
 
-      <fieldset className="cfg__color">
-        <legend>Colour</legend>
-        {([
-          ['matrix', 'Matrix', ['bt709', 'bt601', 'bt2020']],
-          ['range', 'Fill range', ['narrow', 'full']],
-          // Separate from the fill range on purpose: a narrow fill with a full
-          // key is a real plant configuration.
-          ['key_range', 'Key range', ['narrow', 'full']],
-          ['key_mode', 'Key mode', ['fill', 'key', 'fill_key', 'embedded']],
-        ] as const).map(([field, label, options]) => (
-          <label className="field" key={field}>
-            <span>{label}</span>
-            <select
-              value={col[field]}
-              onChange={(e) => {
-                const next = { ...col, [field]: e.target.value }
-                setCol(next)
-                void save(draft)
-              }}
-            >
-              {options.map((o) => (
-                <option key={o} value={o}>{o}</option>
-              ))}
-            </select>
-          </label>
-        ))}
-      </fieldset>
-
-      <fieldset className="cfg__color">
-        <legend>Test patterns</legend>
-        <p className="show__dim">
-          These sit above the layer stack, so you can prove a configuration
-          without clearing the show off air.
-        </p>
-        <div className="running__add">
-          {PATTERNS.map((p) => (
-            <button
-              key={p.id}
-              type="button"
-              className={pattern === p.id ? 'btn btn--take btn--small' : 'btn btn--ghost btn--small'}
-              title={`Proves ${p.proves}`}
-              onClick={async () => {
-                const next = pattern === p.id ? null : p.id
-                setPattern(next)
-                await post(`${keys.node(nodeId)}/outputs/${outputId}/test-pattern`, { pattern: next })
-              }}
-            >
-              {p.label}
-            </button>
+      <div className="cfg-console__grid">
+        <div className="cfg-console__fieldset">
+          <GroupHeader label="Colour" />
+          {([
+            ['matrix', 'Matrix', ['bt709', 'bt601', 'bt2020']],
+            ['range', 'Fill range', ['narrow', 'full']],
+            // Separate from the fill range on purpose: a narrow fill with a
+            // full key is a real plant configuration.
+            ['key_range', 'Key range', ['narrow', 'full']],
+            ['key_mode', 'Key mode', ['fill', 'key', 'fill_key', 'embedded']],
+          ] as const).map(([field, label, options]) => (
+            <FormGroup key={field} label={label}>
+              <select
+                value={col[field]}
+                onChange={(e) => {
+                  const next = { ...col, [field]: e.target.value }
+                  setCol(next)
+                  void save(draft)
+                }}
+              >
+                {options.map((o) => (
+                  <option key={o} value={o}>{o}</option>
+                ))}
+              </select>
+            </FormGroup>
           ))}
         </div>
-        {pattern ? (
-          <p className="show__dim">
-            {PATTERNS.find((p) => p.id === pattern)?.proves}
+
+        <div className="cfg-console__fieldset">
+          <GroupHeader label="Test patterns" />
+          <p className="cfg-console__dim">
+            These sit above the layer stack, so you can prove a configuration without clearing
+            the show off air.
           </p>
-        ) : null}
-      </fieldset>
+          <div className="cfg-console__patterns">
+            {PATTERNS.map((p) => (
+              <Button
+                key={p.id}
+                variant={pattern === p.id ? 'primary' : 'secondary'}
+                title={`Proves ${p.proves}`}
+                onClick={() => {
+                  const next = pattern === p.id ? null : p.id
+                  setPattern(next)
+                  void post(`${keys.node(nodeId)}/outputs/${outputId}/test-pattern`, { pattern: next })
+                }}
+              >
+                {p.label}
+              </Button>
+            ))}
+          </div>
+          {pattern ? (
+            <p className="cfg-console__dim">{PATTERNS.find((p) => p.id === pattern)?.proves}</p>
+          ) : null}
+        </div>
+      </div>
 
       <form
-        className="cfg__add"
+        className="cfg-console__add"
         onSubmit={(e) => {
           e.preventDefault()
           const name = adding.trim()
@@ -342,8 +396,15 @@ function OutputEditor({
           void save([...draft, name])
         }}
       >
-        <input value={adding} onChange={(e) => setAdding(e.target.value)} placeholder="New layer name" aria-label="New layer name" />
-        <button type="submit" className="btn btn--ghost btn--small"><Plus size={13} aria-hidden /> Add</button>
+        <input
+          value={adding}
+          onChange={(e) => setAdding(e.target.value)}
+          placeholder="New layer name"
+          aria-label="New layer name"
+        />
+        <button type="submit" className="c-btn c-btn--secondary">
+          <Plus size={13} aria-hidden /> Add
+        </button>
       </form>
     </div>
   )

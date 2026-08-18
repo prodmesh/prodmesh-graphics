@@ -43,7 +43,22 @@ import { open as openDb } from './db.js'
 import { SCENE_READER_MAJOR } from './manifest.js'
 
 const API_VERSION = 1
-const PORT = Number(process.env.PORT ?? 8519)
+
+/**
+ * The listen port: `--port <n>` beats `PMG_PORT` beats `PORT` beats 8519.
+ *
+ * The explicit flag exists because dev harnesses (Claude Code's preview, some
+ * IDE runners) inject a generic `PORT` into everything they spawn — which sent
+ * this server racing Vite for the same socket, and the symptom was a UI whose
+ * every API call 500'd while both processes claimed to be running fine.
+ * `npm run dev` pins the port with the flag so no environment can move it.
+ */
+function listenPort() {
+  const flag = process.argv.indexOf('--port')
+  if (flag !== -1 && process.argv[flag + 1]) return Number(process.argv[flag + 1])
+  return Number(process.env.PMG_PORT ?? process.env.PORT ?? 8519)
+}
+const PORT = listenPort()
 const HERE = path.dirname(fileURLToPath(import.meta.url))
 
 export function createApp() {

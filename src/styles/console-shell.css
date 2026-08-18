@@ -80,13 +80,24 @@
   flex-direction: column;
 }
 
-/* A mode that has not moved to panels yet scrolls as a page. */
+/* A mode that scrolls as a page rather than filling with panels. */
 .mode-scroll {
   flex-grow: 1;
   min-width: 0;
   overflow: auto;
   padding: 22px 26px;
 }
+
+/* An empty state with instructions — the only dashed border in the product,
+   because it marks a place where something is missing rather than a thing. */
+.mode__stub {
+  border: 1px dashed var(--pm-ink-400);
+  border-radius: var(--pm-radius-8);
+  padding: 20px;
+  color: var(--pm-text-secondary);
+  max-width: 62ch;
+}
+.mode__stub code { color: var(--pm-cyan); }
 
 /* The toolbar strip some modes place under the header. */
 .console__toolbar {

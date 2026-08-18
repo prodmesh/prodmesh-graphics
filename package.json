@@ -9,7 +9,7 @@
   },
   "scripts": {
     "dev": "concurrently -n server,web -c cyan,magenta \"npm:dev:server\" \"npm:dev:web\"",
-    "dev:server": "node --watch server/index.js",
+    "dev:server": "node --watch server/index.js --port 8519",
     "dev:web": "vite",
     "build": "npm run wasm && tsc -b && vite build",
     "preview": "vite preview",
