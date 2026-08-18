@@ -1,0 +1,668 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "ProdMesh Graphics \u2014 control API",
+    "version": "1.0.0",
+    "description": "The documented control surface. **This is the only real surface**; every other one \u2014 Companion, RossTalk, DashBoard, GPI, OSC, MIDI \u2014 is a thin adapter over it, and if an adapter needs something this cannot express, the API grows (control-surfaces.md \u00a71).\n\n## Two hosts, one shape\n\nThe control server on `:8519` owns content and assignment. Each playout node also serves `POST /cue` on `:8520` with the **same body**, and that one keeps working when the server is down \u2014 which is why GPI, OSC and MIDI terminate there. An adapter changes a host, not a payload.\n\n## The take button must never lie\n\n`POST /api/cue` is **synchronous**. It does not return until the node confirms or the deadline expires. A 2xx means it is on air; anything else says why in `label`, as a sentence meant to be shown to an operator verbatim.\n\n## Four results that mean different things\n\n`applied` fired. `deduped` was the same action arriving twice \u2014 the mechanism working. `superseded` was replaced by a newer take for the same layers before it fired (ADR 0017). `rejected` did not fire, and `reason` says why. A panel with three lamps needs `superseded` and a late `rejected` to light different ones.\n\n## cue_id is the caller's responsibility\n\nGenerate it **where the human acted** \u2014 at button-press, at key-down, at the GPI edge \u2014 and reuse it on retry. It is carried unchanged to the node, which dedupes on it. A client that mints a fresh id per retry has defeated the mechanism, so a missing one is a 422 rather than something the server invents."
+  },
+  "servers": [
+    {
+      "url": "http://localhost:8519",
+      "description": "Control server"
+    },
+    {
+      "url": "http://localhost:8520",
+      "description": "Playout node \u2014 /cue and /status only, works with the server down"
+    }
+  ],
+  "tags": [
+    {
+      "name": "cue",
+      "description": "Putting graphics on air. The operative surface."
+    },
+    {
+      "name": "rundown",
+      "description": "The running order and the operator's place in it."
+    },
+    {
+      "name": "content",
+      "description": "Templates and Items."
+    },
+    {
+      "name": "nodes",
+      "description": "Playout nodes and their outputs."
+    }
+  ],
+  "paths": {
+    "/api/cue": {
+      "post": {
+        "tags": [
+          "cue"
+        ],
+        "operationId": "cue",
+        "summary": "Take, take out, update, clear",
+        "description": "Synchronous: returns when the node confirms or the deadline expires.\n\n**A partly-delivered take returns 503**, not 207, carrying `result: \"partial\"` and a per-destination breakdown. Deliberately a failure status with success detail: the take button must not go green unless everything fired, and a client checking only `res.ok` goes green on any 2xx.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CueRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Applied, deduped, or superseded.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CueResult"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such node.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Rejected by the node, not adopted, or no such item.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Missing cue_id, unknown op, or nothing to do.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Node offline, no confirmation, or **partly delivered**.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/cue/batch": {
+      "post": {
+        "tags": [
+          "cue"
+        ],
+        "operationId": "cueBatch",
+        "summary": "Several cues as one look",
+        "description": "Stops at the first failure. Half a look is worse than none.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "cues"
+                ],
+                "properties": {
+                  "cues": {
+                    "type": "array",
+                    "items": {
+                      "$ref": "#/components/schemas/CueRequest"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Every cue applied."
+          },
+          "409": {
+            "description": "Stopped partway; `results` holds what did fire.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/cuelog": {
+      "get": {
+        "tags": [
+          "cue"
+        ],
+        "operationId": "cueLog",
+        "summary": "What fired, in order",
+        "description": "`?since=<seq>` recovers a gap. Events reach a browser as the snapshot of this log's tail, never as bare frames on a conflating topic (ADR 0008).",
+        "parameters": [
+          {
+            "name": "show",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "default": "default"
+            }
+          },
+          {
+            "name": "since",
+            "in": "query",
+            "schema": {
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Entries after `since`."
+          }
+        }
+      }
+    },
+    "/api/rundowns/{id}/cursor": {
+      "get": {
+        "tags": [
+          "rundown"
+        ],
+        "operationId": "getCursor",
+        "summary": "Where the operator is",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The cursor."
+          },
+          "404": {
+            "description": "No such rundown.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "tags": [
+          "rundown"
+        ],
+        "operationId": "moveCursor",
+        "summary": "Move, jump to an item, or jump to a section",
+        "description": "**Navigation only \u2014 this never takes anything.** Show composes a cursor move and a cue into one button because that is what an operator wants; keeping them separate here is what lets the UI show 'the rundown is here, the output is showing something else' instead of pretending they cannot differ.\n\n`section` resolves to that section's FIRST entry \u2014 going back to the chorus means starting it again.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "delta": {
+                    "type": "integer"
+                  },
+                  "item": {
+                    "type": "string"
+                  },
+                  "section": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The new cursor."
+          },
+          "404": {
+            "description": "No such rundown.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Not in this rundown, or nothing to move by.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/rundowns": {
+      "get": {
+        "tags": [
+          "rundown"
+        ],
+        "operationId": "listRundowns",
+        "summary": "Every rundown",
+        "responses": {
+          "200": {
+            "description": "Every rundown"
+          }
+        }
+      }
+    },
+    "/api/playlists": {
+      "get": {
+        "tags": [
+          "rundown"
+        ],
+        "operationId": "listPlaylists",
+        "summary": "Every playlist",
+        "responses": {
+          "200": {
+            "description": "Every playlist"
+          }
+        }
+      }
+    },
+    "/api/items": {
+      "get": {
+        "tags": [
+          "content"
+        ],
+        "operationId": "listItems",
+        "summary": "Every Item",
+        "responses": {
+          "200": {
+            "description": "Every Item"
+          }
+        }
+      }
+    },
+    "/api/templates": {
+      "get": {
+        "tags": [
+          "content"
+        ],
+        "operationId": "listTemplates",
+        "summary": "Every template",
+        "responses": {
+          "200": {
+            "description": "Every template"
+          }
+        }
+      }
+    },
+    "/api/nodes": {
+      "get": {
+        "tags": [
+          "nodes"
+        ],
+        "operationId": "listNodes",
+        "summary": "Every node, with what it reports on air",
+        "responses": {
+          "200": {
+            "description": "Every node, with what it reports on air"
+          }
+        }
+      }
+    },
+    "/api/health": {
+      "get": {
+        "tags": [
+          "nodes"
+        ],
+        "operationId": "health",
+        "summary": "Server and node health",
+        "responses": {
+          "200": {
+            "description": "Server and node health"
+          }
+        }
+      }
+    },
+    "/api/version": {
+      "get": {
+        "tags": [
+          "nodes"
+        ],
+        "operationId": "version",
+        "summary": "Server version",
+        "responses": {
+          "200": {
+            "description": "Server version"
+          }
+        }
+      }
+    },
+    "/api/rundowns/{id}": {
+      "get": {
+        "tags": [
+          "rundown"
+        ],
+        "operationId": "getRundown",
+        "summary": "One rundown: its playlists, their modes and sections, and the cursor",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The rundown."
+          },
+          "404": {
+            "description": "No such rundown.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/stream": {
+      "get": {
+        "tags": [
+          "nodes"
+        ],
+        "operationId": "stream",
+        "summary": "Server-sent events for snapshot topics",
+        "description": "`?topics=a,b`. Every topic here is **snapshot-shaped and conflates**: the newest frame supersedes every earlier one completely. Cues are NOT delivered this way \u2014 a superseded event is a lost event. Use `/api/cuelog` (ADR 0008).",
+        "parameters": [
+          {
+            "name": "topics",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "An SSE stream."
+          }
+        }
+      }
+    },
+    "/cue": {
+      "post": {
+        "tags": [
+          "cue"
+        ],
+        "operationId": "nodeCue",
+        "summary": "The same cue, submitted to a node directly (port 8520)",
+        "description": "**Works with the control server down**, which is why GPI, OSC and MIDI terminate here (ADR 0014). Same body as `/api/cue`, so an adapter changes a host rather than a payload.\n\nOps are a subset \u2014 `take`, `take_out`, `clear_layer`, `clear_all`, `arm` \u2014 because `update` needs bound data and `timeline` needs a name and an action, and a contact closure has neither.\n\n**No authentication.** A booth LAN with no internet, and a credential check against a server that is down is a lock with no key.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CueRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Applied, deduped, or superseded.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CueResult"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Rejected by the engine; `reason` says why.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "No cue_id, or an op this surface does not take.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The engine did not confirm.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/status": {
+      "get": {
+        "tags": [
+          "nodes"
+        ],
+        "operationId": "nodeStatus",
+        "summary": "What a node has on air (port 8520)",
+        "description": "The node is the authority for this (ADR 0009), so it is the answer rather than a cache of one \u2014 which is why it is worth having when the server has failed.",
+        "responses": {
+          "200": {
+            "description": "Outputs, layers, and occupants."
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "Problem": {
+        "type": "object",
+        "description": "Every failure. `label` is a complete sentence written for an operator and is meant to be shown verbatim rather than reworded.",
+        "required": [
+          "error",
+          "label"
+        ],
+        "properties": {
+          "error": {
+            "type": "string",
+            "description": "Stable machine code."
+          },
+          "label": {
+            "type": "string",
+            "description": "The sentence to show."
+          }
+        }
+      },
+      "CueRequest": {
+        "type": "object",
+        "required": [
+          "cue_id",
+          "op"
+        ],
+        "properties": {
+          "cue_id": {
+            "type": "string",
+            "description": "Minted where the human acted; reused on retry. See the dedupe note."
+          },
+          "op": {
+            "type": "string",
+            "enum": [
+              "take",
+              "take_also",
+              "take_out",
+              "arm",
+              "update",
+              "clear_layer",
+              "clear_all",
+              "preload",
+              "timeline"
+            ]
+          },
+          "item": {
+            "type": "string",
+            "description": "Required by take, take_also, arm and preload."
+          },
+          "node": {
+            "type": "string",
+            "description": "Omit on a take to fan to every node the Item lives on (ADR 0018). Naming one takes to that node alone \u2014 the escape hatch when a machine is having a bad morning."
+          },
+          "output": {
+            "type": "string"
+          },
+          "layer": {
+            "type": "string",
+            "description": "By NAME, never by index: an index silently re-points at a different graphic the moment someone reorders the stack."
+          },
+          "data": {
+            "type": "object",
+            "additionalProperties": true,
+            "description": "update only. Rebinds a live graphic and morphs to the new layout."
+          },
+          "tween_ms": {
+            "type": "integer",
+            "description": "update only. 0 is a hard cut \u2014 correcting a misspelled name should not be a 400 ms animation about itself."
+          },
+          "deadline_ms": {
+            "type": "integer",
+            "default": 500,
+            "description": "A take past its deadline is REJECTED, not fired late. A graphic four seconds after the button is worse than one that never appears."
+          },
+          "surface": {
+            "type": "string",
+            "enum": [
+              "show_view",
+              "companion",
+              "rosstalk",
+              "gpi",
+              "osc",
+              "midi",
+              "api",
+              "node_local"
+            ],
+            "description": "Recorded on every cue-log entry. Without it the log is confusing the first time someone uses a GPI."
+          },
+          "show": {
+            "type": "string",
+            "default": "default"
+          }
+        }
+      },
+      "CueResult": {
+        "type": "object",
+        "properties": {
+          "result": {
+            "type": "string",
+            "enum": [
+              "applied",
+              "deduped",
+              "superseded",
+              "partial"
+            ]
+          },
+          "fired_at_frame": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "description": "The output frame the graphic went on. Not the frame of the request."
+          },
+          "seq": {
+            "type": "integer",
+            "description": "Cue-log sequence, for ?since= gap recovery."
+          },
+          "label": {
+            "type": "string"
+          },
+          "destinations": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/DestinationResult"
+            },
+            "description": "Present when a take fanned to more than one node."
+          }
+        }
+      },
+      "DestinationResult": {
+        "type": "object",
+        "properties": {
+          "node": {
+            "type": "string"
+          },
+          "result": {
+            "type": "string"
+          },
+          "detail": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      }
+    }
+  }
+}
