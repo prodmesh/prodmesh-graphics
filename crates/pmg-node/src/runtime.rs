@@ -507,7 +507,7 @@ impl Runtime {
         let mut last_state = Instant::now();
         loop {
             match rx.recv_timeout(Duration::from_millis(200)) {
-                Ok(FromLink::Cue(c, received_at)) => {
+                Ok(FromLink::Cue(c, received_at, reply)) => {
                     // Arming happens under the engine lock, which briefly stalls
                     // every render thread. An arm is 0.3–2 ms against a 16.68 ms
                     // budget and a take is a few times a minute, so it costs at
@@ -542,7 +542,7 @@ impl Runtime {
                     // holding the arrow keys through a chorus gets the slide
                     // they stopped on instead of the layer flashing through
                     // every one they passed.
-                    let mut batch = vec![FromLink::Cue(c, received_at)];
+                    let mut batch = vec![FromLink::Cue(c, received_at, reply)];
                     while let Ok(m) = rx.try_recv() {
                         batch.push(m);
                     }
@@ -554,14 +554,14 @@ impl Runtime {
                     // it was not written for.
                     let mut dead = vec![false; batch.len()];
                     for i in 0..batch.len() {
-                        let FromLink::Cue(a, _) = &batch[i] else {
+                        let FromLink::Cue(a, _, _) = &batch[i] else {
                             continue;
                         };
                         let Some(keys) = a.op.take_layers() else {
                             continue;
                         };
                         dead[i] = batch[i + 1..].iter().any(|m| {
-                            matches!(m, FromLink::Cue(b, _)
+                            matches!(m, FromLink::Cue(b, _, _)
                                 if b.op.take_layers().as_ref() == Some(&keys))
                         });
                     }
@@ -569,7 +569,7 @@ impl Runtime {
                     let mut acted = false;
                     for (i, m) in batch.into_iter().enumerate() {
                         match m {
-                            FromLink::Cue(c, received_at) if dead[i] => {
+                            FromLink::Cue(c, received_at, reply) if dead[i] => {
                                 let ack = self
                                     .engine
                                     .lock()
@@ -577,10 +577,10 @@ impl Runtime {
                                     .supersede(&c, crate::link::now_ms());
                                 tracing::info!(cue = %c.cue_id, result = ?ack.result,
                                                "superseded before it fired");
-                                let _ = tx.send(ToLink::Ack(ack));
+                                answer(&tx, reply, ack);
                                 let _ = received_at;
                             }
-                            FromLink::Cue(c, received_at) => {
+                            FromLink::Cue(c, received_at, reply) => {
                                 let received_late =
                                     is_late(c.deadline_ms, received_at.elapsed());
                                 let ack = {
@@ -594,7 +594,7 @@ impl Runtime {
                                 };
                                 tracing::info!(cue = %c.cue_id, result = ?ack.result,
                                                reason = ?ack.reason, "cue");
-                                let _ = tx.send(ToLink::Ack(ack));
+                                answer(&tx, reply, ack);
                                 acted = true;
                             }
                             // Anything that is not a cue goes back through the
@@ -1317,6 +1317,27 @@ fn open_backend(spec: &OutputSpec) -> Result<Backend> {
             spec.fps.0 as i32,
             spec.fps.1 as i32,
         )?)),
+    }
+}
+
+/// Send an ack to whoever asked for it.
+///
+/// A cue from the server is acked up the link; a cue from the node's own API on
+/// :8520 is answered over its own channel and **not** sent up the link — the
+/// server never asked for it and has no pending cue to match it to. Both go
+/// through the identical apply path; only the reply address differs.
+fn answer(
+    tx: &Sender<ToLink>,
+    reply: Option<std::sync::mpsc::Sender<pmg_proto::CueAck>>,
+    ack: pmg_proto::CueAck,
+) {
+    match reply {
+        Some(r) => {
+            let _ = r.send(ack);
+        }
+        None => {
+            let _ = tx.send(ToLink::Ack(ack));
+        }
     }
 }
 

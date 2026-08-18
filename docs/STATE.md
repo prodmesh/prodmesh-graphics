@@ -104,6 +104,7 @@ other than what they were.
 | mDNS discovery | 🟢 **verified.** A node with no `--server` finds the server and links; two servers are reported rather than guessed between. Needs macOS Local Network permission (see INTEGRATION-NOTES) |
 | Configure | 🟢 adopt a node, see its capabilities, edit its layer stack — pushed live |
 | S8 chaos harness | 🟢 **gating.** `npm run chaos` — 1000+ takes through five injections, zero fired twice |
+| Node API (M4, ADR 0014) | 🟢 **the emergency surface.** `:8520` — `POST /cue` taking the same body shape as the server's endpoint, `GET /status`, and a self-refreshing status page. **Verified with the control server stopped**: a cue applied and returned its frame number, a repeat deduped, a bad layer was rejected by name. A local cue goes on the SAME channel the link uses and is applied by the same loop — same dedupe, same deadline, same superseding — because no adapter gets its own path into the engine. No auth, deliberately: booth LAN, and a credential check against a server that is down is a lock with no key. Ops are a subset (`take`, `take_out`, `clear_layer`, `clear_all`, `arm`); `update` and `timeline` need a keyboard a GPI contact does not have |
 | `pmg-node` | 🟢 **the playout binary.** Link client, staging, durable assignment, layer engine, NDI out. Survives server loss; 10 cue-rule tests |
 | `pmg-cas` | 🟢 atomic writes, streaming put, verify. Agrees with `server/cas.js` |
 | Colour model | 🟢 601/709/2020 RGB→YCbCr with correct narrow spans, and a key path that provably bypasses the matrix. 6 tests |

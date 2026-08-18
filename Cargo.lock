@@ -1088,6 +1088,7 @@ dependencies = [
  "pmg-text",
  "pollster",
  "serde",
+ "serde_json",
  "tracing",
  "tracing-subscriber",
  "tungstenite",

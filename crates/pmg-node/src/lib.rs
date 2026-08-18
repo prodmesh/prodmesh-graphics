@@ -8,6 +8,7 @@
 pub mod discover;
 pub mod engine;
 pub mod link;
+pub mod local;
 pub mod render;
 pub mod runtime;
 pub mod staging;

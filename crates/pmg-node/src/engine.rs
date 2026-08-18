@@ -360,7 +360,19 @@ impl LayerEngine {
 
         // Idempotency, on both keys. `seq` catches a replay after a reconnect;
         // `cue_id` catches the same human action arriving twice by two routes.
-        if cue.seq <= self.last_applied_seq || self.applied.contains(&cue.cue_id) {
+        //
+        // **seq 0 means "not from the server's stream"** — a cue submitted to
+        // the node's own API on :8520 (ADR 0014). It has no place in the
+        // server's ordering, so the replay check does not apply to it, and
+        // applying it anyway made EVERY local cue dedupe: `0 <= last_applied`
+        // is true from the first frame, so a GPI could never fire anything.
+        // Found by the M4 verification — a take with the server stopped.
+        //
+        // Dedupe still holds for these, on `cue_id`, which is the half of the
+        // key a human action owns and the half that makes a bouncing contact
+        // closure one take.
+        let replayed = cue.seq > 0 && cue.seq <= self.last_applied_seq;
+        if replayed || self.applied.contains(&cue.cue_id) {
             return ack(CueResult::Deduped, None, None);
         }
 

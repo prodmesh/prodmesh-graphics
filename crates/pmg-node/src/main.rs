@@ -34,11 +34,11 @@
 //! surfaces, no mDNS. `--server` is required. Those are M2.
 
 use anyhow::{Context, Result};
-use pmg_node::{link, runtime, store};
+use pmg_node::{link, local, runtime, store};
 
-/// Node API and status page. The emergency surface when the server is dead —
-/// M2, and deliberately not faked here.
-#[allow(dead_code)]
+/// Node API and status page — the emergency surface when the server is dead
+/// (`docs/specs/control-surfaces.md` §2). GPI, OSC and MIDI terminate here,
+/// and Companion or RossTalk can be pointed here as a fallback.
 const NODE_PORT: u16 = 8520;
 
 const USAGE: &str = "\
@@ -72,6 +72,10 @@ USAGE:
     --font <file.ttf>      A face to use when the assignment carries no font
                            asset. Provisional — see runtime.rs.
     --headless             Render and time frames, but send nothing.
+    --api-port <n>         The node's own control API and status page.
+                           Default 8520. This is the surface that still works
+                           when the control server is down, so GPI, OSC and
+                           MIDI terminate here.
     --preview-port <n>     Preview channel. Default 8521; 0 disables it.
     --inject-stall-at <s>  TEST INSTRUMENT. Stall the render thread for one
                            second, once, this many seconds in — so audio-sync
@@ -355,6 +359,10 @@ fn main() -> Result<()> {
     }
     println!("  boot state black (auto-restore is a deliberate non-feature)\n");
 
+    let node_port: u16 = arg(&args, "--api-port")
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(NODE_PORT);
+
     let (link_tx, rt_rx) = std::sync::mpsc::channel();
     let (rt_tx, link_rx) = std::sync::mpsc::channel();
 
@@ -366,6 +374,22 @@ fn main() -> Result<()> {
         version: env!("CARGO_PKG_VERSION").to_string(),
         capabilities: capabilities(&rt),
     };
+    // The node's own API, on the same channel the link uses. Started BEFORE
+    // the link, because its whole reason to exist is the case where the link
+    // never comes up.
+    let api_tx = link_tx.clone();
+    let api_state = rt.engine().clone();
+    std::thread::Builder::new()
+        .name("pmg-api".into())
+        .spawn(move || {
+            if let Err(e) = local::serve(node_port, api_tx, api_state) {
+                // Loud, and not fatal. A port already in use must not stop a
+                // node putting graphics on air — the API is the fallback
+                // surface, not the reason the machine is here.
+                tracing::error!(port = node_port, error = %e, "node API did not start");
+            }
+        })?;
+
     std::thread::Builder::new()
         .name("pmg-link".into())
         .spawn(move || link::run(cfg, link_tx, link_rx))?;

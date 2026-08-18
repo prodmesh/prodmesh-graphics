@@ -44,7 +44,19 @@ pub enum FromLink {
     /// whole point is to measure the time in between: a node busy staging an
     /// assignment can leave a cue sitting in the channel, and a deadline
     /// measured from the moment of use cannot see that at all.
-    Cue(Box<pmg_proto::Cue>, std::time::Instant),
+    /// The third field is where the ack goes when the cue did NOT come from
+    /// the server: the node's own API on :8520, which answers over HTTP and so
+    /// needs the answer back rather than sent up the link (ADR 0014).
+    ///
+    /// Carried on the same variant, deliberately. A local cue takes exactly the
+    /// same path — same dedupe, same deadline, same superseding — because "no
+    /// adapter gets its own path into the layer engine" is the rule the whole
+    /// surface story rests on, and a second variant is how that rule rots.
+    Cue(
+        Box<pmg_proto::Cue>,
+        std::time::Instant,
+        Option<std::sync::mpsc::Sender<pmg_proto::CueAck>>,
+    ),
     Resync(String),
 }
 
@@ -200,7 +212,7 @@ fn handle(
             return Ok(Some(gen));
         }
         ToNode::Cue(c) => {
-            let _ = tx.send(FromLink::Cue(Box::new(c), std::time::Instant::now()));
+            let _ = tx.send(FromLink::Cue(Box::new(c), std::time::Instant::now(), None));
         }
         ToNode::Resync { reason } => {
             let _ = tx.send(FromLink::Resync(reason));

@@ -622,3 +622,46 @@ fn an_item_predating_destinations_has_nothing_to_also_take() {
     );
     assert_eq!(ack.reason, Some(RejectReason::NotReady));
 }
+
+// ---------------------------------------------------------------------------
+// Cues that did not come from the server — the node's own API (ADR 0014).
+// ---------------------------------------------------------------------------
+
+#[test]
+fn a_local_cue_is_not_deduped_by_a_sequence_it_never_had() {
+    // `seq` orders the SERVER's stream and catches a replay after a reconnect.
+    // A cue submitted to the node's own API has no place in that ordering and
+    // carries seq 0 to say so.
+    //
+    // Applying the replay check to it anyway is what the M4 verification found:
+    // `0 <= last_applied_seq` is true from the very first frame, so every GPI,
+    // OSC and MIDI cue answered "deduped" and nothing could ever fire. With the
+    // server down, which is the one case those surfaces exist for.
+    let mut e = engine();
+    let mut c = cue(1, "gpi-1", clear_all());
+    c.seq = 0;
+    assert_eq!(e.apply(&c, &Empty, 0, false).result, CueResult::Applied);
+}
+
+#[test]
+fn a_local_cue_still_dedupes_on_its_id() {
+    // The half of the key a human action owns — and the half that makes a
+    // bouncing contact closure one take rather than four.
+    let mut e = engine();
+    let mut c = cue(0, "gpi-1", clear_all());
+    c.seq = 0;
+    assert_eq!(e.apply(&c, &Empty, 0, false).result, CueResult::Applied);
+    assert_eq!(e.apply(&c, &Empty, 0, false).result, CueResult::Deduped);
+}
+
+#[test]
+fn a_server_replay_is_still_deduped() {
+    // The sentinel must not weaken the rule it sits beside: a cue that DOES
+    // carry a sequence is still checked against it.
+    let mut e = engine();
+    e.apply(&cue(5, "a", clear_all()), &Empty, 0, false);
+    assert_eq!(
+        e.apply(&cue(3, "b", clear_all()), &Empty, 0, false).result,
+        CueResult::Deduped
+    );
+}
