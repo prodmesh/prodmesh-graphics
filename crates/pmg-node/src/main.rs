@@ -41,6 +41,11 @@ use pmg_node::{link, local, runtime, store};
 /// and Companion or RossTalk can be pointed here as a fallback.
 const NODE_PORT: u16 = 8520;
 
+/// OSC in, when `<state-dir>/surfaces.json` maps any addresses. Family 85xx
+/// band, like everything else here — OSC has no registered port and desks let
+/// you type one.
+const OSC_PORT: u16 = 8522;
+
 const USAGE: &str = "\
 pmg-node — ProdMesh Graphics playout node
 
@@ -76,6 +81,8 @@ USAGE:
                            Default 8520. This is the surface that still works
                            when the control server is down, so GPI, OSC and
                            MIDI terminate here.
+    --osc-port <n>         OSC in. Default 8522. Only listens when
+                           <state-dir>/surfaces.json maps OSC addresses.
     --preview-port <n>     Preview channel. Default 8521; 0 disables it.
     --inject-stall-at <s>  TEST INSTRUMENT. Stall the render thread for one
                            second, once, this many seconds in — so audio-sync
@@ -363,6 +370,10 @@ fn main() -> Result<()> {
         .and_then(|v| v.parse().ok())
         .unwrap_or(NODE_PORT);
 
+    let osc_port: u16 = arg(&args, "--osc-port")
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(OSC_PORT);
+
     let (link_tx, rt_rx) = std::sync::mpsc::channel();
     let (rt_tx, link_rx) = std::sync::mpsc::channel();
 
@@ -374,6 +385,23 @@ fn main() -> Result<()> {
         version: env!("CARGO_PKG_VERSION").to_string(),
         capabilities: capabilities(&rt),
     };
+    // GPI, OSC and MIDI — the surfaces that terminate HERE (ADR 0014).
+    //
+    // Read from the node's own disk, because a mapping fetched from the server
+    // is a mapping that is missing on the morning the server is down.
+    let mapping = pmg_node::surface::Mapping::load(std::path::Path::new(&state_dir))?;
+    if !mapping.osc.is_empty() {
+        let osc_tx = link_tx.clone();
+        let m = mapping.clone();
+        std::thread::Builder::new()
+            .name("pmg-osc".into())
+            .spawn(move || {
+                if let Err(e) = pmg_node::surface::serve_osc(osc_port, m, osc_tx) {
+                    tracing::error!(port = osc_port, error = %e, "OSC listener did not start");
+                }
+            })?;
+    }
+
     // The node's own API, on the same channel the link uses. Started BEFORE
     // the link, because its whole reason to exist is the case where the link
     // never comes up.

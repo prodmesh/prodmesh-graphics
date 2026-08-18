@@ -13,6 +13,7 @@ pub mod render;
 pub mod runtime;
 pub mod staging;
 pub mod store;
+pub mod surface;
 
 pub fn selftest() -> Result<(), String> {
     Ok(())
