@@ -138,6 +138,121 @@ pub fn arm(doc_json: &str, data_json: &str, faces: &[Vec<u8>]) -> Result<Armed, 
     })
 }
 
+// ---------------------------------------------------------------------------
+// Interaction — the ADR 0019 surface, session-shaped.
+//
+// Everything with a decision in it stays in `pmg_render::interact`; this layer
+// only finds nodes by id, serializes answers, and applies a finished drag to a
+// COPY of the document. The copy matters: the armed instance keeps rendering
+// the old document until the caller re-arms with the returned one, so the
+// canvas never shows a half-applied edit.
+// ---------------------------------------------------------------------------
+
+use pmg_render::interact;
+use pmg_render::scene::FrameNode;
+
+/// The resting frame — base transforms, no timeline. Editing happens at rest:
+/// a designer drags the design, not a moment of its In animation.
+pub fn rest_frame(armed: &Armed) -> Vec<FrameNode> {
+    pmg_render::scene::apply_tracks(&armed.instance, &Default::default())
+}
+
+fn index_of(armed: &Armed, id: &str) -> Result<usize, String> {
+    armed
+        .instance
+        .nodes
+        .iter()
+        .position(|n| n.id == id)
+        .ok_or_else(|| format!("no node {id} in this instance"))
+}
+
+/// The node id under a point, or None.
+pub fn hit(armed: &Armed, frame: &[FrameNode], x: f32, y: f32) -> Option<String> {
+    interact::hit_test(&armed.instance, frame, x, y).map(|i| armed.instance.nodes[i].id.clone())
+}
+
+/// Selection chrome for a node, as JSON (`interact::Handles`).
+pub fn handles_json(armed: &Armed, frame: &[FrameNode], id: &str) -> Result<String, String> {
+    let idx = index_of(armed, id)?;
+    let h = interact::handles_for(&armed.instance, frame, idx);
+    serde_json::to_string(&h).map_err(|e| e.to_string())
+}
+
+pub fn begin_drag(
+    armed: &Armed,
+    frame: &[FrameNode],
+    id: &str,
+    handle: &str,
+    x: f32,
+    y: f32,
+) -> Result<interact::Drag, String> {
+    let idx = index_of(armed, id)?;
+    let handle = interact::Handle::parse(handle).ok_or_else(|| format!("no handle {handle}"))?;
+    Ok(interact::begin_drag(
+        &armed.instance,
+        frame,
+        idx,
+        handle,
+        x,
+        y,
+    ))
+}
+
+/// The current drag proposal, as JSON (`interact::DragResult`).
+pub fn drag_json(
+    armed: &Armed,
+    frame: &[FrameNode],
+    drag: &interact::Drag,
+    x: f32,
+    y: f32,
+    snap: bool,
+) -> Result<String, String> {
+    let r = interact::drag_to(&armed.instance, frame, drag, x, y, snap);
+    serde_json::to_string(&r).map_err(|e| e.to_string())
+}
+
+/// Finish a drag: apply what it proposes to a copy of the document and return
+/// that document as JSON — or None when the drag changed nothing, so a click
+/// that never moved does not dirty the file.
+pub fn end_drag(
+    armed: &Armed,
+    frame: &[FrameNode],
+    drag: &interact::Drag,
+    x: f32,
+    y: f32,
+    snap: bool,
+) -> Result<Option<String>, String> {
+    let r = interact::drag_to(&armed.instance, frame, drag, x, y, snap);
+    let id = armed.instance.nodes[drag.node].id.clone();
+    let mut doc = armed.doc.clone();
+    if drag.handle == interact::Handle::Move {
+        if r.dx == 0.0 && r.dy == 0.0 {
+            return Ok(None);
+        }
+        interact::apply_move(&mut doc, &id, r.dx, r.dy)?;
+    } else {
+        interact::apply_resize(&mut doc, &id, r.w, r.h)?;
+    }
+    serde_json::to_string(&doc)
+        .map(Some)
+        .map_err(|e| e.to_string())
+}
+
+/// Move a node by a fixed amount — the keyboard's arrow-nudge path, and the
+/// one a test can drive without a pointer.
+pub fn nudge(armed: &Armed, id: &str, dx: f32, dy: f32) -> Result<String, String> {
+    let mut doc = armed.doc.clone();
+    interact::apply_move(&mut doc, id, dx, dy)?;
+    serde_json::to_string(&doc).map_err(|e| e.to_string())
+}
+
+/// Fix a node's size from the inspector's inputs.
+pub fn set_size(armed: &Armed, id: &str, w: f32, h: f32) -> Result<String, String> {
+    let mut doc = armed.doc.clone();
+    interact::apply_resize(&mut doc, id, w, h)?;
+    serde_json::to_string(&doc).map_err(|e| e.to_string())
+}
+
 /// The timeline values at a moment, for the scrubber.
 ///
 /// `None` for the timeline name means the resting state — no timeline applied,
@@ -153,12 +268,18 @@ pub fn values_at(
     }
 }
 
-/// Draw one frame into a texture and read it back as raw RGBA8.
+/// Draw one frame and read it back as raw RGBA8.
+///
+/// Composites through [`pmg_render::draw::LinearFrame`] — linear float, then
+/// the encode pass — because that is the node's pipeline (ADR 0012) and the
+/// scene pipelines target the linear format. Rendering into an 8-bit texture
+/// directly stopped being possible when the linear composite landed, and this
+/// canvas doing exactly that was why Design drew nothing: every draw failed
+/// pipeline/attachment validation, visible only as a console warning.
 pub struct Canvas {
     device: wgpu::Device,
     queue: wgpu::Queue,
-    texture: wgpu::Texture,
-    view: wgpu::TextureView,
+    frame: pmg_render::draw::LinearFrame,
     readback: wgpu::Buffer,
     width: u32,
     height: u32,
@@ -178,23 +299,7 @@ impl Canvas {
                 "canvas width {width} needs row padding, which this path does not do"
             ));
         }
-        let texture = device.create_texture(&wgpu::TextureDescriptor {
-            label: Some("pmg-design"),
-            size: wgpu::Extent3d {
-                width,
-                height,
-                depth_or_array_layers: 1,
-            },
-            mip_level_count: 1,
-            sample_count: 1,
-            dimension: wgpu::TextureDimension::D2,
-            // Rgba8Unorm, never Rgba8UnormSrgb: no automatic colour conversion
-            // in the pipeline, on either target. Rule 3 of the parity rules.
-            format: pmg_render::TARGET_FORMAT,
-            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
-            view_formats: &[],
-        });
-        let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+        let frame = pmg_render::draw::LinearFrame::new(&device, width, height);
         let readback = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("pmg-design-readback"),
             size: (bytes_per_row * height) as u64,
@@ -204,8 +309,7 @@ impl Canvas {
         Ok(Self {
             device,
             queue,
-            texture,
-            view,
+            frame,
             readback,
             width,
             height,
@@ -231,36 +335,21 @@ impl Canvas {
         inst: &SceneInstance,
         values: &std::collections::BTreeMap<String, f32>,
     ) {
-        let mut enc = self.device.create_command_encoder(&Default::default());
-        {
-            let _ = enc.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("pmg-design-clear"),
-                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: &self.view,
-                    depth_slice: None,
-                    resolve_target: None,
-                    ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
-                        store: wgpu::StoreOp::Store,
-                    },
-                })],
-                depth_stencil_attachment: None,
-                timestamp_writes: None,
-                occlusion_query_set: None,
-                multiview_mask: None,
-            });
-        }
-        self.queue.submit(Some(enc.finish()));
-
+        // Transparent, not opaque: this is a key signal, and the designer must
+        // see what will actually key.
+        self.frame.clear(&self.device, &self.queue);
         let nodes = pmg_render::scene::apply_tracks(inst, values);
-        renderer.render(&self.device, &self.queue, inst, &nodes, &self.view);
+        renderer.render(&self.device, &self.queue, inst, &nodes, self.frame.view());
     }
 
     pub fn begin_readback(&self) {
+        // Linear → encoded, once, at output (ADR 0012). What is read back is
+        // what a node would put on the wire.
+        self.frame.encode(&self.device, &self.queue);
         let mut enc = self.device.create_command_encoder(&Default::default());
         enc.copy_texture_to_buffer(
             wgpu::TexelCopyTextureInfo {
-                texture: &self.texture,
+                texture: self.frame.output(),
                 mip_level: 0,
                 origin: wgpu::Origin3d::ZERO,
                 aspect: wgpu::TextureAspect::All,
@@ -284,5 +373,101 @@ impl Canvas {
 
     pub fn buffer(&self) -> &wgpu::Buffer {
         &self.readback
+    }
+}
+
+#[cfg(test)]
+mod interaction_tests {
+    use super::*;
+
+    /// A boxes-only template: no fonts needed, so the whole arm → hit → drag →
+    /// re-arm loop runs natively — the same code the browser runs, tested
+    /// without a browser (the reason this file exists outside `design_api`).
+    fn doc_json() -> String {
+        serde_json::json!({
+            "format": "pmg.scene",
+            "format_version": {"major": 1, "minor": 0},
+            "min_reader": 1,
+            "id": "t", "name": "t",
+            "canvas": {"width": 400, "height": 300},
+            "fields": [], "fonts": [], "assets": [],
+            "root": {
+                "id": "root", "kind": "box",
+                "layout": {"width": {"Px": 400.0}, "height": {"Px": 300.0}},
+                "transform": {}, "style": {},
+                "children": [
+                    {"id": "chip", "kind": "box",
+                     "layout": {"width": {"Px": 120.0}, "height": {"Px": 40.0}},
+                     "transform": {},
+                     "style": {"fill": {"rgba": [1.0, 1.0, 1.0, 1.0]}},
+                     "children": []}
+                ]
+            },
+            "timelines": []
+        })
+        .to_string()
+    }
+
+    #[test]
+    fn the_whole_loop_arm_hit_drag_rearm() {
+        let armed = arm(&doc_json(), "{}", &[]).expect("arms without fonts");
+        let frame = rest_frame(&armed);
+
+        // The chip lays out at the origin and is hit; empty canvas is not —
+        // the root has no fill, and structure is transparent to clicks.
+        assert_eq!(hit(&armed, &frame, 60.0, 20.0), Some("chip".into()));
+        assert_eq!(hit(&armed, &frame, 300.0, 200.0), None);
+
+        // Drag it 100 right, 60 down (snap off), and finish.
+        let drag = begin_drag(&armed, &frame, "chip", "move", 60.0, 20.0).unwrap();
+        let doc2 = end_drag(&armed, &frame, &drag, 160.0, 80.0, false)
+            .unwrap()
+            .expect("a real move edits the document");
+
+        // Re-arm the returned document: the chip now lives where it was
+        // dropped, by the same solver that will render it on air.
+        let armed2 = arm(&doc2, "{}", &[]).expect("edited doc still arms");
+        let frame2 = rest_frame(&armed2);
+        assert_eq!(hit(&armed2, &frame2, 60.0, 20.0), None);
+        assert_eq!(hit(&armed2, &frame2, 160.0, 80.0), Some("chip".into()));
+
+        // A drag that never moved is a click, not an edit.
+        let still = begin_drag(&armed, &frame, "chip", "move", 60.0, 20.0).unwrap();
+        assert!(end_drag(&armed, &frame, &still, 60.0, 20.0, false)
+            .unwrap()
+            .is_none());
+    }
+
+    #[test]
+    fn resize_fixes_the_size_in_pixels() {
+        let armed = arm(&doc_json(), "{}", &[]).expect("arms");
+        let frame = rest_frame(&armed);
+        let drag = begin_drag(&armed, &frame, "chip", "se", 120.0, 40.0).unwrap();
+        let doc2 = end_drag(&armed, &frame, &drag, 180.0, 90.0, false)
+            .unwrap()
+            .expect("a resize edits the document");
+        let armed2 = arm(&doc2, "{}", &[]).expect("arms");
+        let chip = armed2
+            .instance
+            .nodes
+            .iter()
+            .find(|n| n.id == "chip")
+            .unwrap();
+        assert_eq!((chip.rect.w, chip.rect.h), (180.0, 90.0));
+    }
+
+    #[test]
+    fn handles_and_nudge_speak_the_inspector_language() {
+        let armed = arm(&doc_json(), "{}", &[]).expect("arms");
+        let frame = rest_frame(&armed);
+        let h = handles_json(&armed, &frame, "chip").unwrap();
+        assert!(h.contains("\"bbox\":[0.0,0.0,120.0,40.0]"));
+
+        let doc2 = nudge(&armed, "chip", 1.0, 0.0).unwrap();
+        let armed2 = arm(&doc2, "{}", &[]).expect("arms");
+        let h2 = handles_json(&armed2, &rest_frame(&armed2), "chip").unwrap();
+        assert!(h2.contains("\"bbox\":[1.0,0.0,120.0,40.0]"));
+
+        assert!(handles_json(&armed, &frame, "ghost").is_err());
     }
 }

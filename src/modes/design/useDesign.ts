@@ -36,6 +36,35 @@ async function loadWasm(): Promise<WasmModule> {
 export type Compiled = { template_rev: string; scene: Uint8Array; manifest: string }
 
 /**
+ * The interaction shapes (ADR 0019), decoded from the session's JSON answers.
+ *
+ * Coordinates are CANVAS coordinates — design-space pixels. The pointer layer
+ * scales from client pixels once, at the edge; everything inside speaks the
+ * canvas's own units, which is also what makes the SVG overlay trivial: its
+ * viewBox IS the canvas.
+ */
+export type Handles = {
+  id: string
+  /** tl, tr, br, bl — through the node's world transform, so a rotated node
+   *  gets a rotated outline rather than a lying axis-aligned one. */
+  corners: [[number, number], [number, number], [number, number], [number, number]]
+  bbox: [number, number, number, number]
+  rotated: boolean
+}
+
+export type Guide = { axis: 0 | 1; at: number }
+
+export type DragResult = {
+  /** The ghost to draw. Nothing has been edited yet. */
+  rect: [number, number, number, number]
+  dx: number
+  dy: number
+  w: number
+  h: number
+  guides: Guide[]
+}
+
+/**
  * Compile a template document to canonical CBOR and its manifest.
  *
  * The `template_rev` this returns is **byte-identical** to the one `pmgctl`
@@ -68,6 +97,16 @@ export function useDesignCanvas(
   const [info, setInfo] = useState<{ degraded: boolean; omitted: string[] } | null>(null)
   const session = useRef<DesignSession | null>(null)
   const painting = useRef(false)
+  /**
+   * Bumped every time `session.current` is REPLACED. The ref mutation is
+   * invisible to React, and `status` cannot stand in for it: with a warm GPU
+   * adapter the loading→ready flip can land inside one commit, so a consumer
+   * keyed on status re-runs with the OLD session and then never again —
+   * selection chrome frozen at the pre-edit geometry, but only when the
+   * machine is fast, which is the worst kind of bug to chase. Consumers of
+   * interaction geometry key on THIS.
+   */
+  const [generation, setGeneration] = useState(0)
 
   const paint = useCallback(async (timeline: string | undefined, tMs: number) => {
     const s = session.current
@@ -95,7 +134,11 @@ export function useDesignCanvas(
 
   useEffect(() => {
     let cancelled = false
-    if (!doc || fonts.length === 0) {
+    // No font gate here: whether fonts are required is the DOCUMENT's fact,
+    // and Rust enforces it — a template that names fonts and is given none
+    // fails to arm with a sentence naming the families. A boxes-only template
+    // arms fontlessly, which is how the designer starts from nothing.
+    if (!doc) {
       setStatus('idle')
       return
     }
@@ -112,6 +155,7 @@ export function useDesignCanvas(
         }
         session.current?.free()
         session.current = s
+        setGeneration((g) => g + 1)
         setInfo({ degraded: s.degraded, omitted: [...s.omitted] })
 
         const canvas = canvasRef.current
@@ -137,5 +181,5 @@ export function useDesignCanvas(
 
   useEffect(() => () => { session.current?.free(); session.current = null }, [])
 
-  return { status, problem, info, paint }
+  return { status, problem, info, paint, session, generation }
 }

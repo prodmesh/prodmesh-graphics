@@ -145,7 +145,7 @@ other than what they were.
 | `pmg-render` | 🟢 **scene rendering** — boxes with analytic-AA rounded corners, text from the coverage atlas, composed transforms, timeline animation. Plus the S1 parity corpus |
 | `pmg-wasm` | 🟡 the parity harness — renders the corpus in-browser and posts raw RGBA back. 244 KB |
 | `pmg-out-ndi` / `pmg-out-decklink` | ⬜ not started — `pmgctl` drives `sys/` directly for now |
-| Design canvas | ⬜ not started |
+| Design canvas interaction (M5a, ADR 0019) | 🟢 **the first authoring increment.** `pmg_render::interact` — hit-testing with the shader's own rounded-box SDF, world transforms and clip rects SHARED with `draw` (one computation, not two), handles, drag with snap-to-edges/centres, and doc edits (move = margins, resize = fixed px). `pmg-wasm` exposes it on `DesignSession`; React draws the chrome at the coordinates Rust reports (SVG overlay in the canvas's own viewBox). Verified live: click → cyan selection → drag ghost → release → document edit → re-solve → chrome follows. 12 new Rust tests. Also fixed in passing: Design's canvas had rendered NOTHING since the linear-composite refactor (2026-08-17) — it drew into 8-bit while the pipelines target `Rgba16Float`; it now goes through `LinearFrame` + encode like the node. And the fontless gate moved into Rust: a boxes-only template arms with no fonts, which is how a designer starts from nothing |
 | CI | 🟡 workflows written and green locally; **never run on GitHub Actions** — no remote yet |
 | Rust toolchain on the dev box | ✅ 1.90.0 + `wasm32-unknown-unknown` |
 

@@ -48,7 +48,8 @@ import {
   StatusPill,
   Tag,
 } from '../../components/console'
-import { compileTemplate, useDesignCanvas } from './useDesign'
+import { compileTemplate, useDesignCanvas, type DesignSession, type Handles } from './useDesign'
+import { CanvasStage } from './CanvasStage'
 import type { Item } from '../show/types'
 
 type TemplateSummary = { id: string; name: string; head_rev: string | null }
@@ -59,6 +60,99 @@ type TemplateDetail = {
 type Asset = { hash: string; size: number; kind: string }
 
 const FONT_KINDS = new Set(['font'])
+
+/**
+ * The selected node's facts and its size inputs.
+ *
+ * X/Y are read from the solved geometry — where the node actually is, which
+ * with flexbox is an answer, not a setting. W/H write back as fixed pixels
+ * through the same edit path a handle drag uses, so the inspector and the
+ * canvas cannot disagree about what a resize means.
+ */
+function SelectedNode({
+  session,
+  ready,
+  generation,
+  selected,
+  onEdit,
+}: {
+  session: React.RefObject<DesignSession | null>
+  ready: boolean
+  /** The session's replacement counter — geometry is only new when it is. */
+  generation: number
+  selected: string
+  onEdit: (doc: Record<string, unknown>) => void
+}) {
+  const [bbox, setBbox] = useState<[number, number, number, number] | null>(null)
+  const [w, setW] = useState('')
+  const [h, setH] = useState('')
+
+  useEffect(() => {
+    const s = session.current
+    if (!ready || !s) return
+    try {
+      const hd = JSON.parse(s.handles(selected)) as Handles
+      setBbox(hd.bbox)
+      setW(String(Math.round(hd.bbox[2])))
+      setH(String(Math.round(hd.bbox[3])))
+    } catch {
+      setBbox(null)
+    }
+  }, [session, ready, generation, selected])
+
+  const commit = () => {
+    const s = session.current
+    const wv = Number(w)
+    const hv = Number(h)
+    if (!s || !Number.isFinite(wv) || !Number.isFinite(hv) || wv < 1 || hv < 1) return
+    if (bbox && Math.round(bbox[2]) === wv && Math.round(bbox[3]) === hv) return
+    try {
+      onEdit(JSON.parse(s.setSize(selected, wv, hv)) as Record<string, unknown>)
+    } catch {
+      // The node may be gone; the selection clears upstream.
+    }
+  }
+
+  return (
+    <div className="design-console__selected">
+      <GroupHeader label="Selected" trailing={selected} />
+      {bbox ? (
+        <>
+          <KeyValueRow label="Position" value={`${Math.round(bbox[0])}, ${Math.round(bbox[1])}`} tone="plain" />
+          <div className="design-console__size">
+            <FormGroup label="Width">
+              <input
+                type="number"
+                min={1}
+                value={w}
+                onChange={(e) => setW(e.target.value)}
+                onBlur={commit}
+                onKeyDown={(e) => { if (e.key === 'Enter') commit() }}
+                aria-label="Selected width"
+              />
+            </FormGroup>
+            <FormGroup label="Height">
+              <input
+                type="number"
+                min={1}
+                value={h}
+                onChange={(e) => setH(e.target.value)}
+                onBlur={commit}
+                onKeyDown={(e) => { if (e.key === 'Enter') commit() }}
+                aria-label="Selected height"
+              />
+            </FormGroup>
+          </div>
+          <p className="design-console__dim">
+            Moving edits margins: an absolute node moves freely; a relative one adjusts its
+            place in the flow, so its neighbours move with it — that is the layout being
+            responsive, not the editor being wrong.
+          </p>
+        </>
+      ) : null}
+    </div>
+  )
+}
 
 /**
  * A revision, shortened for the eye. The full value is an address whose
@@ -81,7 +175,10 @@ export function Design() {
   const [publishState, setPublishState] = useState<string | null>(null)
 
   const canvasRef = useRef<HTMLCanvasElement | null>(null)
-  const { status, problem, info, paint } = useDesignCanvas(canvasRef, doc, data, fonts)
+  const { status, problem, info, paint, session, generation } = useDesignCanvas(canvasRef, doc, data, fonts)
+  // The selected NODE on the canvas — a different thing from the selected
+  // template in the browser rail, which predates it.
+  const [selNode, setSelNode] = useState<string | null>(null)
 
   const list = templates?.templates ?? []
   const fontAssets = (assets?.assets ?? []).filter((a) => FONT_KINDS.has(a.kind))
@@ -246,10 +343,19 @@ export function Design() {
         <div className="console__center design-console__center">
           <div className="design-console__stage" aria-label="Canvas">
             {/* The checkerboard is CSS. The canvas itself is transparent, because
-                the output is a key and the designer must see what will key. */}
-            <div className="design__checker">
-              <canvas ref={canvasRef} className="design__canvas" />
-            </div>
+                the output is a key and the designer must see what will key.
+                Geometry questions — what is under the pointer, where handles
+                go, what a drag writes — are answered by Rust (ADR 0019); the
+                stage draws the chrome at the coordinates it reports. */}
+            <CanvasStage
+              canvasRef={canvasRef}
+              session={session}
+              ready={status === 'ready'}
+              generation={generation}
+              selected={selNode}
+              onSelect={setSelNode}
+              onEdit={(d) => setDoc(d)}
+            />
 
             {status === 'idle' ? (
               <p className="design-console__dim">
@@ -336,6 +442,21 @@ export function Design() {
                   value={usedBy === 1 ? '1 Item' : `${usedBy} Items`}
                   tone={usedBy ? 'armed' : 'plain'}
                 />
+
+                {selNode ? (
+                  <SelectedNode
+                    session={session}
+                    ready={status === 'ready'}
+                    generation={generation}
+                    selected={selNode}
+                    onEdit={(d) => setDoc(d)}
+                  />
+                ) : (
+                  <p className="design-console__dim">
+                    Click a box on the canvas to select it. Drag to move, drag a handle to
+                    resize, arrows nudge. Hold Alt to ignore snapping.
+                  </p>
+                )}
 
                 <GroupHeader label="Sample data" />
                 {Object.keys(data).map((k) => (

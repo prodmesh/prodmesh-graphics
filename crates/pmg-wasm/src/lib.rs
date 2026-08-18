@@ -243,6 +243,12 @@ mod design_api {
         canvas: design::Canvas,
         armed: design::Armed,
         renderer: pmg_render::SceneRenderer,
+        /// The resting frame, for interaction: editing happens at rest, not at
+        /// a moment of the In animation.
+        rest: Vec<pmg_render::scene::FrameNode>,
+        /// The drag in progress, if any. The GESTURE lives in React; where the
+        /// geometry says the node now is lives here (ADR 0019).
+        drag: Option<pmg_render::interact::Drag>,
     }
 
     #[wasm_bindgen]
@@ -276,10 +282,13 @@ mod design_api {
             .map_err(|e| JsValue::from_str(&e))?;
             let renderer =
                 pmg_render::SceneRenderer::new(canvas.device(), canvas.queue(), &armed.instance);
+            let rest = design::rest_frame(&armed);
             Ok(DesignSession {
                 canvas,
                 armed,
                 renderer,
+                rest,
+                drag: None,
             })
         }
 
@@ -306,6 +315,85 @@ mod design_api {
         #[wasm_bindgen(getter)]
         pub fn omitted(&self) -> js_sys::Array {
             self.armed.omitted.iter().map(JsValue::from).collect()
+        }
+
+        // -- Interaction (ADR 0019) -----------------------------------------
+        //
+        // Coordinates in and out are CANVAS coordinates — design-space pixels.
+        // The caller scales from client pixels; everything else is Rust's.
+        // Answers come back as JSON strings: one parse on the JS side beats a
+        // Reflect::set per field, and the shapes are typed in useDesign.ts.
+
+        /// The node id under a point, or null. Structure without fill is
+        /// transparent to clicks; the topmost drawn node wins.
+        #[wasm_bindgen(js_name = hitTest)]
+        pub fn hit_test(&self, x: f32, y: f32) -> Option<String> {
+            design::hit(&self.armed, &self.rest, x, y)
+        }
+
+        /// Selection chrome for a node id: `{ id, corners, bbox, rotated }`.
+        #[wasm_bindgen(js_name = handles)]
+        pub fn handles(&self, id: String) -> Result<String, JsValue> {
+            design::handles_json(&self.armed, &self.rest, &id).map_err(|e| JsValue::from_str(&e))
+        }
+
+        /// Start a drag. `handle` is "move" or a compass point ("n", "se", …).
+        #[wasm_bindgen(js_name = beginDrag)]
+        pub fn begin_drag(
+            &mut self,
+            id: String,
+            handle: String,
+            x: f32,
+            y: f32,
+        ) -> Result<(), JsValue> {
+            self.drag = Some(
+                design::begin_drag(&self.armed, &self.rest, &id, &handle, x, y)
+                    .map_err(|e| JsValue::from_str(&e))?,
+            );
+            Ok(())
+        }
+
+        /// The current drag proposal: `{ rect, dx, dy, w, h, guides }`. The
+        /// rect is the ghost React draws; nothing has been edited yet.
+        #[wasm_bindgen(js_name = dragTo)]
+        pub fn drag_to(&self, x: f32, y: f32, snap: bool) -> Result<String, JsValue> {
+            let drag = self
+                .drag
+                .as_ref()
+                .ok_or_else(|| JsValue::from_str("no drag"))?;
+            design::drag_json(&self.armed, &self.rest, drag, x, y, snap)
+                .map_err(|e| JsValue::from_str(&e))
+        }
+
+        /// Finish the drag: returns the EDITED document as JSON, or null when
+        /// the drag changed nothing. The session keeps rendering the old
+        /// document until the caller re-arms with the returned one.
+        #[wasm_bindgen(js_name = endDrag)]
+        pub fn end_drag(&mut self, x: f32, y: f32, snap: bool) -> Result<Option<String>, JsValue> {
+            let Some(drag) = self.drag.take() else {
+                return Ok(None);
+            };
+            design::end_drag(&self.armed, &self.rest, &drag, x, y, snap)
+                .map_err(|e| JsValue::from_str(&e))
+        }
+
+        /// Abandon a drag without editing anything (Escape mid-drag).
+        #[wasm_bindgen(js_name = cancelDrag)]
+        pub fn cancel_drag(&mut self) {
+            self.drag = None;
+        }
+
+        /// Move a node by a fixed amount — the arrow keys' path. Returns the
+        /// edited document as JSON.
+        #[wasm_bindgen(js_name = nudge)]
+        pub fn nudge(&self, id: String, dx: f32, dy: f32) -> Result<String, JsValue> {
+            design::nudge(&self.armed, &id, dx, dy).map_err(|e| JsValue::from_str(&e))
+        }
+
+        /// Fix a node's size from the inspector. Returns the edited document.
+        #[wasm_bindgen(js_name = setSize)]
+        pub fn set_size(&self, id: String, w: f32, h: f32) -> Result<String, JsValue> {
+            design::set_size(&self.armed, &id, w, h).map_err(|e| JsValue::from_str(&e))
         }
 
         /// Render one frame and return raw RGBA8.

@@ -12,7 +12,6 @@
 use crate::scene::{FrameNode, RenderContent, SceneInstance};
 use crate::Load;
 use crate::{COMPOSITE_FORMAT, TARGET_FORMAT};
-use pmg_scene::doc::Transform2D;
 
 /// Uniform block. Must match `Node` in `scene.wgsl` exactly.
 #[repr(C)]
@@ -69,48 +68,10 @@ fn uniform_bytes(u: &NodeUniform) -> [u8; UNIFORM_SIZE as usize] {
     buf
 }
 
-/// Build the 2×3 affine for a node: scale and rotate about the anchor, then
-/// translate.
-///
-/// The anchor is a fraction of the node's own rect, so a lower third anchored at
-/// `[0, 0.5]` rotates about its left edge rather than its centre — which is what
-/// a designer means by "hinge it on the left".
-fn affine(t: &Transform2D, rect: &pmg_layout::Rect) -> ([f32; 4], [f32; 2]) {
-    let (sin, cos) = t.rotate.to_radians().sin_cos();
-    let (sx, sy) = (t.scale[0], t.scale[1]);
-
-    // Rotation composed with scale.
-    let m = [cos * sx, sin * sx, -sin * sy, cos * sy];
-
-    // Pivot in absolute design space.
-    let px = rect.x + rect.w * t.anchor[0];
-    let py = rect.y + rect.h * t.anchor[1];
-
-    // Translate so the pivot maps to itself, then apply the authored offset.
-    let tx = px - (m[0] * px + m[2] * py) + t.translate[0];
-    let ty = py - (m[1] * px + m[3] * py) + t.translate[1];
-    (m, [tx, ty])
-}
-
-/// Compose two affines: `outer` applied after `inner`.
-///
-/// Both are column-major 2x2 plus a translation, matching `mat2x2` in WGSL.
-fn compose(outer: ([f32; 4], [f32; 2]), inner: ([f32; 4], [f32; 2])) -> ([f32; 4], [f32; 2]) {
-    let (a, at) = outer;
-    let (b, bt) = inner;
-    // Column-major: m*p = (m[0]*x + m[2]*y, m[1]*x + m[3]*y).
-    let m = [
-        a[0] * b[0] + a[2] * b[1],
-        a[1] * b[0] + a[3] * b[1],
-        a[0] * b[2] + a[2] * b[3],
-        a[1] * b[2] + a[3] * b[3],
-    ];
-    let t = [
-        a[0] * bt[0] + a[2] * bt[1] + at[0],
-        a[1] * bt[0] + a[3] * bt[1] + at[1],
-    ];
-    (m, t)
-}
+// The affine build, the world composition, and the clip rects live in
+// `crate::interact`, shared with the hit test — so where a node is DRAWN and
+// where it is CLICKABLE are one computation, not two that agree until they
+// don't (ADR 0019).
 
 /// Compiled pipelines and the uploaded atlas for one instance.
 pub struct SceneRenderer {
@@ -710,25 +671,9 @@ impl SceneRenderer {
         let mut glyph_ranges: Vec<(u32, u32)> = Vec::new();
 
         // Compose each node's affine with its ancestors', so animating a parent
-        // carries its children. Parents always precede children in `nodes`
-        // (flatten is depth-first, pushing before recursing), so one forward
-        // pass is enough — no second traversal, no recursion.
-        let mut world: Vec<([f32; 4], [f32; 2])> = Vec::with_capacity(inst.nodes.len());
-        for (i, n) in inst.nodes.iter().enumerate() {
-            let f = frame.get(i).copied().unwrap_or(FrameNode {
-                transform: n.base_transform,
-                opacity: n.opacity,
-                rect: None,
-            });
-            // The anchor is a fraction of the node's rect, so a morphing node
-            // has to rotate and scale about its CURRENT rect, not the one
-            // layout produced.
-            let local = affine(&f.transform, &f.rect.unwrap_or(n.rect));
-            world.push(match n.parent.and_then(|p| world.get(p).copied()) {
-                Some(parent) => compose(parent, local),
-                None => local,
-            });
-        }
+        // carries its children. Shared with the hit test (crate::interact) so
+        // where a node draws and where it is clickable are one computation.
+        let world = crate::interact::world_transforms(inst, frame);
 
         // Scissor per node: the intersection of every clipping ancestor.
         //
@@ -738,47 +683,10 @@ impl SceneRenderer {
         // and without clipping the new line is simply drawn at its final width
         // outside a box that has not got there yet.
         //
-        // Axis-aligned, from the transformed rect's bounding box. That is exact
-        // for translation and scale — every case a lower third uses — and an
-        // over-estimate under rotation, which errs towards drawing too much
-        // rather than clipping away something that should be visible.
-        let mut clips: Vec<Option<[f32; 4]>> = Vec::with_capacity(inst.nodes.len());
-        for (i, n) in inst.nodes.iter().enumerate() {
-            let inherited = n.parent.and_then(|p| clips.get(p).copied().flatten());
-            let mine = if n.clip {
-                let f = frame.get(i).copied();
-                let r = f.and_then(|f| f.rect).unwrap_or(n.rect);
-                let (m, t) = world[i];
-                // The rect's four corners through the affine, then their bounds.
-                let pts = [
-                    (r.x, r.y),
-                    (r.x + r.w, r.y),
-                    (r.x, r.y + r.h),
-                    (r.x + r.w, r.y + r.h),
-                ]
-                .map(|(x, y)| (m[0] * x + m[2] * y + t[0], m[1] * x + m[3] * y + t[1]));
-                let xs = pts.map(|p| p.0);
-                let ys = pts.map(|p| p.1);
-                Some([
-                    xs.iter().copied().fold(f32::MAX, f32::min),
-                    ys.iter().copied().fold(f32::MAX, f32::min),
-                    xs.iter().copied().fold(f32::MIN, f32::max),
-                    ys.iter().copied().fold(f32::MIN, f32::max),
-                ])
-            } else {
-                None
-            };
-            clips.push(match (inherited, mine) {
-                (Some(a), Some(b)) => Some([
-                    a[0].max(b[0]),
-                    a[1].max(b[1]),
-                    a[2].min(b[2]),
-                    a[3].min(b[3]),
-                ]),
-                (Some(a), None) => Some(a),
-                (None, b) => b,
-            });
-        }
+        // Shared with the hit test (crate::interact), which honours these
+        // rects so a click on a pixel the clip removed does not select the
+        // node whose pixels are not there.
+        let clips = crate::interact::clip_rects(inst, frame, &world);
 
         for (i, n) in inst.nodes.iter().enumerate() {
             let f = frame.get(i).copied().unwrap_or(FrameNode {
@@ -1105,7 +1013,9 @@ impl LinearFrame {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::interact::{affine, compose};
     use pmg_layout::Rect;
+    use pmg_scene::doc::Transform2D;
 
     fn rect() -> Rect {
         Rect {
