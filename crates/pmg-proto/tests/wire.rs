@@ -304,7 +304,11 @@ fn dest(layer: &str, ready: bool) -> DestinationReadiness {
         layer: layer.into(),
         template_rev: "blake3:aa".into(),
         ready,
-        missing: if ready { Vec::new() } else { vec!["blake3:aa".into()] },
+        missing: if ready {
+            Vec::new()
+        } else {
+            vec!["blake3:aa".into()]
+        },
         unreadable: None,
     }
 }
@@ -319,7 +323,10 @@ fn one_ready_destination_is_enough_to_arm() {
         destinations: vec![dest("Lower Third", true), dest("Wall", false)],
     };
     assert!(i.is_armable());
-    assert!(i.is_partial(), "armable and incomplete is a state of its own");
+    assert!(
+        i.is_partial(),
+        "armable and incomplete is a state of its own"
+    );
 }
 
 #[test]
@@ -349,7 +356,10 @@ fn an_item_with_no_destinations_is_not_armable() {
     // A node that was assigned nothing for this Item must not report it
     // takeable. `any()` over an empty list is false, which is the answer we
     // want — this test is here so it stays that answer.
-    let i = ItemReadiness { item: "i".into(), destinations: Vec::new() };
+    let i = ItemReadiness {
+        item: "i".into(),
+        destinations: Vec::new(),
+    };
     assert!(!i.is_armable());
     assert!(!i.is_partial());
 }

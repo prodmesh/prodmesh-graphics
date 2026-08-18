@@ -396,7 +396,10 @@ fn item_at(id: &str, dests: &[(&str, &str)]) -> ItemRef {
 
 #[test]
 fn one_item_at_two_revisions_is_ready_at_the_staged_one_only() {
-    let it = item_at("i", &[("Lower Third", "rev-staged"), ("Wall", "rev-missing")]);
+    let it = item_at(
+        "i",
+        &[("Lower Third", "rev-staged"), ("Wall", "rev-missing")],
+    );
     let r = pmg_node::runtime::readiness_of(&it, |rev| rev == "rev-staged", &Default::default());
 
     assert_eq!(r.destinations.len(), 2);
@@ -456,7 +459,11 @@ fn a_version_refusal_travels_as_a_reason_and_not_as_a_missing_byte() {
     // copying · 1 file(s)", which tells an operator to wait through something
     // that has already failed and will still be failed on Sunday.
     assert!(r.destinations[0].missing.is_empty());
-    assert!(r.destinations[0].unreadable.as_deref().unwrap().contains("needs reader 2"));
+    assert!(r.destinations[0]
+        .unreadable
+        .as_deref()
+        .unwrap()
+        .contains("needs reader 2"));
     assert!(!r.is_armable());
 }
 
@@ -487,13 +494,19 @@ fn a_take_names_the_layers_it_would_supersede() {
     // typed, and superseding a TakeOut would leave up a graphic that was
     // explicitly cleared.
     assert_eq!(
-        CueOp::TakeOut { output: "out-0".into(), layer: "Lower Third".into() }.take_layers(),
+        CueOp::TakeOut {
+            output: "out-0".into(),
+            layer: "Lower Third".into()
+        }
+        .take_layers(),
         None,
     );
     assert_eq!(
         CueOp::Update {
-            output: "out-0".into(), layer: "Lower Third".into(),
-            data: BTreeMap::new(), tween_ms: None,
+            output: "out-0".into(),
+            layer: "Lower Third".into(),
+            data: BTreeMap::new(),
+            tween_ms: None,
         }
         .take_layers(),
         None,
@@ -506,15 +519,22 @@ fn two_takes_to_the_same_layers_in_a_different_order_still_match() {
     // the wall and the programme feed must supersede one that fanned to the
     // programme feed and the wall — otherwise both fire and the layer flashes.
     let d = |layer: &str| Destination {
-        output: "out-0".into(), layer: layer.into(), template_rev: "r".into(),
-        mode: "auto".into(), blank: false,
+        output: "out-0".into(),
+        layer: layer.into(),
+        template_rev: "r".into(),
+        mode: "auto".into(),
+        blank: false,
     };
     let a = CueOp::Take {
-        item: "a".into(), output: "out-0".into(), layer: "L".into(),
+        item: "a".into(),
+        output: "out-0".into(),
+        layer: "L".into(),
         destinations: vec![d("Wall"), d("Lower Third")],
     };
     let b = CueOp::Take {
-        item: "b".into(), output: "out-0".into(), layer: "L".into(),
+        item: "b".into(),
+        output: "out-0".into(),
+        layer: "L".into(),
         destinations: vec![d("Lower Third"), d("Wall")],
     };
     assert_eq!(a.take_layers(), b.take_layers());
@@ -579,11 +599,15 @@ fn take_and_take_also_claim_the_same_layers_so_a_repeat_supersedes() {
     // twice while the node is busy means the later press.
     let both = vec![dst("Lower Third", "auto"), dst("Fullscreen", "on_request")];
     let take = CueOp::Take {
-        item: "i".into(), output: "out-0".into(), layer: "L".into(),
+        item: "i".into(),
+        output: "out-0".into(),
+        layer: "L".into(),
         destinations: both.clone(),
     };
     let also = CueOp::TakeAlso {
-        item: "i".into(), output: "out-0".into(), layer: "L".into(),
+        item: "i".into(),
+        output: "out-0".into(),
+        layer: "L".into(),
         destinations: both,
     };
     assert_eq!(take.take_layers(), also.take_layers());
@@ -598,11 +622,19 @@ fn take_also_on_an_item_with_nothing_on_request_is_refused() {
     // screen" on a graphic that has no full-screen version should be told.
     let mut e = engine();
     let ack = e.apply(
-        &cue(1, "a", CueOp::TakeAlso {
-            item: "i".into(), output: "out-0".into(), layer: "Lower Third".into(),
-            destinations: vec![dst("Lower Third", "auto")],
-        }),
-        &Empty, 0, false,
+        &cue(
+            1,
+            "a",
+            CueOp::TakeAlso {
+                item: "i".into(),
+                output: "out-0".into(),
+                layer: "Lower Third".into(),
+                destinations: vec![dst("Lower Third", "auto")],
+            },
+        ),
+        &Empty,
+        0,
+        false,
     );
     assert_eq!(ack.result, CueResult::Rejected);
     assert_eq!(ack.reason, Some(RejectReason::NotReady));
@@ -614,11 +646,19 @@ fn an_item_predating_destinations_has_nothing_to_also_take() {
     // the plain Take path would fire its single destination a second time.
     let mut e = engine();
     let ack = e.apply(
-        &cue(1, "a", CueOp::TakeAlso {
-            item: "i".into(), output: "out-0".into(), layer: "Lower Third".into(),
-            destinations: Vec::new(),
-        }),
-        &Empty, 0, false,
+        &cue(
+            1,
+            "a",
+            CueOp::TakeAlso {
+                item: "i".into(),
+                output: "out-0".into(),
+                layer: "Lower Third".into(),
+                destinations: Vec::new(),
+            },
+        ),
+        &Empty,
+        0,
+        false,
     );
     assert_eq!(ack.reason, Some(RejectReason::NotReady));
 }

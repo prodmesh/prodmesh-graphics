@@ -132,7 +132,6 @@ pub struct SceneRenderer {
     atlas_size: (u32, u32),
 }
 
-
 /// Linear light to the output transfer function — the "encode once, at output"
 /// half of ADR 0012.
 ///
@@ -219,7 +218,11 @@ impl Encoder {
             mipmap_filter: wgpu::MipmapFilterMode::Nearest,
             ..Default::default()
         });
-        Self { pipeline, layout, sampler }
+        Self {
+            pipeline,
+            layout,
+            sampler,
+        }
     }
 
     /// Encode `linear` into `target`, replacing it.
@@ -234,8 +237,14 @@ impl Encoder {
             label: Some("pmg-encode-bg"),
             layout: &self.layout,
             entries: &[
-                wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::TextureView(linear) },
-                wgpu::BindGroupEntry { binding: 2, resource: wgpu::BindingResource::Sampler(&self.sampler) },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::TextureView(linear),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: wgpu::BindingResource::Sampler(&self.sampler),
+                },
             ],
         });
         let mut enc = device.create_command_encoder(&Default::default());

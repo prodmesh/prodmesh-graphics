@@ -92,7 +92,9 @@ impl Mapping {
         let m: Mapping = serde_json::from_slice(&bytes)
             .with_context(|| format!("{} is not a valid surface mapping", path.display()))?;
         tracing::info!(
-            osc = m.osc.len(), midi = m.midi.len(), gpi = m.gpi.len(),
+            osc = m.osc.len(),
+            midi = m.midi.len(),
+            gpi = m.gpi.len(),
             "surface mapping loaded — these work with the server down"
         );
         Ok(m)
@@ -316,12 +318,7 @@ pub fn serve_rosstalk(port: u16, mapping: Mapping, tx: Sender<FromLink>) -> Resu
     Ok(())
 }
 
-fn rosstalk_conn(
-    stream: std::net::TcpStream,
-    conn: u64,
-    mapping: &Mapping,
-    tx: &Sender<FromLink>,
-) {
+fn rosstalk_conn(stream: std::net::TcpStream, conn: u64, mapping: &Mapping, tx: &Sender<FromLink>) {
     use std::io::BufRead;
     let peer = stream
         .peer_addr()

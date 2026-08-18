@@ -24,7 +24,10 @@ fn a_fill_only_port_carries_premultiplied_colour() {
     // the value must still be 26, not 255. SDI discards alpha, so whatever is
     // in the colour channels IS what reaches the screen.
     assert_eq!(&fill[..3], &[EDGE_A, EDGE_A, EDGE_A], "edge was brightened");
-    assert_eq!(fill[3], 255, "alpha must be opaque; an accidental 0 reads as a transparent frame");
+    assert_eq!(
+        fill[3], 255,
+        "alpha must be opaque; an accidental 0 reads as a transparent frame"
+    );
 }
 
 #[test]
@@ -34,7 +37,11 @@ fn embedded_alpha_carries_straight_colour() {
 
     // Only correct when something downstream actually keeps the fourth
     // channel — a capture device, or a card in a keying mode.
-    assert_eq!(&fill[..3], &[255, 255, 255], "straight colour should be full white");
+    assert_eq!(
+        &fill[..3],
+        &[255, 255, 255],
+        "straight colour should be full white"
+    );
     assert_eq!(fill[3], EDGE_A, "coverage travels in alpha here");
 }
 

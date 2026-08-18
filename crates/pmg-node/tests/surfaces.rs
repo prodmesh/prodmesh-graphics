@@ -22,7 +22,10 @@ fn osc(addr: &str) -> Vec<u8> {
 fn an_osc_address_is_read_without_its_arguments() {
     // A trigger is a button. What it does lives in the mapping, so the
     // arguments are none of this parser's business.
-    assert_eq!(osc_address(&osc("/pmg/take/lower-third")).as_deref(), Some("/pmg/take/lower-third"));
+    assert_eq!(
+        osc_address(&osc("/pmg/take/lower-third")).as_deref(),
+        Some("/pmg/take/lower-third")
+    );
 }
 
 #[test]
@@ -77,7 +80,12 @@ fn a_trigger_becomes_an_ordinary_cue() {
 fn a_take_with_no_item_is_refused_rather_than_guessed() {
     // A mapping missing its item is a typo in a JSON file, and inventing an
     // item here would put an arbitrary graphic on air from a footswitch.
-    let t = Trigger { op: "take".into(), item: None, output: None, layer: None };
+    let t = Trigger {
+        op: "take".into(),
+        item: None,
+        output: None,
+        layer: None,
+    };
     assert!(cue_for(&t, "gpi", 1).is_none());
 }
 
@@ -87,7 +95,12 @@ fn an_op_these_surfaces_cannot_send_is_refused() {
     // contact closure has neither, so mapping one is a mistake worth naming
     // rather than a cue that half-works.
     for op in ["update", "timeline", "nonsense"] {
-        let t = Trigger { op: op.into(), item: Some("i".into()), output: None, layer: None };
+        let t = Trigger {
+            op: op.into(),
+            item: Some("i".into()),
+            output: None,
+            layer: None,
+        };
         assert!(cue_for(&t, "osc", 1).is_none(), "{op} should be refused");
     }
 }
@@ -135,7 +148,8 @@ fn custom_is_self_describing_and_needs_no_mapping() {
     // The real surface. A switcher that can send arbitrary strings does not
     // need a slot table on this node at all.
     let m = Mapping::default();
-    let t = pmg_node::surface::rosstalk_trigger("CUSTOM take|out-0|Lower Third|item-1", &m).unwrap();
+    let t =
+        pmg_node::surface::rosstalk_trigger("CUSTOM take|out-0|Lower Third|item-1", &m).unwrap();
     assert_eq!(t.op, "take");
     assert_eq!(t.item.as_deref(), Some("item-1"));
     assert_eq!(t.layer.as_deref(), Some("Lower Third"));
@@ -149,8 +163,14 @@ fn gpi_and_cc_resolve_through_the_same_mapping_the_wires_use() {
     // One place where a slot number means something. Two tables would be two
     // that can disagree, and the disagreement would show up on air.
     let m = mapping_with_slots();
-    assert_eq!(pmg_node::surface::rosstalk_trigger("GPI 1", &m).unwrap().op, "take");
-    assert_eq!(pmg_node::surface::rosstalk_trigger("CC 7", &m).unwrap().op, "clear_all");
+    assert_eq!(
+        pmg_node::surface::rosstalk_trigger("GPI 1", &m).unwrap().op,
+        "take"
+    );
+    assert_eq!(
+        pmg_node::surface::rosstalk_trigger("CC 7", &m).unwrap().op,
+        "clear_all"
+    );
     // A slot nobody configured is not a cue.
     assert!(pmg_node::surface::rosstalk_trigger("GPI 9", &m).is_none());
 }
@@ -162,7 +182,14 @@ fn the_verb_is_case_insensitive_but_a_nonsense_line_is_not_a_cue() {
     assert!(pmg_node::surface::rosstalk_trigger("custom clearall|out-0", &m).is_some());
     assert!(pmg_node::surface::rosstalk_trigger("Custom ClearAll|out-0", &m).is_some());
 
-    for line in ["", "TAKE", "CUSTOM", "CUSTOM nonsense|out-0", "GPI", "HELLO 1"] {
+    for line in [
+        "",
+        "TAKE",
+        "CUSTOM",
+        "CUSTOM nonsense|out-0",
+        "GPI",
+        "HELLO 1",
+    ] {
         assert!(
             pmg_node::surface::rosstalk_trigger(line, &m).is_none(),
             "{line:?} should not be a cue"

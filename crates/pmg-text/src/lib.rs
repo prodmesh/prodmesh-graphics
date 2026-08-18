@@ -401,7 +401,10 @@ impl Default for Wrap {
     fn default() -> Self {
         // Unbounded, because a default that clipped would silently reimpose
         // the single-line behaviour this replaced.
-        Self { max_width: None, max_lines: usize::MAX }
+        Self {
+            max_width: None,
+            max_lines: usize::MAX,
+        }
     }
 }
 
@@ -431,7 +434,10 @@ impl TextEngine {
         tracking: f32,
         wrap: Wrap,
     ) -> Option<Vec<ShapedRun>> {
-        let Wrap { max_width, max_lines } = wrap;
+        let Wrap {
+            max_width,
+            max_lines,
+        } = wrap;
         let mut lines: Vec<ShapedRun> = Vec::new();
         for segment in text.split('\n') {
             if lines.len() >= max_lines.max(1) {
@@ -458,13 +464,7 @@ impl TextEngine {
 }
 
 /// Split one shaped run into lines no wider than `room`.
-fn wrap_run(
-    run: &ShapedRun,
-    segment: &str,
-    room: f32,
-    max_lines: usize,
-    out: &mut Vec<ShapedRun>,
-) {
+fn wrap_run(run: &ShapedRun, segment: &str, room: f32, max_lines: usize, out: &mut Vec<ShapedRun>) {
     let breaks = break_offsets(segment);
     let mut start_glyph = 0usize;
     let mut line_origin = 0.0f32;
@@ -477,7 +477,13 @@ fn wrap_run(
             .map(|i| start_glyph + i);
 
         let Some(over) = over else {
-            out.push(slice_run(run, segment, start_glyph, run.glyphs.len(), line_origin));
+            out.push(slice_run(
+                run,
+                segment,
+                start_glyph,
+                run.glyphs.len(),
+                line_origin,
+            ));
             return;
         };
 
@@ -521,7 +527,10 @@ fn wrap_run(
 fn slice_run(run: &ShapedRun, segment: &str, from: usize, to: usize, origin: f32) -> ShapedRun {
     let glyphs: Vec<PositionedGlyph> = run.glyphs[from..to]
         .iter()
-        .map(|g| PositionedGlyph { x: g.x - origin, ..*g })
+        .map(|g| PositionedGlyph {
+            x: g.x - origin,
+            ..*g
+        })
         .collect();
 
     // Width to the end of the last VISIBLE glyph. A line broken at a space
@@ -578,7 +587,10 @@ impl pmg_layout::TextMeasure for Measurer {
             font.size,
             &font.features,
             font.tracking,
-            Wrap { max_width, max_lines },
+            Wrap {
+                max_width,
+                max_lines,
+            },
         ) else {
             return (0.0, 0.0);
         };

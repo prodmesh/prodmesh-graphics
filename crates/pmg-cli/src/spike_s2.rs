@@ -42,7 +42,6 @@ Measures the three hazards in risk R3:
 // that quantises differently from the renderer would be measuring itself.
 type Glyphs<'a> = pmg_render::text_source::TextEngineGlyphs<'a>;
 
-
 /// A minimal document: one text node, optionally over a background box.
 fn text_doc(text_size: f32, canvas: (u32, u32), bg: Option<[f32; 4]>) -> SceneDoc {
     let text = Node {

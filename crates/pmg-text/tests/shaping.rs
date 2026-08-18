@@ -10,7 +10,7 @@
 
 use pmg_layout::TextMeasure;
 use pmg_scene::doc::FontSpec;
-use pmg_text::{Wrap, quantize, FontDb, Measurer, TextEngine, SUBPIXEL_PHASES};
+use pmg_text::{quantize, FontDb, Measurer, TextEngine, Wrap, SUBPIXEL_PHASES};
 
 /// Somewhere to get real font bytes on a developer machine or a CI runner.
 ///
@@ -361,7 +361,6 @@ fn nearest_weight_is_selected_rather_than_failing() {
 // graphics of a real service undrawable.
 // ---------------------------------------------------------------------------
 
-
 #[test]
 fn a_hard_break_is_a_break_the_author_chose() {
     let (mut eng, face) = engine();
@@ -369,8 +368,17 @@ fn a_hard_break_is_a_break_the_author_chose() {
     // A lyric slide's breaks are a decision about phrasing, and reflowing them
     // to the box would be overriding the person who wrote the slide.
     let lines = eng
-        .shape_lines(face, "We are here to witness\nto share and testify",
-                     48.0, &[], 0.0, Wrap { max_width: None, max_lines: usize::MAX })
+        .shape_lines(
+            face,
+            "We are here to witness\nto share and testify",
+            48.0,
+            &[],
+            0.0,
+            Wrap {
+                max_width: None,
+                max_lines: usize::MAX,
+            },
+        )
         .expect("shaped");
     assert_eq!(lines.len(), 2);
     assert!(lines[0].width > 0.0 && lines[1].width > 0.0);
@@ -381,10 +389,34 @@ fn a_long_line_wraps_to_the_box() {
     let (mut eng, face) = engine();
     let text = "It is a trustworthy statement deserving full acceptance, \
                 that Christ Jesus came into the world to save sinners";
-    let one = eng.shape_lines(face, text, 44.0, &[], 0.0, Wrap { max_width: None, max_lines: usize::MAX }).unwrap();
+    let one = eng
+        .shape_lines(
+            face,
+            text,
+            44.0,
+            &[],
+            0.0,
+            Wrap {
+                max_width: None,
+                max_lines: usize::MAX,
+            },
+        )
+        .unwrap();
     assert_eq!(one.len(), 1, "unconstrained, it is one line");
 
-    let wrapped = eng.shape_lines(face, text, 44.0, &[], 0.0, Wrap { max_width: Some(700.0), max_lines: usize::MAX }).unwrap();
+    let wrapped = eng
+        .shape_lines(
+            face,
+            text,
+            44.0,
+            &[],
+            0.0,
+            Wrap {
+                max_width: Some(700.0),
+                max_lines: usize::MAX,
+            },
+        )
+        .unwrap();
     assert!(wrapped.len() > 1, "got {} lines", wrapped.len());
     for l in &wrapped {
         assert!(l.width <= 700.0, "a line overflowed: {} > 700", l.width);
@@ -395,7 +427,19 @@ fn a_long_line_wraps_to_the_box() {
 fn max_lines_truncates_rather_than_overflowing() {
     let (mut eng, face) = engine();
     let text = "one two three four five six seven eight nine ten eleven twelve";
-    let capped = eng.shape_lines(face, text, 44.0, &[], 0.0, Wrap { max_width: Some(300.0), max_lines: 2 }).unwrap();
+    let capped = eng
+        .shape_lines(
+            face,
+            text,
+            44.0,
+            &[],
+            0.0,
+            Wrap {
+                max_width: Some(300.0),
+                max_lines: 2,
+            },
+        )
+        .unwrap();
     assert_eq!(capped.len(), 2);
 }
 
@@ -406,7 +450,17 @@ fn a_word_wider_than_the_box_still_appears() {
     // and cannot see one that was silently dropped. Also the loop guard — a
     // break at the line's own start would never advance.
     let lines = eng
-        .shape_lines(face, "Supercalifragilisticexpialidocious", 60.0, &[], 0.0, Wrap { max_width: Some(80.0), max_lines: 8 })
+        .shape_lines(
+            face,
+            "Supercalifragilisticexpialidocious",
+            60.0,
+            &[],
+            0.0,
+            Wrap {
+                max_width: Some(80.0),
+                max_lines: 8,
+            },
+        )
         .expect("shaped");
     assert_eq!(lines.len(), 1);
     assert!(!lines[0].glyphs.is_empty());
@@ -419,8 +473,32 @@ fn wrapping_preserves_the_shaping_of_the_unwrapped_string() {
     // kerning inside a word is identical whether or not a later word wrapped.
     // Shaping per word would also measure differently from the same string
     // drawn unwrapped, which is how a box ends up the wrong size.
-    let whole = eng.shape_lines(face, "alpha beta", 48.0, &[], 0.0, Wrap { max_width: None, max_lines: 9 }).unwrap();
-    let split = eng.shape_lines(face, "alpha beta", 48.0, &[], 0.0, Wrap { max_width: Some(1.0), max_lines: 9 }).unwrap();
+    let whole = eng
+        .shape_lines(
+            face,
+            "alpha beta",
+            48.0,
+            &[],
+            0.0,
+            Wrap {
+                max_width: None,
+                max_lines: 9,
+            },
+        )
+        .unwrap();
+    let split = eng
+        .shape_lines(
+            face,
+            "alpha beta",
+            48.0,
+            &[],
+            0.0,
+            Wrap {
+                max_width: Some(1.0),
+                max_lines: 9,
+            },
+        )
+        .unwrap();
     assert_eq!(split.len(), 2);
     let first_of_whole: Vec<u16> = whole[0].glyphs.iter().take(5).map(|g| g.id).collect();
     let first_of_split: Vec<u16> = split[0].glyphs.iter().take(5).map(|g| g.id).collect();
@@ -436,7 +514,19 @@ fn an_empty_cap_is_not_zero_lines() {
     let (mut eng, face) = engine();
     // max_lines(0) would be a template that renders nothing at all. Clamped,
     // because the format's default for an unset field must not blank a graphic.
-    let lines = eng.shape_lines(face, "hello", 40.0, &[], 0.0, Wrap { max_width: None, max_lines: 0 }).unwrap();
+    let lines = eng
+        .shape_lines(
+            face,
+            "hello",
+            40.0,
+            &[],
+            0.0,
+            Wrap {
+                max_width: None,
+                max_lines: 0,
+            },
+        )
+        .unwrap();
     assert_eq!(lines.len(), 1);
 }
 
@@ -448,7 +538,12 @@ fn an_empty_cap_is_not_zero_lines() {
 fn coverage_gamma_lifts_the_edges_and_moves_neither_end() {
     let (mut eng, face) = engine();
     let bmp = eng.glyph(face, 5, 64.0, 0).expect("a glyph rasterizes");
-    let mid: Vec<u8> = bmp.coverage.iter().copied().filter(|c| *c > 0 && *c < 255).collect();
+    let mid: Vec<u8> = bmp
+        .coverage
+        .iter()
+        .copied()
+        .filter(|c| *c > 0 && *c < 255)
+        .collect();
     assert!(!mid.is_empty(), "a 64px glyph has antialiased edges");
 
     // Fully covered stays opaque and empty stays empty — otherwise this would

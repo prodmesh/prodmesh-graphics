@@ -147,7 +147,13 @@ fn reason(code: u16) -> &'static str {
 /// emergency sends the identical JSON it sends to the server every Sunday.
 fn cue(body: &[u8], tx: &Sender<FromLink>) -> (u16, String) {
     let Ok(req) = serde_json::from_slice::<CueRequest>(body) else {
-        return (422, err("validation_failed", "That is not a cue this node understands."));
+        return (
+            422,
+            err(
+                "validation_failed",
+                "That is not a cue this node understands.",
+            ),
+        );
     };
     // Generated where the human acted, never invented here. A surface that
     // mints an id per retry has defeated the dedupe, and inventing one on this
@@ -156,7 +162,10 @@ fn cue(body: &[u8], tx: &Sender<FromLink>) -> (u16, String) {
         return (422, err("validation_failed", "This cue has no cue_id."));
     }
     let Some(op) = req.to_op() else {
-        return (422, err("validation_failed", "There is no cue by that name."));
+        return (
+            422,
+            err("validation_failed", "There is no cue by that name."),
+        );
     };
 
     let (reply_tx, reply_rx) = std::sync::mpsc::channel();
@@ -209,7 +218,10 @@ fn cue(body: &[u8], tx: &Sender<FromLink>) -> (u16, String) {
         }
         // The engine did not answer. Saying so beats a success this cannot
         // vouch for — the same rule the server's synchronous endpoint follows.
-        Err(_) => (503, err("cue_not_acked", "The engine did not confirm the cue.")),
+        Err(_) => (
+            503,
+            err("cue_not_acked", "The engine did not confirm the cue."),
+        ),
     }
 }
 
@@ -293,10 +305,7 @@ fn status_json(state: &StateHandle) -> String {
                         ),
                         None => "null".into(),
                     };
-                    format!(
-                        "{{\"name\":{},\"occupant\":{occ}}}",
-                        json_str(&l.name)
-                    )
+                    format!("{{\"name\":{},\"occupant\":{occ}}}", json_str(&l.name))
                 })
                 .collect();
             format!(
@@ -345,7 +354,11 @@ fn status_page(state: &StateHandle) -> String {
     for o in &s.outputs {
         for l in &o.layers {
             let what = match &l.occupant {
-                Some(x) => html(if x.item_label.is_empty() { &x.item_id } else { &x.item_label }),
+                Some(x) => html(if x.item_label.is_empty() {
+                    &x.item_id
+                } else {
+                    &x.item_label
+                }),
                 None => "<i>clear</i>".into(),
             };
             rows.push_str(&format!(
@@ -368,5 +381,7 @@ fn status_page(state: &StateHandle) -> String {
 }
 
 fn html(s: &str) -> String {
-    s.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;")
+    s.replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
 }

@@ -581,8 +581,7 @@ impl Runtime {
                                 let _ = received_at;
                             }
                             FromLink::Cue(c, received_at, reply) => {
-                                let received_late =
-                                    is_late(c.deadline_ms, received_at.elapsed());
+                                let received_late = is_late(c.deadline_ms, received_at.elapsed());
                                 let ack = {
                                     let mut e = self.engine.lock().unwrap();
                                     e.apply(

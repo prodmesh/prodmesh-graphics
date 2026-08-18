@@ -56,7 +56,10 @@ impl GlyphSource for TextEngineGlyphs<'_> {
             font.size,
             &font.features,
             font.tracking,
-            Wrap { max_width, max_lines },
+            Wrap {
+                max_width,
+                max_lines,
+            },
         )?;
         let first = lines.first()?;
         let ascent = first.metrics.ascent;
@@ -83,27 +86,27 @@ impl GlyphSource for TextEngineGlyphs<'_> {
                 Align::End => (widest - shaped.width).round(),
                 _ => 0.0,
             };
-        for g in &shaped.glyphs {
-            // Split the fractional position into a whole pixel and a phase, and
-            // rasterize AT that phase. Rounding here instead is precisely what
-            // makes animated text shudder (R3).
-            let (whole, phase) = pmg_text::quantize(g.x);
-            let Some(bmp) = self.engine.glyph(face, g.id, font.size, phase) else {
-                continue;
-            };
-            if bmp.is_empty() {
-                continue;
+            for g in &shaped.glyphs {
+                // Split the fractional position into a whole pixel and a phase, and
+                // rasterize AT that phase. Rounding here instead is precisely what
+                // makes animated text shudder (R3).
+                let (whole, phase) = pmg_text::quantize(g.x);
+                let Some(bmp) = self.engine.glyph(face, g.id, font.size, phase) else {
+                    continue;
+                };
+                if bmp.is_empty() {
+                    continue;
+                }
+                out.push(RunGlyph {
+                    x: whole as f32 + align_dx,
+                    y: baseline,
+                    left: bmp.left,
+                    top: bmp.top,
+                    width: bmp.width,
+                    height: bmp.height,
+                    coverage: bmp.coverage.clone(),
+                });
             }
-            out.push(RunGlyph {
-                x: whole as f32 + align_dx,
-                y: baseline,
-                left: bmp.left,
-                top: bmp.top,
-                width: bmp.width,
-                height: bmp.height,
-                coverage: bmp.coverage.clone(),
-            });
-        }
         }
         Some((out, ascent))
     }
