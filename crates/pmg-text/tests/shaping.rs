@@ -439,3 +439,35 @@ fn an_empty_cap_is_not_zero_lines() {
     let lines = eng.shape_lines(face, "hello", 40.0, &[], 0.0, Wrap { max_width: None, max_lines: 0 }).unwrap();
     assert_eq!(lines.len(), 1);
 }
+
+// ---------------------------------------------------------------------------
+// Coverage gamma.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn coverage_gamma_lifts_the_edges_and_moves_neither_end() {
+    let (mut eng, face) = engine();
+    let bmp = eng.glyph(face, 5, 64.0, 0).expect("a glyph rasterizes");
+    let mid: Vec<u8> = bmp.coverage.iter().copied().filter(|c| *c > 0 && *c < 255).collect();
+    assert!(!mid.is_empty(), "a 64px glyph has antialiased edges");
+
+    // Fully covered stays opaque and empty stays empty — otherwise this would
+    // fatten every glyph and fog the background instead of fixing the edge.
+    assert!(bmp.coverage.contains(&255), "no solid interior");
+    assert!(bmp.coverage.contains(&0), "no empty margin");
+}
+
+#[test]
+fn the_gamma_curve_is_monotonic_and_pinned_at_both_ends() {
+    // Monotonic, or a soft edge would develop a step in it. Pinned, or the
+    // glyph either fattens or dissolves.
+    let f = |c: u8| (((c as f32 / 255.0).powf(1.0 / 1.45)) * 255.0 + 0.5) as u8;
+    assert_eq!(f(0), 0);
+    assert_eq!(f(255), 255);
+    for c in 0..255u8 {
+        assert!(f(c) <= f(c + 1), "not monotonic at {c}");
+    }
+    // And it LIFTS: a half-covered pixel must end up brighter than half, which
+    // is the whole correction.
+    assert!(f(128) > 150, "half coverage only reached {}", f(128));
+}

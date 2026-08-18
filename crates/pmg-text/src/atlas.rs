@@ -115,6 +115,44 @@ impl GlyphAtlas {
 /// same bytes on every platform and both build targets — which is what makes
 /// glyphs identical between the node and the browser *by construction* rather
 /// than by measurement.
+/// Coverage gamma — "stem darkening", and the reason it is needed here.
+///
+/// Geometric coverage is the fraction of a pixel the glyph covers. Composited
+/// in **linear light** that fraction is exactly right, and this table would be
+/// an error. But the fill and key leaving this system are composited by
+/// whatever is downstream — a switcher's keyer, a wall processor — and those
+/// blend the encoded values directly. `out = a*fg + (1-a)*bg` performed on
+/// gamma-encoded numbers puts a 50%-covered edge of white type at 128/255,
+/// which *displays* as 21% of the light it should carry. Every antialiased
+/// edge comes out too dark, so type reads thin and the edges look crunchy.
+///
+/// We cannot fix the switcher, so the compensation goes where the coverage is
+/// made. This is what FreeType calls stem darkening and what Skia does with its
+/// contrast/gamma tables; it is standard practice rather than a fudge.
+///
+/// **It is an approximation, and here is exactly how.** The correction that
+/// would be exact depends on the foreground and background luminance of each
+/// pixel, and the background is live camera this process never sees. One
+/// exponent is the best a rasterizer can do without knowing what it will be
+/// keyed over. It is tuned for the case that matters and is worst: light type
+/// over a dark stage.
+///
+/// Applied to the atlas, so it lands on the KEY as well as the fill — which is
+/// the point. The key is what the switcher blends with.
+const COVERAGE_GAMMA: f32 = 1.0 / 1.45;
+
+/// Bend one coverage byte.
+///
+/// 0 and 255 are fixed points, so a fully covered pixel stays opaque and an
+/// empty one stays empty: this changes only the edge.
+fn darken(c: u8) -> u8 {
+    // A 256-entry table would be faster and is not worth the static: this runs
+    // once per glyph per subpixel phase, then the result is cached in the atlas
+    // for the life of the process.
+    let a = c as f32 / 255.0;
+    (a.powf(COVERAGE_GAMMA) * 255.0 + 0.5).clamp(0.0, 255.0) as u8
+}
+
 pub fn rasterize(
     font: swash::FontRef<'_>,
     glyph: u16,
@@ -150,7 +188,10 @@ pub fn rasterize(
         height: image.placement.height,
         left: image.placement.left,
         top: image.placement.top,
-        coverage: image.data,
+        // Pure arithmetic on the CPU, so the node and the browser get the same
+        // bytes by construction — the same property the rest of this function
+        // is written to hold.
+        coverage: image.data.iter().copied().map(darken).collect(),
     })
 }
 
