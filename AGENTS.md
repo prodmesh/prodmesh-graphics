@@ -189,6 +189,11 @@ specifically shaped to avoid. Do not re-derive them.
 - **A CPU-generated 1080p frame misses 59.94.** Measured 17.55 ms against a
   16.68 ms budget for generate + unpremultiply + encode. Rasterize once at arm;
   animate transforms over the cached result; do the per-pixel encode on the GPU.
+- **`cmd 2>&1 | grep ...; echo OK` reports OK when `cmd` failed.** The pipeline's
+  status is grep's, and a trailing `echo` runs regardless — so a clippy or test
+  failure scrolls past above a cheerful "CLEAN". Two commits landed with clippy
+  errors in them this way. Check the exit status (`cmd >/dev/null 2>&1 && echo
+  ok || echo FAILED`) rather than printing a constant.
 - **`npx tsc --noEmit` checks NOTHING in this repo.** The root `tsconfig.json`
   is a solution file — `"files": []` plus two project references — so that
   command type-checks an empty program and exits 0 looking like a pass. The

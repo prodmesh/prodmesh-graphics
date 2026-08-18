@@ -11,7 +11,7 @@ fn osc(addr: &str) -> Vec<u8> {
     // OSC pads each part to a 4-byte boundary with nulls.
     let mut v = addr.as_bytes().to_vec();
     v.push(0);
-    while v.len() % 4 != 0 {
+    while !v.len().is_multiple_of(4) {
         v.push(0);
     }
     v.extend_from_slice(b",\0\0\0");
