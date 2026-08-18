@@ -169,6 +169,22 @@
 .edit__flag--info { background: var(--purple-soft); color: var(--purple-text); border: 1px solid var(--purple-border); }
 .edit__flag--warn { background: var(--warn-soft); color: var(--warn-text); border: 1px solid var(--warn-border); }
 
+/* Where an Item goes (ADR 0018). Grouped and boxed so several destinations
+   read as a list of places rather than as more form fields — an Item with
+   three of them is the normal case in a real service, not an advanced one. */
+.edit__dests { display: grid; gap: 0.5rem; }
+.edit__dest {
+  display: grid; gap: 0.5rem; padding: 0.7rem;
+  border: 1px solid var(--border); border-radius: var(--radius); background: var(--bg-tile);
+}
+.edit__dest-row { display: flex; gap: 0.6rem; align-items: end; flex-wrap: wrap; }
+.edit__dest-row label { display: grid; gap: 0.2rem; flex: 1 1 8rem; min-width: 8rem; }
+.edit__dest-row label span { font-size: 0.78rem; color: var(--text-dim); }
+.edit__dest-row select { padding: 0.4rem; border-radius: var(--radius-sm);
+  border: 1px solid var(--border-strong); background: var(--bg-raised); color: var(--text); font: inherit; }
+.edit__hint { margin: 0; font-size: 0.78rem; color: var(--text-dim); }
+.btn--small { padding: 0.3rem 0.55rem; font-size: 0.78rem; }
+
 .edit__editor {
   display: grid; gap: 0.75rem; padding: 1rem;
   border: 1px solid var(--border); border-radius: var(--radius-lg); background: var(--bg-raised);

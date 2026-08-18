@@ -17,7 +17,7 @@
  */
 
 import { useCallback, useEffect, useState } from 'react'
-import { AlertTriangle, Check, Plus } from 'lucide-react'
+import { AlertTriangle, Check, Plus, X } from 'lucide-react'
 import { useQuery, invalidate } from '../../lib/useQuery'
 import { useTopic } from '../../lib/stream'
 import { keys, topics } from '../../lib/keys'
@@ -137,6 +137,171 @@ function ItemSummary({
 
 // ---------------------------------------------------------------------------
 
+
+/**
+ * Where an Item goes — the authoring half of ADR 0018.
+ *
+ * An Item is one set of words that appears in several places, each rendered by
+ * its own template: a narrow strip over the key feed, full-bleed type on the
+ * LED wall. Until now the model could express that and the app could not, so
+ * the only way to build one was a script against the API.
+ *
+ * # Three things a destination can be, and they are not degrees of the same one
+ *
+ * **Fires with the take** is the default. **Only when asked for** is the
+ * full-screen version of a lower third — available, and deliberately skipped
+ * by a take, so it needs the separate "Also full screen" action in Show.
+ * **Render nothing** is an instruction: a full-screen graphic that clears the
+ * LED wall is *saying* to clear it, which is different from a feed that failed
+ * and different again from one nobody configured.
+ *
+ * # The field list belongs to the first destination
+ *
+ * The Item carries one set of data and the server checks it against EVERY
+ * destination's template, so a second destination whose template wants a field
+ * the Item does not have is a mistake made now and discovered on Sunday. The
+ * first destination's template defines the fields shown; the others are
+ * checked against them on save and the server's sentence is rendered verbatim.
+ */
+function Destinations({
+  value,
+  templates,
+  outputs,
+  onChange,
+}: {
+  value: DestinationDraft[]
+  templates: TemplateSummary[]
+  outputs: { output_id: string; layers: string[] }[]
+  onChange: (next: DestinationDraft[]) => void
+}) {
+  const set = (i: number, patch: Partial<DestinationDraft>) =>
+    onChange(value.map((d, n) => (n === i ? { ...d, ...patch } : d)))
+
+  return (
+    <div className="edit__dests">
+      <div className="edit__list-head">
+        <h3>Where it goes</h3>
+        <button
+          type="button"
+          className="btn btn--ghost btn--small"
+          onClick={() =>
+            onChange([
+              ...value,
+              // A new one copies the first's template rather than defaulting to
+              // whatever is alphabetically first: the common second destination
+              // is the same graphic somewhere else, and a wrong template here
+              // is a silent mistake.
+              { ...(value[0] ?? blankDest(templates)), output: '', mode: 'auto', blank: false },
+            ])
+          }
+        >
+          <Plus size={13} aria-hidden /> Add a destination
+        </button>
+      </div>
+
+      {value.map((d, i) => {
+        const layers = outputs.find((o) => o.output_id === d.output)?.layers ?? []
+        return (
+          <div key={i} className="edit__dest">
+            <div className="edit__dest-row">
+              <label>
+                <span>Output</span>
+                <select value={d.output} onChange={(e) => set(i, { output: e.target.value, layer: '' })}>
+                  <option value="">Whichever node has it</option>
+                  {outputs.map((o) => (
+                    <option key={o.output_id} value={o.output_id}>{o.output_id}</option>
+                  ))}
+                </select>
+              </label>
+              <label>
+                <span>Layer</span>
+                {/* By NAME. An index silently re-points at a different graphic
+                    the moment someone reorders the stack. */}
+                <select value={d.layer} onChange={(e) => set(i, { layer: e.target.value })}>
+                  <option value="">Choose a layer</option>
+                  {layers.map((l) => <option key={l} value={l}>{l}</option>)}
+                  {d.layer && !layers.includes(d.layer) ? (
+                    <option value={d.layer}>{d.layer} (not on this output)</option>
+                  ) : null}
+                </select>
+              </label>
+              {value.length > 1 ? (
+                <button
+                  type="button"
+                  className="btn btn--ghost btn--small"
+                  aria-label={`Remove destination ${i + 1}`}
+                  onClick={() => onChange(value.filter((_, n) => n !== i))}
+                >
+                  <X size={13} aria-hidden />
+                </button>
+              ) : null}
+            </div>
+
+            <div className="edit__dest-row">
+              <label>
+                <span>Rendered by</span>
+                <select
+                  value={d.template_id}
+                  disabled={d.blank}
+                  onChange={(e) => set(i, { template_id: e.target.value })}
+                >
+                  {templates.map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}
+                </select>
+              </label>
+              <label>
+                <span>When</span>
+                <select
+                  value={d.blank ? 'blank' : d.mode}
+                  onChange={(e) => {
+                    const v = e.target.value
+                    set(i, v === 'blank'
+                      ? { blank: true, mode: 'auto' }
+                      : { blank: false, mode: v })
+                  }}
+                >
+                  <option value="auto">Fires with the take</option>
+                  <option value="on_request">Only when asked for</option>
+                  <option value="blank">Render nothing — clear this feed</option>
+                </select>
+              </label>
+            </div>
+
+            {i === 0 && value.length > 1 ? (
+              <p className="edit__hint">
+                This one’s template decides which fields you fill in above. The
+                others are checked against them when you save.
+              </p>
+            ) : null}
+            {d.blank ? (
+              <p className="edit__hint">
+                Taking this item will <b>clear</b> this feed. That is an
+                instruction, not a gap — it is how a full-screen graphic blanks
+                the wall.
+              </p>
+            ) : null}
+          </div>
+        )
+      })}
+    </div>
+  )
+}
+
+type DestinationDraft = {
+  output: string
+  layer: string
+  template_id: string
+  mode: string
+  blank: boolean
+}
+
+const blankDest = (templates: TemplateSummary[]): DestinationDraft => ({
+  output: '',
+  layer: 'Lower Third',
+  template_id: templates[0]?.id ?? '',
+  mode: 'auto',
+  blank: false,
+})
+
 function ItemEditor({
   itemId,
   item,
@@ -148,7 +313,37 @@ function ItemEditor({
   templates: TemplateSummary[]
   onDone: () => void
 }) {
-  const [templateId, setTemplateId] = useState(item?.template_id ?? templates[0]?.id ?? '')
+  // The Item's destinations, as a draft. An Item made before ADR 0018 has one
+  // implied destination, and it becomes a list of one rather than a special
+  // case — the same shape the server's migration used.
+  const [dests, setDests] = useState<DestinationDraft[]>(() => {
+    const existing = item?.destinations ?? []
+    if (existing.length) {
+      return existing.map((d) => ({
+        output: d.output ?? '',
+        layer: d.layer ?? '',
+        template_id:
+          templates.find((t) => t.head_rev === d.template_rev)?.id ??
+          item?.template_id ??
+          templates[0]?.id ??
+          '',
+        mode: d.mode ?? 'auto',
+        blank: !!d.blank,
+      }))
+    }
+    return [{
+      output: item?.destination?.output ?? '',
+      layer: item?.destination?.layer ?? 'Lower Third',
+      template_id: item?.template_id ?? templates[0]?.id ?? '',
+      mode: 'auto',
+      blank: false,
+    }]
+  })
+  // The FIRST destination's template decides which fields the operator fills
+  // in. The Item carries one set of data and the server checks it against every
+  // destination, so one of them has to define the form — and the first is the
+  // one an operator thinks of as "the" graphic.
+  const templateId = dests[0]?.template_id || item?.template_id || templates[0]?.id || ''
   const { data: detail } = useQuery<TemplateDetail>(templateId ? keys.template(templateId) : null)
   const fields = detail?.head?.manifest?.fields ?? []
 
@@ -156,7 +351,17 @@ function ItemEditor({
   const [data, setData] = useState<Record<string, string>>(
     Object.fromEntries(Object.entries(item?.data ?? {}).map(([k, v]) => [k, String(v)])),
   )
-  const [layer, setLayer] = useState(item?.destination?.layer ?? 'Lower Third')
+  // The outputs an operator can actually pick. Read from the node rather than
+  // typed, because a layer name that does not exist on the output is a cue the
+  // node will refuse — and finding that out at the take is the whole failure
+  // this list prevents.
+  const { data: nodes } = useQuery<{ nodes: { node_id: string }[] }>(keys.nodes())
+  const nodeId = nodes?.nodes?.[0]?.node_id ?? null
+  const { data: outs } = useQuery<{ outputs: { output_id: string; layers: string[] }[] }>(
+    nodeId ? keys.outputs(nodeId) : null,
+  )
+  const outputs = outs?.outputs ?? []
+
   const [problems, setProblems] = useState<string[]>([])
   const [saving, setSaving] = useState(false)
 
@@ -180,7 +385,16 @@ function ItemEditor({
         template_id: templateId,
         label: label || undefined,
         data: coerce(fields, data),
-        destination: { layer },
+        // Resolved to a REVISION here, because a destination pins the revision
+        // it was built against — publishing a new one must not silently change
+        // what an existing Item renders.
+        destinations: dests.map((d) => ({
+          output: d.output || undefined,
+          layer: d.layer || undefined,
+          template_rev: templates.find((t) => t.id === d.template_id)?.head_rev ?? undefined,
+          mode: d.mode,
+          blank: d.blank,
+        })),
       }
       if (itemId) await patch(keys.item(itemId), body)
       else await post(keys.items(), body)
@@ -199,7 +413,7 @@ function ItemEditor({
     } finally {
       setSaving(false)
     }
-  }, [templateId, label, data, layer, fields, itemId, onDone])
+  }, [templateId, label, data, dests, templates, fields, itemId, onDone])
 
   return (
     <form
@@ -211,14 +425,6 @@ function ItemEditor({
     >
       <h2>{itemId ? 'Edit item' : 'New item'}</h2>
 
-      <label className="field">
-        <span>Template</span>
-        <select value={templateId} onChange={(e) => setTemplateId(e.target.value)} disabled={Boolean(itemId)}>
-          {templates.map((t) => (
-            <option key={t.id} value={t.id}>{t.name}</option>
-          ))}
-        </select>
-      </label>
 
       <label className="field">
         <span>Name in the rundown</span>
@@ -234,10 +440,12 @@ function ItemEditor({
         />
       ))}
 
-      <label className="field">
-        <span>Layer</span>
-        <input value={layer} onChange={(e) => setLayer(e.target.value)} />
-      </label>
+      <Destinations
+        value={dests}
+        templates={templates}
+        outputs={outputs}
+        onChange={setDests}
+      />
 
       {problems.length > 0 ? (
         <ul className="edit__problems" role="alert">
