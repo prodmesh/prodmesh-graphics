@@ -92,6 +92,10 @@ function routes() {
       } else if (l.name === 'router' && l.handle?.stack) walk(l.handle.stack)
     }
   }
+  // Express 4 kept the stack on `_router`; 5 exposes `router`. Reading both is
+  // what makes this test survive the upgrade rather than silently walking
+  // nothing and passing.
+  // oxlint-disable-next-line no-underscore-dangle
   walk(app.router?.stack ?? app._router.stack)
   return out
 }
@@ -124,7 +128,7 @@ test('every route is documented or deliberately excluded', () => {
   // Not "document everything" — a decision about whether integrators are meant
   // to call it. Add it to the spec, or to NOT_PUBLIC with a reason.
   assert.deepEqual(
-    undecided.sort(),
+    undecided.toSorted(),
     [],
     `undocumented and unexcluded — add to openapi.json or to NOT_PUBLIC with a reason:\n  ${undecided.join('\n  ')}`,
   )
