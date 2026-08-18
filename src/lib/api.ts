@@ -79,7 +79,16 @@ export type CueRequest = {
   node: string
   output?: string
   layer?: string
-  op: 'take' | 'take_out' | 'arm' | 'update' | 'clear_layer' | 'clear_all' | 'preload'
+  // `take_also` fires the destinations a take deliberately skips (ADR 0018).
+  op:
+    | 'take'
+    | 'take_also'
+    | 'take_out'
+    | 'arm'
+    | 'update'
+    | 'clear_layer'
+    | 'clear_all'
+    | 'preload'
   item?: string
   data?: Record<string, unknown>
   show?: string

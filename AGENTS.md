@@ -189,6 +189,12 @@ specifically shaped to avoid. Do not re-derive them.
 - **A CPU-generated 1080p frame misses 59.94.** Measured 17.55 ms against a
   16.68 ms budget for generate + unpremultiply + encode. Rasterize once at arm;
   animate transforms over the cached result; do the per-pixel encode on the GPU.
+- **`npx tsc --noEmit` checks NOTHING in this repo.** The root `tsconfig.json`
+  is a solution file — `"files": []` plus two project references — so that
+  command type-checks an empty program and exits 0 looking like a pass. The
+  real check is `npm run build`, which runs `tsc -b` across the references and
+  includes the test files. Two type errors reached a rehearsal build this way,
+  after `tsc --noEmit` had reported clean several times.
 - **Long-GOP H.264 is where frame-accurate seek goes to die.** Require an
   all-intra intermediate (ProRes 4444, DNxHR, HAP) for anything that must hit a
   mark; the server transcodes on ingest.

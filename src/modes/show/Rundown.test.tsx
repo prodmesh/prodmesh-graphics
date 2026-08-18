@@ -13,9 +13,9 @@ import { RundownPanel } from './Rundown'
 import { _reset as resetQuery } from '../../lib/useQuery'
 import { _reset as resetStream } from '../../lib/stream'
 
-const item = (id: string, label: string) => ({
+const item = (id: string, label: string, section: string | null = null) => ({
   id, take_id: null, label, template_id: 't1', template_rev: 'blake3:aa',
-  data: {}, destination: { layer: 'Lower Third' }, updated_at: 0,
+  data: {}, destination: { layer: 'Lower Third' }, section, updated_at: 0,
 })
 
 const RUNDOWN = {
@@ -185,12 +185,15 @@ describe('playout mode — ADR 0017', () => {
 
 describe('jump to a section — the rundown calls this required', () => {
   const withSections = () => {
-    RUNDOWN.playlists[0].mode = 'follow'
-    RUNDOWN.playlists[0].items = [
-      { ...item('i1', 'Welcome'), section: 'Verse 1' },
-      { ...item('i2', 'Pastor Dan'), section: 'Chorus 1' },
-      { ...item('i3', 'Third'), section: 'Chorus 1' },
-    ]
+    setMode('follow')
+    const pl = RUNDOWN.playlists[0]
+    if (pl) {
+      pl.items = [
+        item('i1', 'Welcome', 'Verse 1'),
+        item('i2', 'Pastor Dan', 'Chorus 1'),
+        item('i3', 'Third', 'Chorus 1'),
+      ]
+    }
     const calls: { url: string; body: unknown }[] = []
     vi.stubGlobal('fetch', vi.fn(async (url: string, init?: RequestInit) => {
       calls.push({ url, body: init?.body ? JSON.parse(String(init.body)) : null })
