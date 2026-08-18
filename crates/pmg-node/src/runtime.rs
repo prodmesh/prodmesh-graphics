@@ -982,11 +982,14 @@ fn render_group(
                 let Some(o) = e.outputs.iter().find(|o| o.id == out.spec.id) else {
                     continue;
                 };
+                // Outgoing FIRST, so a dissolving graphic is drawn under the
+                // one arriving. Painter's order within a layer: the new slide
+                // comes up over the old rather than behind it.
                 let plan: Vec<LayerPlan> = o
                     .layers
                     .iter()
-                    .filter_map(|l| {
-                        l.occupant.as_ref().map(|occ| LayerPlan {
+                    .flat_map(|l| {
+                        let one = |occ: &engine::Occupant| LayerPlan {
                             layer: l.name.clone(),
                             inst: occ.armed.instance.clone(),
                             values: engine::frame_values(occ),
@@ -994,7 +997,12 @@ fn render_group(
                             // with everything else and are touched outside it.
                             players: occ.armed.players.clone(),
                             tween: occ.tween.as_ref().map(|t| (t.from.clone(), t.t())),
-                        })
+                        };
+                        l.outgoing
+                            .iter()
+                            .chain(l.occupant.iter())
+                            .map(one)
+                            .collect::<Vec<_>>()
                     })
                     .collect();
                 (plan, o.test_pattern.clone())

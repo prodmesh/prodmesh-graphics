@@ -86,6 +86,35 @@ def text(proto, node_id, name, field, *, size, colour, weight=700,
     return n
 
 
+def dissolve(d, node_id, in_ms=260.0, out_ms=260.0):
+    """Replace the template's animation with a plain cross-dissolve.
+
+    The reference fixture slides its band in from x = -900, which is a fine
+    demonstration and wrong for lyrics: a worship set steps a slide every few
+    seconds and an entrance animation on each one is motion nobody asked for.
+    What a lyric slide wants is to be replaced, not to arrive.
+
+    `In` and `Out` are ordinary named timelines — nothing about them is special
+    to the engine — so this is just two opacity tracks. Taking over an occupied
+    layer runs the old graphic's `Out` while the new one runs its `In`, which
+    is what makes the two together read as a cross-fade.
+    """
+    fade = lambda a, b, ms: {                                    # noqa: E731
+        "target": f"{node_id}/style.opacity",
+        "blend": "replace",
+        "keys": [
+            {"t": 0.0, "v": a, "ease": {"cubic": [0.4, 0.0, 0.2, 1.0]}},
+            {"t": ms, "v": b, "ease": "linear"},
+        ],
+    }
+    d["timelines"] = [
+        {"name": "In", "duration_ms": in_ms, "on_complete": "hold",
+         "tracks": [fade(0.0, 1.0, in_ms)]},
+        {"name": "Out", "duration_ms": out_ms, "on_complete": "evict",
+         "tracks": [fade(1.0, 0.0, out_ms)]},
+    ]
+
+
 def root(width=1920.0, height=1080.0, **layout):
     # justify/align default to bottom-left and are overridable, so a caller
     # passing justify= does not collide with a hard-coded one.
@@ -112,6 +141,9 @@ def lyric(d, proto):
                              max_lines=2, line_height=1.18, tracking=0.01)]
     r["children"] = [body]
     d["root"] = r
+    # Fades on the TEXT node rather than the band: the band has no fill in this
+    # look, so fading it would animate nothing visible.
+    dissolve(d, "name")
 
 
 def nametag(d, proto):

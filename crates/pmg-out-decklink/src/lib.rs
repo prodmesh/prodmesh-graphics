@@ -61,9 +61,74 @@ pub struct Sender {
     /// Kept alive for the life of the output: it owns the handle the outputs
     /// were opened from, and reference status is read through it.
     dev: decklink_sys::Device,
+    /// What the downstream is expected to do with alpha.
+    ///
+    /// The frame convention follows THIS, not whether a key port happens to be
+    /// open — see `send_rgba_premultiplied`.
+    key_mode: KeyMode,
     /// Reused between frames so a service does not allocate two buffers a frame.
     fill_buf: std::cell::RefCell<Vec<u8>>,
     key_buf: std::cell::RefCell<Vec<u8>>,
+}
+
+/// Fill the output buffers from one premultiplied RGBA frame.
+///
+/// Free, and pure, so the convention can be tested without a card. It has been
+/// wrong twice — once by unpremultiplying for a pair, once by unpremultiplying
+/// for a fill-only port — and both times the code said nothing about which
+/// convention it meant.
+pub fn build_frames(rgba: &[u8], fill: &mut [u8], key: &mut [u8], paired: bool, straight: bool) {
+    let n = (rgba.len() / 4).min(fill.len() / 4);
+    for i in 0..n {
+        let a = rgba[i * 4 + 3];
+
+        if paired || !straight {
+            // Premultiplied over black IS the renderer's own output — the
+            // buffer is already exactly this, so there is nothing to undo.
+            // For a fill-only port that is also what a monitor, a converter
+            // or a non-keying switcher input should receive.
+            fill[i * 4] = rgba[i * 4 + 2];
+            fill[i * 4 + 1] = rgba[i * 4 + 1];
+            fill[i * 4 + 2] = rgba[i * 4];
+            // The card is not keying on this port; an accidental 0 could
+            // let some downstream path treat the frame as transparent.
+            fill[i * 4 + 3] = 255;
+
+            if !paired {
+                continue;
+            }
+
+            // The key is a monotone alpha signal: coverage replicated into
+            // all three channels, opaque. Never the fill's colour, and
+            // never through a matrix.
+            key[i * 4] = a;
+            key[i * 4 + 1] = a;
+            key[i * 4 + 2] = a;
+            key[i * 4 + 3] = 255;
+        } else {
+            // Embedded alpha: the card wants STRAIGHT, so undo the
+            // premultiply here, at the boundary, once.
+            let (r, g, b) = if a == 0 {
+                // Fully transparent unpremultiplies to black rather than to
+                // infinity, and stale colour here shows up as a halo the
+                // moment a keyer softens the edge.
+                (0, 0, 0)
+            } else if a == 255 {
+                (rgba[i * 4], rgba[i * 4 + 1], rgba[i * 4 + 2])
+            } else {
+                let inv = 255.0 / a as f32;
+                (
+                    (rgba[i * 4] as f32 * inv).min(255.0) as u8,
+                    (rgba[i * 4 + 1] as f32 * inv).min(255.0) as u8,
+                    (rgba[i * 4 + 2] as f32 * inv).min(255.0) as u8,
+                )
+            };
+            fill[i * 4] = b;
+            fill[i * 4 + 1] = g;
+            fill[i * 4 + 2] = r;
+            fill[i * 4 + 3] = a;
+        }
+    }
 }
 
 pub struct Config {
@@ -139,6 +204,7 @@ impl Sender {
 
         let (w, h) = (mode.width as u32, mode.height as u32);
         Ok(Self {
+            key_mode: cfg.key_mode,
             fill,
             key,
             width: w,
@@ -179,63 +245,25 @@ impl Sender {
         let paired = self.key.is_some();
         let mut key = self.key_buf.borrow_mut();
 
-        // The two conventions differ, and the spec is explicit about which is
-        // which (`docs/specs/color-and-key.md` §5):
+        // Does anything downstream actually consume the alpha byte?
         //
-        //   embedded alpha (one port) → STRAIGHT
-        //   separate fill + key       → fill PREMULTIPLIED OVER BLACK, key = alpha
+        // **SDI does not carry alpha.** A plain output converts BGRA to YCbCr
+        // and drops the fourth channel on the floor, so straight colour arrives
+        // with its coverage thrown away: a 10%-covered edge of white type,
+        // unpremultiplied to (255,255,255,26), lands on the wire as FULL WHITE.
+        // Every antialiased edge becomes a one-pixel halo at maximum brightness
+        // and the type reads fattened and hard-edged.
         //
-        // The first version of this unpremultiplied in both cases. That is
-        // right for embedded alpha and wrong for a pair: a downstream keyer
-        // computing `bg*(1-key) + fill` expects fill already multiplied by
-        // coverage, so sending straight fill brightens every soft edge — the
-        // bright-fringe half of the failure §5 describes. Nothing in the code
-        // said which convention it was implementing, which is how it went
-        // unnoticed.
-        for i in 0..n {
-            let a = rgba[i * 4 + 3];
-
-            if paired {
-                // Premultiplied over black IS the renderer's own output — the
-                // buffer is already exactly this, so there is nothing to undo.
-                fill[i * 4] = rgba[i * 4 + 2];
-                fill[i * 4 + 1] = rgba[i * 4 + 1];
-                fill[i * 4 + 2] = rgba[i * 4];
-                // The card is not keying on this port; an accidental 0 could
-                // let some downstream path treat the frame as transparent.
-                fill[i * 4 + 3] = 255;
-
-                // The key is a monotone alpha signal: coverage replicated into
-                // all three channels, opaque. Never the fill's colour, and
-                // never through a matrix.
-                key[i * 4] = a;
-                key[i * 4 + 1] = a;
-                key[i * 4 + 2] = a;
-                key[i * 4 + 3] = 255;
-            } else {
-                // Embedded alpha: the card wants STRAIGHT, so undo the
-                // premultiply here, at the boundary, once.
-                let (r, g, b) = if a == 0 {
-                    // Fully transparent unpremultiplies to black rather than to
-                    // infinity, and stale colour here shows up as a halo the
-                    // moment a keyer softens the edge.
-                    (0, 0, 0)
-                } else if a == 255 {
-                    (rgba[i * 4], rgba[i * 4 + 1], rgba[i * 4 + 2])
-                } else {
-                    let inv = 255.0 / a as f32;
-                    (
-                        (rgba[i * 4] as f32 * inv).min(255.0) as u8,
-                        (rgba[i * 4 + 1] as f32 * inv).min(255.0) as u8,
-                        (rgba[i * 4 + 2] as f32 * inv).min(255.0) as u8,
-                    )
-                };
-                fill[i * 4] = b;
-                fill[i * 4 + 1] = g;
-                fill[i * 4 + 2] = r;
-                fill[i * 4 + 3] = a;
-            }
-        }
+        // This branched on `self.key.is_some()` — the presence of a second port
+        // — which meant a FillOnly output silently took the Embedded path. It
+        // was invisible over NDI, which does carry alpha, and looked like bad
+        // antialiasing on SDI rather than like a missing composite.
+        //
+        // Embedded alpha is now opt-in: it is correct only when the card is in
+        // a keying mode, or the receiver is a capture device that keeps the
+        // fourth channel.
+        let straight = matches!(self.key_mode, KeyMode::Embedded);
+        build_frames(rgba, &mut fill, &mut key, paired, straight);
 
         // BUSY is BACKPRESSURE, not a failure.
         //

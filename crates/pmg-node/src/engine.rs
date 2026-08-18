@@ -137,6 +137,17 @@ pub struct Occupant {
 pub struct Layer {
     pub name: String,
     pub occupant: Option<Occupant>,
+    /// The graphic this layer is dissolving out of, still playing its `Out`.
+    ///
+    /// A take over an occupied layer used to drop what was there on the same
+    /// frame, so slide-to-slide was a hard cut plus an entrance. A cross-fade
+    /// is just both graphics on screen at once — the old one running the `Out`
+    /// its template already authors, the new one running its `In` — so this
+    /// needs no new animation machinery, only somewhere to keep the old one.
+    ///
+    /// Retired the moment its `Out` finishes, so the steady state is one
+    /// `Option` check rather than a second draw pass forever.
+    pub outgoing: Option<Occupant>,
 }
 
 pub struct Output {
@@ -272,6 +283,11 @@ impl LayerEngine {
                         .map(|name| Layer {
                             name: name.clone(),
                             occupant: carried.remove(name).flatten(),
+                            // A reconfigure does not carry a dissolve across.
+                            // The layer stack changing mid-fade is rare and a
+                            // half-faded ghost surviving it would be worse than
+                            // the fade ending early.
+                            outgoing: None,
                         })
                         .collect();
                 }
@@ -301,6 +317,7 @@ impl LayerEngine {
                         .map(|n| Layer {
                             name: n.clone(),
                             occupant: None,
+                            outgoing: None,
                         })
                         .collect(),
                     fps_num: fps.0,
@@ -434,6 +451,18 @@ impl LayerEngine {
                     let out = self.output_mut(&output).ok_or(RejectReason::NoSuchLayer)?;
                     frame.get_or_insert(out.frame);
                     let l = out.layer_mut(&layer).ok_or(RejectReason::NoSuchLayer)?;
+                    // Dissolve rather than cut. Whatever was here starts its
+                    // Out now; the arriving graphic starts its In. Only one
+                    // outgoing is kept — arrowing a song faster than the fade
+                    // should replace the thing fading, not stack three deep.
+                    l.outgoing = l.occupant.take().map(|mut o| {
+                        o.phase = Phase::Out;
+                        o.t_ms = 0.0;
+                        // A morph in flight is abandoned: it was interpolating
+                        // toward data this graphic is no longer showing.
+                        o.tween = None;
+                        o
+                    });
                     l.occupant = armed.map(|armed| Occupant {
                         armed,
                         phase: Phase::In,
@@ -813,6 +842,14 @@ impl LayerEngine {
         out.frame += 1;
 
         for layer in &mut out.layers {
+            // The dissolving graphic runs on the same clock as everything else.
+            if let Some(o) = &mut layer.outgoing {
+                o.t_ms += dt;
+                if o.t_ms >= o.armed.out_ms {
+                    layer.outgoing = None;
+                }
+            }
+
             let Some(o) = &mut layer.occupant else {
                 continue;
             };
