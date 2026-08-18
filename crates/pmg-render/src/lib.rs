@@ -52,6 +52,51 @@ pub struct Degraded(pub bool);
 /// ours, in-shader, identical on both sides. See `parity.wgsl`.
 pub const TARGET_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
 
+/// Where the scene is composited, before it is encoded to [`TARGET_FORMAT`].
+///
+/// **Linear light, premultiplied, 16-bit float** — ADR 0012's "composite in
+/// linear, encode once at output", which the renderer described and did not do
+/// until 2026-08-17.
+///
+/// Blending coverage into gamma-encoded values makes every antialiased edge too
+/// dark: a 50%-covered edge of white text stored 128/255, which is 21% of the
+/// light it should carry, so text read thin and crunchy against a dark key.
+/// Worst at maximum contrast — white type with no plate over camera — and
+/// nearly invisible on the cream-on-teal scripture block, which is exactly how
+/// it survived this long.
+///
+/// 16-bit float rather than 8-bit linear: 8 bits of linear light bands visibly
+/// in the darks, which is the whole reason the sRGB curve exists.
+pub const COMPOSITE_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba16Float;
+
+/// sRGB electro-optical transfer function, on one channel.
+///
+/// The exact piecewise curve, not the 2.2 approximation: the linear toe matters
+/// for precisely the near-black values an antialiased edge is made of, and
+/// getting it approximately right here would leave a smaller version of the
+/// bug this replaced.
+pub fn srgb_to_linear(c: f32) -> f32 {
+    if c <= 0.040_45 {
+        c / 12.92
+    } else {
+        ((c + 0.055) / 1.055).powf(2.4)
+    }
+}
+
+/// Straight (un-premultiplied) sRGB colour to straight linear.
+///
+/// **Alpha is not converted.** Alpha is coverage — a geometric fraction, already
+/// linear — and putting it through a transfer function would be a second bug
+/// wearing the first one's clothes.
+pub fn color_to_linear(c: [f32; 4]) -> [f32; 4] {
+    [
+        srgb_to_linear(c[0]),
+        srgb_to_linear(c[1]),
+        srgb_to_linear(c[2]),
+        c[3],
+    ]
+}
+
 pub fn selftest() -> Result<(), String> {
     parity::selftest()
 }

@@ -175,10 +175,34 @@ fn fs_unknown(in : VsOut) -> @location(0) vec4<f32> {
 @group(1) @binding(0) var img_tex : texture_2d<f32>;
 @group(1) @binding(1) var img_smp : sampler;
 
+fn srgb_to_linear(c : f32) -> f32 {
+    // The exact piecewise curve, matching srgb_to_linear() on the Rust side and
+    // linear_to_srgb() below. The linear toe is what soft edges are made of.
+    if (c <= 0.0404500) {
+        return c / 12.92;
+    }
+    return pow((c + 0.055) / 1.055, 2.4);
+}
+
 @fragment
 fn fs_image(in : VsOut) -> @location(0) vec4<f32> {
     let uv = u.uv.xy + in.uv * u.uv.zw;
-    let texel = textureSample(img_tex, img_smp, uv);
+    let enc = textureSample(img_tex, img_smp, uv);
+
+    // Decoded pixels are premultiplied AND sRGB-encoded, and the scene
+    // composites in linear (ADR 0012). Un-premultiply before linearizing:
+    // srgb_to_linear(a * c) is not a * srgb_to_linear(c), and the error is
+    // largest at exactly the low alphas a soft edge is made of.
+    var texel = vec4<f32>(0.0, 0.0, 0.0, 0.0);
+    if (enc.a > 0.0) {
+        let straight = enc.rgb / enc.a;
+        let lin = vec3<f32>(
+            srgb_to_linear(straight.r),
+            srgb_to_linear(straight.g),
+            srgb_to_linear(straight.b),
+        );
+        texel = vec4<f32>(lin * enc.a, enc.a);
+    }
 
     // Rounded corners still apply: an image node with a radius is a rounded
     // picture, not a rectangle with rounded paint over it.
@@ -189,4 +213,65 @@ fn fs_image(in : VsOut) -> @location(0) vec4<f32> {
 
     // Already premultiplied, so opacity scales all four channels together.
     return texel * coverage * u.opacity;
+}
+
+// ---------------------------------------------------------------------------
+// Encode: linear light to the output transfer function.
+//
+// The scene composites into an Rgba16Float target in LINEAR light (ADR 0012),
+// and this is the "encode once, at output" half of that rule. One full-screen
+// triangle, no vertex buffer.
+//
+// Applied to the colour only. Alpha is coverage — a geometric fraction that was
+// never encoded — and putting it through a transfer function here would undo
+// the key, which must stay a monotone alpha signal.
+// ---------------------------------------------------------------------------
+
+@group(0) @binding(1) var scene_tex : texture_2d<f32>;
+@group(0) @binding(2) var scene_smp : sampler;
+
+struct EncodeOut {
+    @builtin(position) pos : vec4<f32>,
+    @location(0) uv : vec2<f32>,
+};
+
+@vertex
+fn vs_encode(@builtin(vertex_index) i : u32) -> EncodeOut {
+    // One oversized triangle rather than two triangles: no shared edge, so no
+    // chance of a seam from differing interpolation on either side of it.
+    var out : EncodeOut;
+    let x = f32((i << 1u) & 2u) * 2.0 - 1.0;
+    let y = f32(i & 2u) * 2.0 - 1.0;
+    out.pos = vec4<f32>(x, y, 0.0, 1.0);
+    out.uv  = vec2<f32>((x + 1.0) * 0.5, 1.0 - (y + 1.0) * 0.5);
+    return out;
+}
+
+fn linear_to_srgb(c : f32) -> f32 {
+    // The exact piecewise inverse, matching srgb_to_linear() on the Rust side.
+    // The linear toe is what an antialiased edge is made of.
+    if (c <= 0.0031308) {
+        return c * 12.92;
+    }
+    return 1.055 * pow(c, 1.0 / 2.4) - 0.055;
+}
+
+@fragment
+fn fs_encode(in : EncodeOut) -> @location(0) vec4<f32> {
+    let px = textureSample(scene_tex, scene_smp, in.uv);
+    let a = px.a;
+    // Un-premultiply, encode, re-premultiply. Encoding the premultiplied value
+    // directly is wrong because the transfer function is not linear:
+    // encode(a*c) != a*encode(c), and the error is largest at the low alphas an
+    // antialiased edge is entirely composed of.
+    if (a <= 0.0) {
+        return vec4<f32>(0.0, 0.0, 0.0, 0.0);
+    }
+    let straight = px.rgb / a;
+    let enc = vec3<f32>(
+        linear_to_srgb(straight.r),
+        linear_to_srgb(straight.g),
+        linear_to_srgb(straight.b),
+    );
+    return vec4<f32>(enc * a, a);
 }

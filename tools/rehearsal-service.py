@@ -82,7 +82,8 @@ def dest(output, rev, mode="auto", blank=False):
 # ---------------------------------------------------------------------------
 def build_service(rev):
     """rev: {'lower3rd'|'fullscrn'|'ledwall'|'nametag'} -> template_rev"""
-    lt, fs, wall, tag = rev["lower3rd"], rev["fullscrn"], rev["ledwall"], rev["nametag"]
+    lt, fs, wall = rev["lower3rd"], rev["fullscrn"], rev["ledwall"]
+    tag, scr = rev["nametag"], rev["scripture"]
 
     # 0:00 and 27:25 — name tags. Lower third ONLY. A name tag has no
     # full-screen version and the wall does not carry it.
@@ -94,7 +95,7 @@ def build_service(rev):
         # with the lower third.
         ("Call to worship verse",
          {"name": "Let everything that has breath praise the Lord.", "title": "Psalm 150:6"},
-         [dest(LT, lt), dest(FS, fs, mode="on_request"), dest(WALL, wall)]),
+         [dest(LT, scr), dest(FS, fs, mode="on_request"), dest(WALL, wall)]),
     ]
 
     # 2:10 — the worship set. Follow mode: navigating IS taking.
@@ -136,14 +137,14 @@ def build_service(rev):
         ("Verse — part 1",
          {"name": "For I consider that the sufferings of this present time",
           "title": "Romans 8:18"},
-         [dest(LT, lt), dest(FS, fs), dest(WALL, wall)]),
+         [dest(LT, scr), dest(FS, fs), dest(WALL, wall)]),
         ("Verse — part 2",
          {"name": "are not worth comparing with the glory that is to be revealed to us.",
           "title": "Romans 8:18"},
-         [dest(LT, lt), dest(FS, fs), dest(WALL, wall)]),
+         [dest(LT, scr), dest(FS, fs), dest(WALL, wall)]),
         ("Verse — part 3",
          {"name": "For the creation waits with eager longing.", "title": "Romans 8:19"},
-         [dest(LT, lt), dest(FS, fs), dest(WALL, wall)]),
+         [dest(LT, scr), dest(FS, fs), dest(WALL, wall)]),
         ("Pastor", {"name": "Dan Whitfield", "title": "Lead Pastor"}, [dest(LT, tag)]),
         # 30:00+ — "Full screen graphics typically blank out the LED wall
         # leaving only a background." A blank destination is an INSTRUCTION,
@@ -179,7 +180,7 @@ def build_service(rev):
         sermon += [
             (sl["text"].replace("\n", " ")[:44],
              {"name": sl["text"].replace("\n", " "), "title": "Psalm 51"},
-             [dest(LT, lt), dest(FS, fs), dest(WALL, wall)])
+             [dest(LT, scr), dest(FS, fs), dest(WALL, wall)])
             for sl in message["running_order"][:12]
         ]
 
@@ -210,7 +211,8 @@ def main():
     ).stdout)
 
     key = {"01JCHREHEARSALLOWER3RD01": "lower3rd", "01JCHREHEARSALFULLSCRN01": "fullscrn",
-           "01JCHREHEARSALLEDWALL001": "ledwall", "01JCHREHEARSALNAMETAG001": "nametag"}
+           "01JCHREHEARSALLEDWALL001": "ledwall", "01JCHREHEARSALNAMETAG001": "nametag",
+           "01JCHREHEARSALSCRIPTUR01": "scripture"}
     rev = {key[l["id"]]: publish(l["id"], l["name"], l["path"]) for l in looks}
 
     playlist_ids = []

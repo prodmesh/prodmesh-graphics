@@ -7,7 +7,7 @@
 //! disagreed.
 
 use pmg_render::scene::{GlyphSource, RunGlyph, SceneInstance};
-use pmg_render::{Load, SceneRenderer, TARGET_FORMAT};
+use pmg_render::{Load, SceneRenderer};
 use pmg_scene::doc::{FontSpec, SceneDoc};
 
 const W: u32 = 256;
@@ -166,21 +166,9 @@ fn a_second_layer_draws_over_the_first_without_erasing_it() {
     let upper = bar(160.0, [0.0, 0.0, 1.0, 1.0]);
     let (li, ui) = (instance(&lower), instance(&upper));
 
-    let tex = g.device.create_texture(&wgpu::TextureDescriptor {
-        label: None,
-        size: wgpu::Extent3d {
-            width: W,
-            height: H,
-            depth_or_array_layers: 1,
-        },
-        mip_level_count: 1,
-        sample_count: 1,
-        dimension: wgpu::TextureDimension::D2,
-        format: TARGET_FORMAT,
-        usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
-        view_formats: &[],
-    });
-    let view = tex.create_view(&Default::default());
+    // Composites in linear and encodes on readback, the same as the node.
+    let fb = pmg_render::draw::LinearFrame::new(&g.device, W, H);
+    let view = fb.view().clone();
 
     let lr = SceneRenderer::new(&g.device, &g.queue, &li);
     let ur = SceneRenderer::new(&g.device, &g.queue, &ui);
@@ -189,7 +177,8 @@ fn a_second_layer_draws_over_the_first_without_erasing_it() {
     lr.render_with(&g.device, &g.queue, &li, &[], &view, Load::Clear);
     ur.render_with(&g.device, &g.queue, &ui, &[], &view, Load::Over);
 
-    let px = read_back(&g, &tex);
+    fb.encode(&g.device, &g.queue);
+    let px = read_back(&g, fb.output());
     assert_eq!(alpha_at(&px, 48), 255, "the LOWER layer's bar must survive");
     assert_eq!(
         alpha_at(&px, 192),
@@ -216,25 +205,14 @@ fn drawing_both_with_clear_loses_the_lower_layer() {
     let upper = bar(160.0, [0.0, 0.0, 1.0, 1.0]);
     let (li, ui) = (instance(&lower), instance(&upper));
 
-    let tex = g.device.create_texture(&wgpu::TextureDescriptor {
-        label: None,
-        size: wgpu::Extent3d {
-            width: W,
-            height: H,
-            depth_or_array_layers: 1,
-        },
-        mip_level_count: 1,
-        sample_count: 1,
-        dimension: wgpu::TextureDimension::D2,
-        format: TARGET_FORMAT,
-        usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
-        view_formats: &[],
-    });
-    let view = tex.create_view(&Default::default());
+    // Composites in linear and encodes on readback, the same as the node.
+    let fb = pmg_render::draw::LinearFrame::new(&g.device, W, H);
+    let view = fb.view().clone();
     SceneRenderer::new(&g.device, &g.queue, &li).render(&g.device, &g.queue, &li, &[], &view);
     SceneRenderer::new(&g.device, &g.queue, &ui).render(&g.device, &g.queue, &ui, &[], &view);
 
-    let px = read_back(&g, &tex);
+    fb.encode(&g.device, &g.queue);
+    let px = read_back(&g, fb.output());
     assert_eq!(
         alpha_at(&px, 48),
         0,

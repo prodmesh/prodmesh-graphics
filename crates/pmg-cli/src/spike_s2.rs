@@ -180,22 +180,12 @@ fn render_at(
     values.insert("t/transform.translate.x".to_string(), dx);
     let frame = pmg_render::scene::apply_tracks(inst, &values);
 
-    let tex = gpu.device.create_texture(&wgpu::TextureDescriptor {
-        label: None,
-        size: wgpu::Extent3d {
-            width: w,
-            height: h,
-            depth_or_array_layers: 1,
-        },
-        mip_level_count: 1,
-        sample_count: 1,
-        dimension: wgpu::TextureDimension::D2,
-        format: pmg_render::TARGET_FORMAT,
-        usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
-        view_formats: &[],
-    });
-    let view = tex.create_view(&Default::default());
-    renderer.render(&gpu.device, &gpu.queue, inst, &frame, &view);
+    // S2 measures sub-pixel motion, so it must go through the SAME pipeline the
+    // node does — including the linear composite and the encode. Measuring a
+    // different path would measure a different renderer.
+    let fb = pmg_render::draw::LinearFrame::new(&gpu.device, w, h);
+    renderer.render(&gpu.device, &gpu.queue, inst, &frame, fb.view());
+    fb.encode(&gpu.device, &gpu.queue);
 
     let bpr = w * 4;
     let buf = gpu.device.create_buffer(&wgpu::BufferDescriptor {
@@ -207,7 +197,7 @@ fn render_at(
     let mut enc = gpu.device.create_command_encoder(&Default::default());
     enc.copy_texture_to_buffer(
         wgpu::TexelCopyTextureInfo {
-            texture: &tex,
+            texture: fb.output(),
             mip_level: 0,
             origin: wgpu::Origin3d::ZERO,
             aspect: wgpu::TextureAspect::All,

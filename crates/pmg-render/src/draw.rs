@@ -11,7 +11,7 @@
 
 use crate::scene::{FrameNode, RenderContent, SceneInstance};
 use crate::Load;
-use crate::TARGET_FORMAT;
+use crate::{COMPOSITE_FORMAT, TARGET_FORMAT};
 use pmg_scene::doc::Transform2D;
 
 /// Uniform block. Must match `Node` in `scene.wgsl` exactly.
@@ -132,6 +132,138 @@ pub struct SceneRenderer {
     atlas_size: (u32, u32),
 }
 
+
+/// Linear light to the output transfer function — the "encode once, at output"
+/// half of ADR 0012.
+///
+/// Separate from [`SceneRenderer`] because a renderer draws ONE layer and a
+/// frame is a stack of them. The whole stack composites in linear and is
+/// encoded once; encoding per layer would blend the layer above into
+/// gamma-encoded values and put the bug back between layers instead of inside
+/// them.
+pub struct Encoder {
+    pipeline: wgpu::RenderPipeline,
+    layout: wgpu::BindGroupLayout,
+    sampler: wgpu::Sampler,
+}
+
+impl Encoder {
+    pub fn new(device: &wgpu::Device) -> Self {
+        let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("pmg-encode"),
+            source: wgpu::ShaderSource::Wgsl(include_str!("scene.wgsl").into()),
+        });
+        let layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("pmg-encode-bgl"),
+            entries: &[
+                wgpu::BindGroupLayoutEntry {
+                    binding: 1,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Float { filterable: false },
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        multisampled: false,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 2,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::NonFiltering),
+                    count: None,
+                },
+            ],
+        });
+        let pl = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("pmg-encode-pl"),
+            bind_group_layouts: &[Some(&layout)],
+            immediate_size: 0,
+        });
+        let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("pmg-encode-pipe"),
+            layout: Some(&pl),
+            vertex: wgpu::VertexState {
+                module: &shader,
+                entry_point: Some("vs_encode"),
+                buffers: &[],
+                compilation_options: Default::default(),
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: &shader,
+                entry_point: Some("fs_encode"),
+                targets: &[Some(wgpu::ColorTargetState {
+                    format: TARGET_FORMAT,
+                    // REPLACE, not blend. This writes the finished frame; the
+                    // compositing already happened, in linear.
+                    blend: None,
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+                compilation_options: Default::default(),
+            }),
+            primitive: wgpu::PrimitiveState::default(),
+            depth_stencil: None,
+            multisample: wgpu::MultisampleState::default(),
+            multiview_mask: None,
+            cache: None,
+        });
+        // NEAREST on every field. This pass is 1:1 with the target, so there is
+        // nothing to filter, and an unstated filter mode is exactly the kind of
+        // default that differs between backends (parity rule 4).
+        let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
+            label: Some("pmg-encode-sampler"),
+            address_mode_u: wgpu::AddressMode::ClampToEdge,
+            address_mode_v: wgpu::AddressMode::ClampToEdge,
+            address_mode_w: wgpu::AddressMode::ClampToEdge,
+            mag_filter: wgpu::FilterMode::Nearest,
+            min_filter: wgpu::FilterMode::Nearest,
+            mipmap_filter: wgpu::MipmapFilterMode::Nearest,
+            ..Default::default()
+        });
+        Self { pipeline, layout, sampler }
+    }
+
+    /// Encode `linear` into `target`, replacing it.
+    pub fn encode(
+        &self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        linear: &wgpu::TextureView,
+        target: &wgpu::TextureView,
+    ) {
+        let bind = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("pmg-encode-bg"),
+            layout: &self.layout,
+            entries: &[
+                wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::TextureView(linear) },
+                wgpu::BindGroupEntry { binding: 2, resource: wgpu::BindingResource::Sampler(&self.sampler) },
+            ],
+        });
+        let mut enc = device.create_command_encoder(&Default::default());
+        {
+            let mut pass = enc.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("pmg-encode-pass"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: target,
+                    resolve_target: None,
+                    depth_slice: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                depth_stencil_attachment: None,
+                timestamp_writes: None,
+                occlusion_query_set: None,
+                multiview_mask: None,
+            });
+            pass.set_pipeline(&self.pipeline);
+            pass.set_bind_group(0, &bind, &[]);
+            pass.draw(0..3, 0..1);
+        }
+        queue.submit(Some(enc.finish()));
+    }
+}
+
 impl SceneRenderer {
     pub fn new(device: &wgpu::Device, queue: &wgpu::Queue, inst: &SceneInstance) -> Self {
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
@@ -246,7 +378,7 @@ impl SceneRenderer {
                         module: &shader,
                         entry_point: Some(fs),
                         targets: &[Some(wgpu::ColorTargetState {
-                            format: TARGET_FORMAT,
+                            format: COMPOSITE_FORMAT,
                             blend: Some(blend),
                             write_mask: wgpu::ColorWrites::ALL,
                         })],
@@ -300,7 +432,7 @@ impl SceneRenderer {
                 module: &shader,
                 entry_point: Some("fs_image"),
                 targets: &[Some(wgpu::ColorTargetState {
-                    format: TARGET_FORMAT,
+                    format: COMPOSITE_FORMAT,
                     blend: Some(blend),
                     write_mask: wgpu::ColorWrites::ALL,
                 })],
@@ -647,7 +779,9 @@ impl SceneRenderer {
             });
             let rect = f.rect.unwrap_or(n.rect);
             let (m, t) = world[i];
-            let color = n.fill.map(|c| c.rgba).unwrap_or([1.0, 1.0, 1.0, 1.0]);
+            // Linear light, converted ONCE here on the CPU. Doing it in the
+            // shader would repeat it per pixel for a value that is per node.
+            let color = crate::color_to_linear(n.fill.map(|c| c.rgba).unwrap_or([1.0; 4]));
 
             let u = NodeUniform {
                 rect: [rect.x, rect.y, rect.w, rect.h],
@@ -831,6 +965,109 @@ impl SceneRenderer {
             }
         }
         queue.submit(Some(enc.finish()));
+    }
+}
+
+/// A frame buffer that composites in linear and encodes on the way out.
+///
+/// The pairing every caller of [`SceneRenderer`] needs: a linear float texture
+/// to draw the layer stack into, and an 8-bit one to read back. Handed out as
+/// one thing because they are only ever correct together — a caller that
+/// renders into the 8-bit texture directly gets gamma-space compositing back,
+/// and the symptom is antialiased edges too dark against a dark key, which
+/// reads as a font problem rather than a pipeline one.
+pub struct LinearFrame {
+    linear: wgpu::Texture,
+    linear_view: wgpu::TextureView,
+    output: wgpu::Texture,
+    output_view: wgpu::TextureView,
+    encoder: Encoder,
+}
+
+impl LinearFrame {
+    pub fn new(device: &wgpu::Device, width: u32, height: u32) -> Self {
+        let size = wgpu::Extent3d {
+            width,
+            height,
+            depth_or_array_layers: 1,
+        };
+        let make = |label, format, usage| {
+            device.create_texture(&wgpu::TextureDescriptor {
+                label: Some(label),
+                size,
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format,
+                usage,
+                view_formats: &[],
+            })
+        };
+        let linear = make(
+            "pmg-linear",
+            crate::COMPOSITE_FORMAT,
+            wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
+        );
+        let output = make(
+            "pmg-output",
+            crate::TARGET_FORMAT,
+            wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
+        );
+        Self {
+            linear_view: linear.create_view(&Default::default()),
+            output_view: output.create_view(&Default::default()),
+            encoder: Encoder::new(device),
+            linear,
+            output,
+        }
+    }
+
+    /// Where layers draw. Linear, premultiplied.
+    pub fn view(&self) -> &wgpu::TextureView {
+        &self.linear_view
+    }
+
+    /// The encoded frame. Call [`Self::encode`] first.
+    pub fn output(&self) -> &wgpu::Texture {
+        &self.output
+    }
+
+    /// Once per frame, after the last layer and before reading back.
+    pub fn encode(&self, device: &wgpu::Device, queue: &wgpu::Queue) {
+        self.encoder
+            .encode(device, queue, &self.linear_view, &self.output_view);
+    }
+
+    /// Clear the composite to transparent black.
+    ///
+    /// A keyed graphic is alpha over nothing; clearing to anything else folds a
+    /// background into the key.
+    pub fn clear(&self, device: &wgpu::Device, queue: &wgpu::Queue) {
+        let mut enc = device.create_command_encoder(&Default::default());
+        {
+            let _ = enc.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("pmg-linear-clear"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: &self.linear_view,
+                    resolve_target: None,
+                    depth_slice: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                depth_stencil_attachment: None,
+                timestamp_writes: None,
+                occlusion_query_set: None,
+                multiview_mask: None,
+            });
+        }
+        queue.submit(Some(enc.finish()));
+    }
+
+    /// Unused today, kept so `linear` is not a dead field to the compiler.
+    pub fn linear(&self) -> &wgpu::Texture {
+        &self.linear
     }
 }
 

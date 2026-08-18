@@ -68,8 +68,12 @@ impl Gpu {
 pub struct Target {
     pub width: u32,
     pub height: u32,
-    texture: wgpu::Texture,
-    view: wgpu::TextureView,
+    /// Composites in linear and encodes on the way out (ADR 0012).
+    ///
+    /// The pairing lives in `pmg-render` rather than here because every caller
+    /// of `SceneRenderer` needs it — the CLI and the spikes had their own
+    /// copies of the same two textures before it existed.
+    frame: pmg_render::draw::LinearFrame,
     readback: wgpu::Buffer,
     bytes_per_row: u32,
 }
@@ -80,21 +84,7 @@ impl Target {
         if !bytes_per_row.is_multiple_of(wgpu::COPY_BYTES_PER_ROW_ALIGNMENT) {
             bail!("canvas width {width} needs row padding, which this M1 path does not do yet");
         }
-        let texture = gpu.device.create_texture(&wgpu::TextureDescriptor {
-            label: Some("pmg-node-target"),
-            size: wgpu::Extent3d {
-                width,
-                height,
-                depth_or_array_layers: 1,
-            },
-            mip_level_count: 1,
-            sample_count: 1,
-            dimension: wgpu::TextureDimension::D2,
-            format: pmg_render::TARGET_FORMAT,
-            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
-            view_formats: &[],
-        });
-        let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+        let frame = pmg_render::draw::LinearFrame::new(&gpu.device, width, height);
         let readback = gpu.device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("pmg-node-readback"),
             size: (bytes_per_row * height) as u64,
@@ -104,15 +94,27 @@ impl Target {
         Ok(Self {
             width,
             height,
-            texture,
-            view,
+            frame,
             readback,
             bytes_per_row,
         })
     }
 
+    /// Where layers draw: the LINEAR composite, not the output texture.
+    ///
+    /// Callers do not choose. Handing out the 8-bit view would silently put
+    /// compositing back in gamma space, and the symptom — antialiased edges too
+    /// dark against a dark key — looks like a font problem rather than a
+    /// pipeline one.
     pub fn view(&self) -> &wgpu::TextureView {
-        &self.view
+        self.frame.view()
+    }
+
+    /// Convert the composited frame to the output transfer function.
+    ///
+    /// Once per frame, after every layer and before readback.
+    pub fn encode(&self, gpu: &Gpu) {
+        self.frame.encode(&gpu.device, &gpu.queue);
     }
 
     /// Clear to fully transparent.
@@ -121,34 +123,20 @@ impl Target {
     /// empty layer must key out entirely rather than punch a black hole in the
     /// programme feed.
     pub fn clear(&self, gpu: &Gpu) {
-        let mut enc = gpu.device.create_command_encoder(&Default::default());
-        {
-            let _ = enc.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("pmg-node-clear"),
-                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: &self.view,
-                    depth_slice: None,
-                    resolve_target: None,
-                    ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
-                        store: wgpu::StoreOp::Store,
-                    },
-                })],
-                depth_stencil_attachment: None,
-                timestamp_writes: None,
-                occlusion_query_set: None,
-                multiview_mask: None,
-            });
-        }
-        gpu.queue.submit(Some(enc.finish()));
+        self.frame.clear(&gpu.device, &gpu.queue);
     }
 
     /// Copy the target back to CPU memory as premultiplied RGBA.
     pub fn read(&self, gpu: &Gpu) -> Result<Vec<u8>> {
+        // Encode HERE rather than expecting every caller to remember. A frame
+        // read without encoding is a whole frame of linear light interpreted as
+        // sRGB — washed out, and wrong in a way that looks like a colour
+        // setting rather than a missing step.
+        self.encode(gpu);
         let mut enc = gpu.device.create_command_encoder(&Default::default());
         enc.copy_texture_to_buffer(
             wgpu::TexelCopyTextureInfo {
-                texture: &self.texture,
+                texture: self.frame.output(),
                 mip_level: 0,
                 origin: wgpu::Origin3d::ZERO,
                 aspect: wgpu::TextureAspect::All,

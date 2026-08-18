@@ -340,21 +340,9 @@ pub fn main(args: &[String]) -> Result<()> {
         .map(|i| SceneRenderer::new(&device, &queue, i));
     let (w, h) = (inst.canvas_w, inst.canvas_h);
 
-    let tex = device.create_texture(&wgpu::TextureDescriptor {
-        label: Some("pmg-take-target"),
-        size: wgpu::Extent3d {
-            width: w,
-            height: h,
-            depth_or_array_layers: 1,
-        },
-        mip_level_count: 1,
-        sample_count: 1,
-        dimension: wgpu::TextureDimension::D2,
-        format: pmg_render::TARGET_FORMAT,
-        usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
-        view_formats: &[],
-    });
-    let view = tex.create_view(&wgpu::TextureViewDescriptor::default());
+    // Composites in linear, encodes on the way out (ADR 0012).
+    let frame_buf = pmg_render::draw::LinearFrame::new(&device, w, h);
+    let view = frame_buf.view().clone();
 
     let bytes_per_row = w * 4;
     if bytes_per_row % wgpu::COPY_BYTES_PER_ROW_ALIGNMENT != 0 {
@@ -487,11 +475,12 @@ pub fn main(args: &[String]) -> Result<()> {
             }
         }
 
-        // Read back.
+        // Read back — encoding the finished linear frame first.
+        frame_buf.encode(&device, &queue);
         let mut enc = device.create_command_encoder(&Default::default());
         enc.copy_texture_to_buffer(
             wgpu::TexelCopyTextureInfo {
-                texture: &tex,
+                texture: frame_buf.output(),
                 mip_level: 0,
                 origin: wgpu::Origin3d::ZERO,
                 aspect: wgpu::TextureAspect::All,

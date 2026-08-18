@@ -215,23 +215,12 @@ fn render(
     queue: &wgpu::Queue,
     inst: &pmg_render::scene::SceneInstance,
 ) -> Vec<u8> {
-    let tex = device.create_texture(&wgpu::TextureDescriptor {
-        label: None,
-        size: wgpu::Extent3d {
-            width: 64,
-            height: 64,
-            depth_or_array_layers: 1,
-        },
-        mip_level_count: 1,
-        sample_count: 1,
-        dimension: wgpu::TextureDimension::D2,
-        format: pmg_render::TARGET_FORMAT,
-        usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
-        view_formats: &[],
-    });
-    let view = tex.create_view(&Default::default());
+    // Linear composite plus encode, the same path the node takes.
+    let fb = pmg_render::draw::LinearFrame::new(device, 64, 64);
+    let view = fb.view().clone();
     let r = pmg_render::SceneRenderer::new(device, queue, inst);
     r.render(device, queue, inst, &[], &view);
+    fb.encode(device, queue);
 
     let buf = device.create_buffer(&wgpu::BufferDescriptor {
         label: None,
@@ -242,7 +231,7 @@ fn render(
     let mut enc = device.create_command_encoder(&Default::default());
     enc.copy_texture_to_buffer(
         wgpu::TexelCopyTextureInfo {
-            texture: &tex,
+            texture: fb.output(),
             mip_level: 0,
             origin: wgpu::Origin3d::ZERO,
             aspect: wgpu::TextureAspect::All,
