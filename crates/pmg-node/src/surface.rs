@@ -67,9 +67,13 @@ pub struct Mapping {
     /// MIDI, keyed `"note:60"` or `"cc:7"`.
     #[serde(default)]
     pub midi: HashMap<String, Trigger>,
-    /// GPI, keyed by pin number as a string.
+    /// GPI, keyed by pin number as a string. Also what RossTalk `GPI <n>` hits.
     #[serde(default)]
     pub gpi: HashMap<String, Trigger>,
+    /// RossTalk `CC <slot>`, keyed by slot. For switchers that speak only
+    /// custom controls.
+    #[serde(default)]
+    pub cc: HashMap<String, Trigger>,
 }
 
 impl Mapping {
@@ -230,4 +234,127 @@ pub fn serve_osc(port: u16, mapping: Mapping, tx: Sender<FromLink>) -> Result<()
         seq += 1;
         fire(&tx, trigger, "osc", seq);
     }
+}
+
+// ---------------------------------------------------------------------------
+// RossTalk
+// ---------------------------------------------------------------------------
+
+/// Turn one RossTalk line into a trigger.
+///
+/// `docs/specs/control-surfaces.md` §5. Three forms:
+///
+/// ```text
+/// GPI <n>                                   a configured slot
+/// CC <slot>                                 a configured slot
+/// CUSTOM take|<output>|<layer>|<item>       self-describing
+/// CUSTOM takeout|<output>|<layer>
+/// CUSTOM clear|<output>|<layer>
+/// CUSTOM clearall|<output>
+/// ```
+///
+/// `CUSTOM` is the real surface. `GPI` and `CC` exist for switchers that can
+/// only send those, and they resolve through the same mapping file the physical
+/// GPI inputs use — one place where a slot number means something, rather than
+/// two that can disagree.
+pub fn rosstalk_trigger(line: &str, mapping: &Mapping) -> Option<Trigger> {
+    let line = line.trim();
+    // Case-insensitive on the verb: switchers differ, and a panel that shouts
+    // is not a panel that is wrong.
+    let (verb, rest) = line.split_once(char::is_whitespace)?;
+    let rest = rest.trim();
+    match verb.to_ascii_uppercase().as_str() {
+        "GPI" => mapping.gpi.get(rest).cloned(),
+        "CC" => mapping.cc.get(rest).cloned(),
+        "CUSTOM" => {
+            let mut f = rest.split('|').map(str::trim);
+            let op = f.next()?.to_ascii_lowercase();
+            let (a, b, c) = (f.next(), f.next(), f.next());
+            Some(match op.as_str() {
+                "take" => Trigger {
+                    op: "take".into(),
+                    output: a.map(Into::into),
+                    layer: b.map(Into::into),
+                    item: Some(c?.into()),
+                },
+                "takeout" => Trigger {
+                    op: "take_out".into(),
+                    output: a.map(Into::into),
+                    layer: b.map(Into::into),
+                    item: None,
+                },
+                "clear" => Trigger {
+                    op: "clear_layer".into(),
+                    output: a.map(Into::into),
+                    layer: b.map(Into::into),
+                    item: None,
+                },
+                "clearall" => Trigger {
+                    op: "clear_all".into(),
+                    output: a.map(Into::into),
+                    layer: None,
+                    item: None,
+                },
+                _ => return None,
+            })
+        }
+        _ => None,
+    }
+}
+
+/// Listen for RossTalk over TCP forever. Runs on its own thread.
+pub fn serve_rosstalk(port: u16, mapping: Mapping, tx: Sender<FromLink>) -> Result<()> {
+    let listener = std::net::TcpListener::bind(("0.0.0.0", port))?;
+    tracing::info!(port, "RossTalk listening");
+    let mut conn_id = 0u64;
+    for stream in listener.incoming() {
+        let Ok(stream) = stream else { continue };
+        conn_id += 1;
+        let (mapping, tx) = (mapping.clone(), tx.clone());
+        std::thread::spawn(move || rosstalk_conn(stream, conn_id, &mapping, &tx));
+    }
+    Ok(())
+}
+
+fn rosstalk_conn(
+    stream: std::net::TcpStream,
+    conn: u64,
+    mapping: &Mapping,
+    tx: &Sender<FromLink>,
+) {
+    use std::io::BufRead;
+    let peer = stream
+        .peer_addr()
+        .map(|a| a.to_string())
+        .unwrap_or_else(|_| "?".into());
+    tracing::info!(%peer, conn, "RossTalk connected");
+
+    let reader = std::io::BufReader::new(stream);
+    let mut debounce = Debounce::default();
+    let mut seq = 0u64;
+    for line in reader.lines() {
+        let Ok(line) = line else { break };
+        if line.trim().is_empty() {
+            continue;
+        }
+        let Some(trigger) = rosstalk_trigger(&line, mapping) else {
+            // Named at info, not warn: a switcher's macro sending commands this
+            // node does not map is a configuration question, and the operator
+            // asking "did it arrive?" needs to see that it did.
+            tracing::info!(%peer, line = %line.trim(), "RossTalk line not mapped");
+            continue;
+        };
+        // Debounced on the LINE, so a switcher that sends the same command
+        // twice in a macro fires once. The per-connection counter below makes
+        // successive DIFFERENT commands distinct; it cannot dedupe a genuine
+        // retry, because a retried line carries no sequence of its own — that
+        // would need the client to number them, and RossTalk has no field for
+        // it.
+        if !debounce.accept(line.trim()) {
+            continue;
+        }
+        seq += 1;
+        fire(tx, &trigger, &format!("rosstalk-{conn}"), seq);
+    }
+    tracing::info!(%peer, conn, "RossTalk disconnected");
 }

@@ -117,3 +117,64 @@ fn a_missing_mapping_file_is_normal_and_a_broken_one_is_not() {
     assert_eq!(m.osc["/pmg/clear"].op, "clear_all");
     std::fs::remove_dir_all(&dir).ok();
 }
+
+// ---------------------------------------------------------------------------
+// RossTalk — control-surfaces.md §5.
+// ---------------------------------------------------------------------------
+
+fn mapping_with_slots() -> Mapping {
+    let json = br#"{
+      "gpi": { "1": {"op":"take","item":"item-1","output":"out-0","layer":"Lower Third"} },
+      "cc":  { "7": {"op":"clear_all","output":"out-0"} }
+    }"#;
+    serde_json::from_slice(json).expect("mapping parses")
+}
+
+#[test]
+fn custom_is_self_describing_and_needs_no_mapping() {
+    // The real surface. A switcher that can send arbitrary strings does not
+    // need a slot table on this node at all.
+    let m = Mapping::default();
+    let t = pmg_node::surface::rosstalk_trigger("CUSTOM take|out-0|Lower Third|item-1", &m).unwrap();
+    assert_eq!(t.op, "take");
+    assert_eq!(t.item.as_deref(), Some("item-1"));
+    assert_eq!(t.layer.as_deref(), Some("Lower Third"));
+
+    let t = pmg_node::surface::rosstalk_trigger("CUSTOM clearall|out-0", &m).unwrap();
+    assert_eq!(t.op, "clear_all");
+}
+
+#[test]
+fn gpi_and_cc_resolve_through_the_same_mapping_the_wires_use() {
+    // One place where a slot number means something. Two tables would be two
+    // that can disagree, and the disagreement would show up on air.
+    let m = mapping_with_slots();
+    assert_eq!(pmg_node::surface::rosstalk_trigger("GPI 1", &m).unwrap().op, "take");
+    assert_eq!(pmg_node::surface::rosstalk_trigger("CC 7", &m).unwrap().op, "clear_all");
+    // A slot nobody configured is not a cue.
+    assert!(pmg_node::surface::rosstalk_trigger("GPI 9", &m).is_none());
+}
+
+#[test]
+fn the_verb_is_case_insensitive_but_a_nonsense_line_is_not_a_cue() {
+    // Switchers differ; a panel that shouts is not a panel that is wrong.
+    let m = Mapping::default();
+    assert!(pmg_node::surface::rosstalk_trigger("custom clearall|out-0", &m).is_some());
+    assert!(pmg_node::surface::rosstalk_trigger("Custom ClearAll|out-0", &m).is_some());
+
+    for line in ["", "TAKE", "CUSTOM", "CUSTOM nonsense|out-0", "GPI", "HELLO 1"] {
+        assert!(
+            pmg_node::surface::rosstalk_trigger(line, &m).is_none(),
+            "{line:?} should not be a cue"
+        );
+    }
+}
+
+#[test]
+fn a_custom_take_without_an_item_is_refused() {
+    // `take` needs an item, and inventing one would put an arbitrary graphic
+    // on air from a switcher macro.
+    let m = Mapping::default();
+    let t = pmg_node::surface::rosstalk_trigger("CUSTOM take|out-0|Lower Third", &m);
+    assert!(t.is_none());
+}

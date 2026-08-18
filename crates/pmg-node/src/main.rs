@@ -46,6 +46,11 @@ const NODE_PORT: u16 = 8520;
 /// you type one.
 const OSC_PORT: u16 = 8522;
 
+/// RossTalk in. Line-oriented TCP, always listening — a switcher pointed here
+/// as its fallback must not depend on a mapping file existing
+/// (`control-surfaces.md` §5).
+const ROSSTALK_PORT: u16 = 8524;
+
 const USAGE: &str = "\
 pmg-node — ProdMesh Graphics playout node
 
@@ -83,6 +88,8 @@ USAGE:
                            MIDI terminate here.
     --osc-port <n>         OSC in. Default 8522. Only listens when
                            <state-dir>/surfaces.json maps OSC addresses.
+    --rosstalk-port <n>    RossTalk in. Default 8524. GPI/CC resolve through
+                           <state-dir>/surfaces.json; CUSTOM needs no mapping.
     --preview-port <n>     Preview channel. Default 8521; 0 disables it.
     --inject-stall-at <s>  TEST INSTRUMENT. Stall the render thread for one
                            second, once, this many seconds in — so audio-sync
@@ -374,6 +381,10 @@ fn main() -> Result<()> {
         .and_then(|v| v.parse().ok())
         .unwrap_or(OSC_PORT);
 
+    let rosstalk_port: u16 = arg(&args, "--rosstalk-port")
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(ROSSTALK_PORT);
+
     let (link_tx, rt_rx) = std::sync::mpsc::channel();
     let (rt_tx, link_rx) = std::sync::mpsc::channel();
 
@@ -398,6 +409,22 @@ fn main() -> Result<()> {
             .spawn(move || {
                 if let Err(e) = pmg_node::surface::serve_osc(osc_port, m, osc_tx) {
                     tracing::error!(port = osc_port, error = %e, "OSC listener did not start");
+                }
+            })?;
+    }
+
+    // RossTalk, always on — a Ross switcher or a DashBoard panel is pointed
+    // here as its fallback when the server is down, and a listener that only
+    // appears once someone has written a mapping file is one that is missing
+    // in exactly that case. `CUSTOM` needs no mapping at all.
+    {
+        let rt_tx2 = link_tx.clone();
+        let m = mapping.clone();
+        std::thread::Builder::new()
+            .name("pmg-rosstalk".into())
+            .spawn(move || {
+                if let Err(e) = pmg_node::surface::serve_rosstalk(rosstalk_port, m, rt_tx2) {
+                    tracing::error!(port = rosstalk_port, error = %e, "RossTalk did not start");
                 }
             })?;
     }
