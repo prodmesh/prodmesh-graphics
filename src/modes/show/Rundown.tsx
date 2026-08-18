@@ -34,7 +34,10 @@ type Cursor = {
   previous: string | null
 }
 
-type Playlist = { id: string; name: string; mode: string; items: Item[] }
+type Playlist = { id: string; name: string; mode: string; items: SectionedItem[] }
+
+/** An Item as it sits in a playlist, with the section that entry belongs to. */
+type SectionedItem = Item & { section?: string | null }
 
 type RundownDetail = {
   id: string
@@ -78,6 +81,16 @@ export function RundownPanel({
   const running = (rundown?.playlists ?? []).flatMap((p) =>
     p.items.map((it) => ({ ...it, playlist: p.name, mode: p.mode ?? 'cue' })),
   )
+
+  // The song map. Sections in running order, de-duplicated, each remembering
+  // the first entry it contains — because "go back to the chorus" means start
+  // it again, not resume where it was left.
+  const sections: { name: string; item: string }[] = []
+  for (const it of running) {
+    if (it.section && !sections.some((s) => s.name === it.section)) {
+      sections.push({ name: it.section, item: it.id })
+    }
+  }
 
   // Mode belongs to the playlist the cursor is IN, so it changes as the
   // operator crosses a boundary mid-service. That is a real cognitive cost and
@@ -167,6 +180,27 @@ export function RundownPanel({
   )
 
   /**
+   * Jump to a named section.
+   *
+   * The reference rundown calls this required: *"the worship leader suddenly
+   * decides to sing the Chorus again. Operator clicks the first slide in the
+   * Chorus to go back."* Under time pressure, with the band playing — which is
+   * why it is a row of targets rather than a list to scroll.
+   *
+   * In Follow the jump TAKES, because in that mode navigating is taking and a
+   * jump that only moved the cursor would leave the previous slide on air while
+   * the operator believed they had moved.
+   */
+  const jump = useCallback(
+    async (section: { name: string; item: string }) => {
+      if (follow) fireAt(section.item)
+      await put(`${keys.rundown(rundownId)}/cursor`, { section: section.name })
+      invalidate(keys.rundown(rundownId))
+    },
+    [follow, fireAt, rundownId],
+  )
+
+  /**
    * The keyboard, which is a function of the focused playlist's mode.
    *
    * In `cue` the arrows move the cursor and taking is a separate act. In
@@ -229,6 +263,26 @@ export function RundownPanel({
           {cursor && cursor.index >= 0 ? `${cursor.index + 1} of ${cursor.total}` : `${running.length} items`}
         </span>
       </header>
+
+      {sections.length > 1 ? (
+        <div className="rundown__sections" role="group" aria-label="Sections">
+          {sections.map((sec) => (
+            <button
+              key={sec.name}
+              type="button"
+              className={
+                at?.section === sec.name
+                  ? 'rundown__section rundown__section--here'
+                  : 'rundown__section'
+              }
+              disabled={!reachable}
+              onClick={() => void jump(sec)}
+            >
+              {sec.name}
+            </button>
+          ))}
+        </div>
+      ) : null}
 
       {!known ? (
         // Refused, not guessed at. Falling back to `cue` would give the

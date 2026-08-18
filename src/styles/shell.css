@@ -272,6 +272,23 @@
   background: var(--warn-soft); border-color: var(--warn-border); color: var(--warn-text);
 }
 
+/* The song map. A row of targets rather than a list to scroll, because it is
+   used with the band playing and the operator's eyes elsewhere — so the
+   buttons are big enough to hit without aiming. */
+.rundown__sections { display: flex; flex-wrap: wrap; gap: 0.35rem; }
+.rundown__section {
+  padding: 0.45rem 0.7rem; border-radius: var(--radius); min-height: 36px;
+  border: 1px solid var(--border-strong); background: var(--bg-tile);
+  color: var(--text); font: inherit; font-size: 0.85rem; font-weight: 600;
+  cursor: pointer;
+}
+.rundown__section:hover:not(:disabled) { background: var(--bg-tile-hover); }
+.rundown__section:disabled { opacity: 0.45; cursor: not-allowed; }
+/* Where the cursor is now — the operator's place in the song. */
+.rundown__section--here {
+  background: var(--accent-soft); border-color: var(--accent-border); color: var(--accent-text);
+}
+
 .rundown__transport { display: flex; gap: 0.5rem; align-items: center; }
 .rundown__transport .btn--take { flex: 1; justify-content: center; }
 

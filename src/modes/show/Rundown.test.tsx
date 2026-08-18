@@ -182,3 +182,51 @@ describe('playout mode — ADR 0017', () => {
     expect(calls.some((c) => c.url.includes('/cursor'))).toBe(false)
   })
 })
+
+describe('jump to a section — the rundown calls this required', () => {
+  const withSections = () => {
+    RUNDOWN.playlists[0].mode = 'follow'
+    RUNDOWN.playlists[0].items = [
+      { ...item('i1', 'Welcome'), section: 'Verse 1' },
+      { ...item('i2', 'Pastor Dan'), section: 'Chorus 1' },
+      { ...item('i3', 'Third'), section: 'Chorus 1' },
+    ]
+    const calls: { url: string; body: unknown }[] = []
+    vi.stubGlobal('fetch', vi.fn(async (url: string, init?: RequestInit) => {
+      calls.push({ url, body: init?.body ? JSON.parse(String(init.body)) : null })
+      return new Response(JSON.stringify(RUNDOWN), { status: 200 })
+    }))
+    return calls
+  }
+
+  test('each section appears once, in running order', async () => {
+    withSections()
+    await paint()
+    const map = screen.getByRole('group', { name: 'Sections' })
+    // Chorus 1 holds two slides and is ONE target. A map with a button per
+    // slide is the list it was meant to replace.
+    expect(map.textContent).toBe('Verse 1Chorus 1')
+  })
+
+  test('clicking one jumps the cursor by NAME, and in follow mode takes', async () => {
+    const calls = withSections()
+    await paint()
+    await act(async () => {
+      screen.getByRole('button', { name: 'Chorus 1' }).click()
+      await Promise.resolve()
+    })
+
+    const cursor = calls.find((c) => c.url.includes('/cursor'))
+    expect(cursor).toBeDefined()
+    // By name, so the server resolves it to the section's FIRST entry — "go
+    // back to the chorus" means start it again, not resume where it was left.
+    expect((cursor!.body as { section: string }).section).toBe('Chorus 1')
+
+    // And it fires, because in Follow navigating IS taking. A jump that only
+    // moved the cursor would leave the previous slide on air while the operator
+    // believed they had moved.
+    const cue = calls.find((c) => c.url.includes('/api/cue'))
+    expect(cue).toBeDefined()
+    expect((cue!.body as { item: string }).item).toBe('i2')
+  })
+})

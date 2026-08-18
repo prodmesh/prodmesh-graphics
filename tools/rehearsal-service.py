@@ -100,12 +100,14 @@ def build_service(rev):
 
     # 2:10 — the worship set. Follow mode: navigating IS taking.
     #
-    # Sections are in the label because there is nowhere else for them yet —
-    # which is itself one of the things this rehearsal is meant to expose. The
-    # rundown calls jumping to a named section required, not a nicety.
+    # Sections are a property of the playlist ENTRY, which is where the
+    # arrangement lives: the same chorus slide is sung in Chorus 1 and again in
+    # Chorus 2. Read straight out of the .probundle.
     def lyric(section, line, song):
-        return (f"{section} · {line[:28]}", {"name": line, "title": song},
-                [dest(LT, lt), dest(FS, fs), dest(WALL, wall)])
+        # The section travels as a playlist ENTRY property now, not as a label
+        # prefix — the label goes back to being the words on the slide.
+        return (line[:44], {"name": line, "title": song},
+                [dest(LT, lt), dest(FS, fs), dest(WALL, wall)], section)
 
     song1 = [
         lyric("Verse 1", "My hope is built on nothing less", "Cornerstone"),
@@ -220,13 +222,15 @@ def main():
     for name, mode, items in build_service(rev):
         pl = call("POST", "/api/playlists", {"name": name, "mode": mode})
         ids = []
-        for label, data, dests in items:
+        for entry in items:
+            label, data, dests = entry[0], entry[1], entry[2]
+            section = entry[3] if len(entry) > 3 else None
             it = call("POST", "/api/items", {
                 "label": label, "data": data,
                 "template_rev": dests[0]["template_rev"],
                 "destinations": dests,
             })
-            ids.append(it["id"])
+            ids.append({"item": it["id"], "section": section})
         call("PUT", f"/api/playlists/{pl['id']}/items", {"items": ids})
         playlist_ids.append(pl["id"])
         counts.append((name, mode, len(ids)))

@@ -72,8 +72,17 @@ router.put('/api/playlists/:id/items', mayEdit, (req, res) => {
   if (!rundown.getPlaylist(req.params.id)) {
     return fail(res, 404, 'not_found', 'There is no playlist with that id.')
   }
-  const ids = idsOf(req.body, 'items')
-  if (!ids) return fail(res, 422, 'validation_failed', 'Send the items in the order you want them.')
+  // Either a bare id list or `{item, section}` entries. Sections are optional
+  // because a sermon deck has none, and a song has one per slide.
+  const raw = Array.isArray(req.body?.items) ? req.body.items : null
+  if (!raw) return fail(res, 422, 'validation_failed', 'Send the items in the order you want them.')
+  const entries = raw.map((e) =>
+    typeof e === 'string' ? { item: e } : { item: e?.item, section: e?.section ?? null },
+  )
+  const ids = entries.map((e) => e.item)
+  if (ids.some((id) => typeof id !== 'string' || !id)) {
+    return fail(res, 422, 'validation_failed', 'Every entry needs an item id.')
+  }
 
   // Every id must be a real item. A playlist referring to something that does
   // not exist is a rundown with a hole in it, discovered on Sunday.
@@ -87,7 +96,7 @@ router.put('/api/playlists/:id/items', mayEdit, (req, res) => {
     // where the cursor should land.
     return fail(res, 422, 'validation_failed', 'An item can only appear once in a playlist.')
   }
-  res.json(rundown.setPlaylistItems(req.params.id, ids))
+  res.json(rundown.setPlaylistItems(req.params.id, entries))
 })
 
 router.delete('/api/playlists/:id', mayEdit, (req, res) => {
@@ -155,6 +164,22 @@ router.put('/api/rundowns/:id/cursor', requirePermission('graphics.operate'), (r
   if (typeof req.body?.delta === 'number') {
     return res.json(rundown.moveCursor(req.params.id, req.body.delta))
   }
+  // Jump to a named section — the rundown's *"worship leader suddenly decides
+  // to sing the Chorus again. Operator clicks the first slide in the Chorus"*.
+  //
+  // Resolved to that section's FIRST entry rather than being a cursor position
+  // of its own: the cursor stays one thing, an item, and a section is a way of
+  // naming one. A section that appears twice resolves to its first occurrence,
+  // which is what "go back to the chorus" means.
+  if (typeof req.body?.section === 'string') {
+    const first = rundown
+      .order(req.params.id)
+      .find((r) => r.section === req.body.section)
+    if (!first) {
+      return fail(res, 422, 'validation_failed', `This rundown has no section called “${req.body.section}”.`)
+    }
+    return res.json(rundown.setCursor(req.params.id, first.id))
+  }
   if (typeof req.body?.item === 'string') {
     const inOrder = rundown.order(req.params.id).some((r) => r.id === req.body.item)
     if (!inOrder) {
@@ -162,5 +187,5 @@ router.put('/api/rundowns/:id/cursor', requirePermission('graphics.operate'), (r
     }
     return res.json(rundown.setCursor(req.params.id, req.body.item))
   }
-  fail(res, 422, 'validation_failed', 'Send an item to jump to, or a delta to move by.')
+  fail(res, 422, 'validation_failed', 'Send an item or a section to jump to, or a delta to move by.')
 })

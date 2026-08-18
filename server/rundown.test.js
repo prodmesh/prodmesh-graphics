@@ -205,3 +205,51 @@ test('the mode travels with the rundown, because the keyboard depends on it', as
   // arrow keys do changes as the cursor crosses a boundary.
   assert.deepEqual(detail.playlists.map((p) => p.mode), ['cue', 'follow'])
 })
+
+// ---------------------------------------------------------------------------
+// Sections, and jumping to one.
+//
+// The reference rundown calls this required, not a nicety: *"the worship leader
+// suddenly decides to sing the Chorus again. Operator clicks the first slide in
+// the Chorus to go back."* Under time pressure, with the band playing.
+// ---------------------------------------------------------------------------
+
+test('a playlist entry can name its section, and a bare id list still works', async () => {
+  const pl = (await req('POST', '/api/playlists', { name: 'Song', mode: 'follow' })).json
+  const r = await req('PUT', `/api/playlists/${pl.id}/items`, {
+    items: [
+      { item: 'i1', section: 'Verse 1' },
+      { item: 'i2', section: 'Chorus 1' },
+      'i3',
+    ],
+  })
+  assert.equal(r.status, 200)
+  assert.deepEqual(r.json.items.map((i) => i.section), ['Verse 1', 'Chorus 1', null])
+})
+
+test('jumping to a section lands on its first entry', async () => {
+  const pl = (await req('POST', '/api/playlists', { name: 'Song', mode: 'follow' })).json
+  await req('PUT', `/api/playlists/${pl.id}/items`, {
+    items: [
+      { item: 'i1', section: 'Verse 1' },
+      { item: 'i2', section: 'Chorus 1' },
+      { item: 'i3', section: 'Chorus 1' },
+    ],
+  })
+  const rd = (await req('POST', '/api/rundowns', { name: 'Sunday' })).json
+  await req('PUT', `/api/rundowns/${rd.id}/playlists`, { playlists: [pl.id] })
+
+  const r = await req('PUT', `/api/rundowns/${rd.id}/cursor`, { section: 'Chorus 1' })
+  assert.equal(r.status, 200)
+  // The FIRST slide of the chorus, not the last one sung. "Go back to the
+  // chorus" means start it again.
+  assert.equal(r.json.item, 'i2')
+})
+
+test('a section this rundown does not have is refused by name', async () => {
+  const { rd } = await service()
+  const r = await req('PUT', `/api/rundowns/${rd.id}/cursor`, { section: 'Bridge 2' })
+  assert.equal(r.status, 422)
+  // Named, so an operator can see it was a typo rather than a broken button.
+  assert.match(r.json.label, /Bridge 2/)
+})

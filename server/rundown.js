@@ -44,6 +44,24 @@ function reorder(db, table, keyColumn, keyValue, memberColumn, members) {
   })()
 }
 
+/**
+ * Replace a playlist's entries, each optionally in a named section.
+ *
+ * Separate from `reorder` because only playlist entries carry a section — a
+ * rundown's playlists do not — and widening the generic helper to serve one
+ * caller would put a column name it does not own into every table it touches.
+ */
+function reorderWithSections(db, playlistId, entries) {
+  db.transaction(() => {
+    db.prepare('DELETE FROM playlist_items WHERE playlist_id = ?').run(playlistId)
+    const insert = db.prepare(
+      `INSERT INTO playlist_items (playlist_id, item_id, position, section)
+       VALUES (?, ?, ?, ?)`,
+    )
+    entries.forEach((e, i) => insert.run(playlistId, e.item, i, e.section ?? null))
+  })()
+}
+
 // ---------------------------------------------------------------------------
 // Playlists
 // ---------------------------------------------------------------------------
@@ -64,7 +82,7 @@ export function getPlaylist(id) {
   if (!p) return null
   const items = db
     .prepare(
-      `SELECT i.*, pi.position FROM playlist_items pi
+      `SELECT i.*, pi.position, pi.section FROM playlist_items pi
          JOIN items i ON i.id = pi.item_id
         WHERE pi.playlist_id = ? ORDER BY pi.position`,
     )
@@ -114,9 +132,13 @@ export function setPlaylistMode(id, mode) {
 }
 
 /** Replace a playlist's contents and order in one go. */
-export function setPlaylistItems(id, itemIds) {
+export function setPlaylistItems(id, entries) {
   const db = handle()
-  reorder(db, 'playlist_items', 'playlist_id', id, 'item_id', itemIds)
+  // A bare id list is still accepted: most playlists have no sections, and
+  // requiring every caller to wrap ids in objects would be ceremony for the
+  // common case.
+  const normalised = entries.map((e) => (typeof e === 'string' ? { item: e } : e))
+  reorderWithSections(db, id, normalised)
   db.prepare('UPDATE playlists SET updated_at = ? WHERE id = ?').run(Date.now(), id)
   return getPlaylist(id)
 }
@@ -167,7 +189,7 @@ export function setRundownPlaylists(id, playlistIds) {
 export function order(rundownId) {
   return handle()
     .prepare(
-      `SELECT i.id, i.label, pi.playlist_id, p.name AS playlist_name
+      `SELECT i.id, i.label, pi.section, pi.playlist_id, p.name AS playlist_name
          FROM rundown_playlists rp
          JOIN playlists p ON p.id = rp.playlist_id
          JOIN playlist_items pi ON pi.playlist_id = rp.playlist_id

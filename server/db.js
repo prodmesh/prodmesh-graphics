@@ -351,6 +351,19 @@ const MIGRATIONS = [
   (d) => {
     d.exec(`ALTER TABLE playlists ADD COLUMN mode TEXT NOT NULL DEFAULT 'cue';`)
   },
+
+  // 10 — a playlist entry belongs to a named section.
+  //
+  // On the ENTRY rather than on the Item, because a section is a fact about
+  // the arrangement and not about the content: the same chorus slide is sung
+  // in Chorus 1 and again in Chorus 2. Reading a real ProPresenter document
+  // makes that concrete — its arrangement held 31 slots over 19 slides.
+  //
+  // Nullable, because a sermon deck has no sections and inventing one for it
+  // would be structure the document does not have.
+  (d) => {
+    d.exec(`ALTER TABLE playlist_items ADD COLUMN section TEXT;`)
+  },
 ]
 
 /**
