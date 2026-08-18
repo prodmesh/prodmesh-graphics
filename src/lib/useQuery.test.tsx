@@ -74,4 +74,28 @@ describe('invalidate', () => {
     invalidate('/api/nothing-mounted')
     expect(vi.mocked(fetch)).not.toHaveBeenCalled()
   })
+
+  test('keeps the last-known data on screen while the refetch is in flight', async () => {
+    let version = 1
+    let resolveRefetch: (() => void) | null = null
+    vi.stubGlobal('fetch', vi.fn(async () => {
+      if (version > 1) await new Promise<void>((r) => { resolveRefetch = r })
+      return new Response(JSON.stringify({ server: `0.1.${version}` }), { status: 200 })
+    }))
+
+    render(<Version />)
+    await waitFor(() => expect(screen.getByText('v0.1.1')).toBeDefined())
+
+    // Between the write and the response the old value is the last known good
+    // state. Passing through `undefined` here made every consumer that renders
+    // nothing without data unmount for a frame — Show's whole console among
+    // them, which tore down the preview socket on every take.
+    version = 2
+    invalidate('/api/version')
+    expect(screen.getByText('v0.1.1')).toBeDefined()
+    expect(screen.queryByText('connecting')).toBeNull()
+
+    resolveRefetch!()
+    await waitFor(() => expect(screen.getByText('v0.1.2')).toBeDefined())
+  })
 })

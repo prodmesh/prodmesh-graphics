@@ -1,30 +1,28 @@
 /**
- * The rundown panel: the running order, the operator's place in it, and what is
- * actually on air.
+ * The rundown's state and actions, extracted from the panel so the console
+ * layout can draw one rundown across three panels (rail, workspace, armed
+ * inspector) without three copies of the rules.
  *
- * # Two different things, drawn differently, on purpose
+ * # Two different things, tracked separately, on purpose
  *
  * The **cursor** is where the operator is. What is **on air** is what the node
- * reports. They are allowed to disagree — someone takes a graphic from the rack
- * without touching the rundown, a GPI fires at the node, a cue is rejected —
- * and this panel shows both marks rather than reconciling them.
+ * reports. They are allowed to disagree — someone takes a graphic from the
+ * rack without touching the rundown, a GPI fires at the node, a cue is
+ * rejected — and the console shows both marks rather than reconciling them.
  *
  * `docs/THEORY-OF-OPERATIONS.md`: *"If the server's rundown disagrees with what
  * the node reports, the UI shows the divergence and offers an explicit
- * reconcile — it never silently re-fires."* A panel that moved the cursor to
- * follow the output, or re-fired to follow the cursor, would be exactly that
- * silent re-fire.
+ * reconcile — it never silently re-fires."*
  */
 
 import { useCallback, useState } from 'react'
-import { AlertTriangle, ChevronDown, ChevronUp, Play, Radio } from 'lucide-react'
 import { useQuery, invalidate } from '../../lib/useQuery'
 import { useTopic } from '../../lib/stream'
 import { keys, topics } from '../../lib/keys'
 import { ApiError, newCueId, put, takeCue } from '../../lib/api'
 import type { Item, LayersSnapshot } from './types'
 
-type Cursor = {
+export type Cursor = {
   rundown: string
   item: string | null
   index: number
@@ -34,17 +32,19 @@ type Cursor = {
   previous: string | null
 }
 
-type Playlist = { id: string; name: string; mode: string; items: SectionedItem[] }
+export type Playlist = { id: string; name: string; mode: string; items: SectionedItem[] }
 
 /** An Item as it sits in a playlist, with the section that entry belongs to. */
-type SectionedItem = Item & { section?: string | null }
+export type SectionedItem = Item & { section?: string | null }
 
-type RundownDetail = {
+export type RundownDetail = {
   id: string
   name: string
   playlists: Playlist[]
   cursor: Cursor
 }
+
+export type RunningItem = SectionedItem & { playlist: string; mode: string }
 
 /**
  * The playout modes this build understands (ADR 0017).
@@ -57,7 +57,7 @@ type RundownDetail = {
  */
 const MODES = ['cue', 'follow']
 
-export function RundownPanel({
+export function useRundown({
   rundownId,
   nodeId,
   outputId,
@@ -78,7 +78,7 @@ export function RundownPanel({
   const [problem, setProblem] = useState<string | null>(null)
 
   const cursor = live ?? rundown?.cursor
-  const running = (rundown?.playlists ?? []).flatMap((p) =>
+  const running: RunningItem[] = (rundown?.playlists ?? []).flatMap((p) =>
     p.items.map((it) => ({ ...it, playlist: p.name, mode: p.mode ?? 'cue' })),
   )
 
@@ -94,7 +94,8 @@ export function RundownPanel({
 
   // Mode belongs to the playlist the cursor is IN, so it changes as the
   // operator crosses a boundary mid-service. That is a real cognitive cost and
-  // the indicator below is the mitigation, not a decoration.
+  // the persistent indicator is the mitigation, not a decoration. It is never
+  // a toggle on this screen: mode is a property of the content (ADR 0017).
   const at = running.find((i) => i.id === cursor?.item)
   const mode = at?.mode ?? 'cue'
   const known = MODES.includes(mode)
@@ -108,6 +109,14 @@ export function RundownPanel({
   const move = useCallback(
     async (delta: number) => {
       await put(`${keys.rundown(rundownId)}/cursor`, { delta })
+      invalidate(keys.rundown(rundownId))
+    },
+    [rundownId],
+  )
+
+  const moveTo = useCallback(
+    async (itemId: string) => {
+      await put(`${keys.rundown(rundownId)}/cursor`, { item: itemId })
       invalidate(keys.rundown(rundownId))
     },
     [rundownId],
@@ -191,13 +200,26 @@ export function RundownPanel({
    * jump that only moved the cursor would leave the previous slide on air while
    * the operator believed they had moved.
    */
-  const jump = useCallback(
+  const jumpSection = useCallback(
     async (section: { name: string; item: string }) => {
       if (follow) fireAt(section.item)
       await put(`${keys.rundown(rundownId)}/cursor`, { section: section.name })
       invalidate(keys.rundown(rundownId))
     },
     [follow, fireAt, rundownId],
+  )
+
+  /**
+   * Land on a specific entry. In Cue this arms — it moves the operator's place
+   * and takes nothing. In Follow, navigating IS taking (ADR 0017), so landing
+   * on a slide fires it.
+   */
+  const jumpItem = useCallback(
+    (itemId: string) => {
+      if (follow) fireAt(itemId)
+      void moveTo(itemId)
+    },
+    [follow, fireAt, moveTo],
   )
 
   /**
@@ -210,7 +232,15 @@ export function RundownPanel({
   const onKeyDown = useCallback(
     (e: React.KeyboardEvent) => {
       if (!known || !reachable) return
-      const delta = e.key === 'ArrowDown' ? 1 : e.key === 'ArrowUp' ? -1 : 0
+      const delta =
+        e.key === 'ArrowDown' || e.key === 'ArrowRight' ? 1
+        : e.key === 'ArrowUp' || e.key === 'ArrowLeft' ? -1
+        : 0
+      if (e.key === ' ' || e.key === 'Enter') {
+        e.preventDefault()
+        void takeNext()
+        return
+      }
       if (!delta) return
       e.preventDefault()
       if (!follow) {
@@ -224,10 +254,8 @@ export function RundownPanel({
       fireAt(next ?? null)
       void move(delta)
     },
-    [known, reachable, follow, move, fireAt, cursor],
+    [known, reachable, follow, move, fireAt, cursor, takeNext],
   )
-
-  if (!rundown) return null
 
   // What counts as a divergence worth a sentence.
   //
@@ -242,127 +270,31 @@ export function RundownPanel({
   // by the two marks in the list, which needs no prose.
   const inRundown = new Set(running.map((i) => i.id))
   const strangers = [...onAir].filter((id) => !inRundown.has(id))
-  const strangerLabels = strangers
-    .map((id) => (layers?.layers ?? []).find((l) => l.occupant?.item_id === id)?.occupant?.item_label ?? id)
-
-  return (
-    // Focusable so the arrow keys reach it, and the handler is a function of
-    // the mode. A rundown mixes playlists of both kinds — that is the normal
-    // Sunday — so what the keyboard does changes as the cursor crosses a
-    // boundary, and the indicator below is how an operator knows without
-    // looking for it.
-    <section className="rundown" aria-label="Rundown" tabIndex={0} onKeyDown={onKeyDown}>
-      <header className="rundown__head">
-        <h2>{rundown.name}</h2>
-        {known ? (
-          <span className={follow ? 'rundown__mode rundown__mode--follow' : 'rundown__mode'}>
-            {follow ? 'Follow — arrows take' : 'Cue — arrows move'}
-          </span>
-        ) : null}
-        <span className="show__dim">
-          {cursor && cursor.index >= 0 ? `${cursor.index + 1} of ${cursor.total}` : `${running.length} items`}
-        </span>
-      </header>
-
-      {sections.length > 1 ? (
-        <div className="rundown__sections" role="group" aria-label="Sections">
-          {sections.map((sec) => (
-            <button
-              key={sec.name}
-              type="button"
-              className={
-                at?.section === sec.name
-                  ? 'rundown__section rundown__section--here'
-                  : 'rundown__section'
-              }
-              disabled={!reachable}
-              onClick={() => void jump(sec)}
-            >
-              {sec.name}
-            </button>
-          ))}
-        </div>
-      ) : null}
-
-      {!known ? (
-        // Refused, not guessed at. Falling back to `cue` would give the
-        // operator an arm step in a playlist authored to fire on navigation,
-        // with nothing on screen saying the keyboard is not doing what the
-        // content asked for.
-        <p className="show__problem" role="alert">
-          <AlertTriangle size={15} aria-hidden /> This playlist uses a playout
-          mode this version does not know (“{mode}”). Its keyboard shortcuts are
-          off until you update.
-        </p>
-      ) : null}
-
-      {problem ? (
-        <p className="show__problem" role="alert">
-          <AlertTriangle size={15} aria-hidden /> {problem}
-        </p>
-      ) : null}
-
-      <div className="rundown__transport">
-        <button type="button" className="btn btn--ghost btn--small" onClick={() => void move(-1)}
-                disabled={!cursor?.previous}>
-          <ChevronUp size={14} aria-hidden /> Previous
-        </button>
-        <button type="button" className="btn btn--take" onClick={() => void takeNext()}
-                disabled={!reachable || busy || !cursor?.item}>
-          <Play size={14} aria-hidden /> {busy ? 'Taking…' : 'Take next'}
-        </button>
-        <button type="button" className="btn btn--ghost btn--small" onClick={() => void move(1)}
-                disabled={!cursor?.next}>
-          <ChevronDown size={14} aria-hidden /> Next
-        </button>
-      </div>
-
-      {strangerLabels.length ? (
-        <p className="rundown__diverged" role="status">
-          On air from outside this rundown: {strangerLabels.join(', ')}.
-        </p>
-      ) : null}
-
-      <ol className="rundown__list">
-        {rundown.playlists.map((p) => (
-          <li key={p.id} className="rundown__playlist">
-            <h3>{p.name}</h3>
-            <ol>
-              {p.items.map((it) => {
-                const atCursor = cursor?.item === it.id
-                const showing = onAir.has(it.id)
-                return (
-                  <li
-                    key={it.id}
-                    className={[
-                      'rundown__item',
-                      atCursor ? 'rundown__item--cursor' : '',
-                      showing ? 'rundown__item--live' : '',
-                    ].filter(Boolean).join(' ')}
-                  >
-                    <button
-                      type="button"
-                      className="rundown__jump"
-                      onClick={async () => {
-                        // Jumping moves the operator's place. It does NOT take.
-                        await put(`${keys.rundown(rundownId)}/cursor`, { item: it.id })
-                        invalidate(keys.rundown(rundownId))
-                      }}
-                    >
-                      {it.label}
-                    </button>
-                    {showing ? (
-                      <span className="rundown__live" title="On air now">
-                        <Radio size={12} aria-hidden /> on air
-                      </span>
-                    ) : null}
-                  </li>
-                )
-              })}
-            </ol>
-          </li>
-        ))}
-      </ol>
-    </section>
+  const strangerLabels = strangers.map(
+    (id) =>
+      (layers?.layers ?? []).find((l) => l.occupant?.item_id === id)?.occupant?.item_label ?? id,
   )
+
+  return {
+    rundown,
+    cursor,
+    running,
+    sections,
+    at,
+    mode,
+    known,
+    follow,
+    onAir,
+    layers,
+    busy,
+    problem,
+    setProblem,
+    strangerLabels,
+    move,
+    takeNext,
+    fireAt,
+    jumpSection,
+    jumpItem,
+    onKeyDown,
+  }
 }

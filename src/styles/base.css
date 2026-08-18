@@ -4,23 +4,28 @@ html, body, #root { height: 100%; }
 
 body {
   margin: 0;
-  background: var(--bg);
-  color: var(--text);
-  font-family: var(--font-ui);
-  font-size: 14px;
+  background: var(--pm-bg-app);
+  color: var(--pm-text-primary);
+  font-family: var(--pm-font-ui);
+  /* The console default. Chrome lives between 9px and 18px. */
+  font-size: 12px;
   line-height: 1.5;
   -webkit-font-smoothing: antialiased;
 }
 
 h1, h2, h3 { font-weight: 600; margin: 0 0 0.5em; }
-h1 { font-size: 20px; }
-h2 { font-size: 16px; }
-h3 { font-size: 14px; color: var(--text-dim); }
+h1 { font-size: 18px; }
+h2 { font-size: 14px; }
+h3 { font-size: 12px; color: var(--pm-text-secondary); }
 
-code, pre { font-family: var(--font-mono); font-size: 12px; }
+code, pre { font-family: var(--pm-font-mono); font-size: 11px; }
 
-a { color: var(--accent-text); }
+a { color: var(--pm-cyan); text-decoration: none; }
+a:hover { color: var(--pm-white); }
 
+/* In chrome, prefer no animation; a 120ms opacity or colour change is the
+   ceiling. Never animate a state change into place — the current state must
+   be readable in the first frame (design system, Animation). */
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation-duration: 0.01ms !important; transition-duration: 0.01ms !important; }
 }

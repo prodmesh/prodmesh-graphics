@@ -1,63 +1,150 @@
 /* Design tokens — the single place colours, radii, and type live.
    Feature CSS references these vars and never hard-codes a hex value.
 
-   Deliberately identical to ProdMesh-Control's src/styles/tokens.css. An
-   operator moving between the two apps should not feel they changed products,
-   and we should not invent a second answer to a solved problem. */
+   These are the ProdMesh GFX operator-console tokens (ADR 0020), transcribed
+   from the design system rather than shared with ProdMesh-Control. This is a
+   deliberate deviation from the family rule that the two apps share tokens:
+   a live playout console has its own discipline — a near-black neutral ramp
+   and exactly three signal colours, each with one meaning — and borrowing the
+   dashboard's palette would blunt precisely the states an operator scans for.
+
+   The ramp is deliberately uneven. Do not round these. */
 :root {
+  /* Neutral ramp, darkest to lightest */
+  --pm-black: #000000;
+  --pm-ink-900: #090b0d; /* render canvas well */
+  --pm-ink-850: #0b0c0e; /* app background */
+  --pm-ink-800: #0c0e12; /* broadcast graphic fill (used at 92% alpha) */
+  --pm-ink-750: #121417; /* panel / chrome */
+  --pm-ink-700: #1a1d21; /* raised row, card */
+  --pm-ink-600: #23272d; /* field, pill, keycap */
+  --pm-ink-500: #2c313a; /* hairline border */
+  --pm-ink-400: #4e5460; /* disabled text, idle dot, grip */
+  --pm-ink-300: #6b7582; /* muted text */
+  --pm-ink-200: #a3acba; /* secondary text */
+  --pm-white: #ffffff;
+
+  /* Signal colours — the console has exactly three.
+     Red means ON AIR and only ever ON AIR. Never reuse it for a warning. */
+  --pm-red: #ff3b30; /* ON AIR / take / destructive-live */
+  --pm-cyan: #00f0ff; /* ARMED / cursor / next */
+  --pm-green: #30d158; /* healthy / online / enabled */
+
+  /* Signal tints, exact alphas from source */
+  --pm-red-tint: rgba(255, 59, 48, 0.1216);
+  --pm-red-shadow: rgba(255, 59, 48, 0.251);
+  --pm-cyan-tint: rgba(0, 240, 255, 0.0784);
+  --pm-graphic-fill: rgba(12, 14, 18, 0.9176);
+  --pm-scrim: rgba(0, 0, 0, 0.4);
+
   /* Surfaces */
-  --bg: #090d11;
-  --bg-sidebar: #0c1117;
-  --bg-raised: #10161d;
-  --bg-tile: #151d26;
-  --bg-tile-hover: #1a2530;
-  --border: #27323d;
-  --border-subtle: #1b242d;
-  --border-strong: #3a4856;
+  --pm-bg-app: var(--pm-ink-850);
+  --pm-bg-canvas: var(--pm-ink-900);
+  --pm-surface-chrome: var(--pm-ink-750);
+  --pm-surface-raised: var(--pm-ink-700);
+  --pm-surface-field: var(--pm-ink-600);
+  --pm-surface-hover: var(--pm-ink-600); /* hover lifts one ramp step */
+  --pm-border-hairline: var(--pm-ink-500);
 
   /* Text */
-  --text: #edf2f7;
-  --text-dim: #95a2af;
-  --text-faint: #65717d;
-  --text-on-accent: #07111c;
+  --pm-text-primary: var(--pm-white);
+  --pm-text-secondary: var(--pm-ink-200);
+  --pm-text-muted: var(--pm-ink-300);
+  --pm-text-idle: var(--pm-ink-400);
 
-  /* Accents */
-  --accent: #52a8ff;
-  --accent-hover: #78bbff;
-  --accent-text: #9fd0ff;
-  --accent-soft: rgba(82, 168, 255, 0.1);
-  --accent-border: rgba(82, 168, 255, 0.34);
-  --ok: #43d17d;
-  --ok-soft: rgba(52, 199, 89, 0.12);
-  --ok-border: rgba(52, 199, 89, 0.35);
+  /* Playout state — the console's core vocabulary */
+  --pm-state-air: var(--pm-red);
+  --pm-state-air-bg: var(--pm-red-tint);
+  --pm-state-armed: var(--pm-cyan);
+  --pm-state-armed-bg: var(--pm-cyan-tint);
+  --pm-state-ready: var(--pm-green);
+  --pm-state-staged: var(--pm-ink-300);
+  --pm-state-muted: var(--pm-ink-400);
+
+  /* Actions */
+  --pm-action-primary-bg: var(--pm-red);
+  --pm-action-primary-fg: var(--pm-white);
+  --pm-action-secondary-bg: var(--pm-ink-700);
+  --pm-action-secondary-fg: var(--pm-ink-200);
+  --pm-action-quiet-bg: var(--pm-ink-600);
+  --pm-action-quiet-fg: var(--pm-ink-200);
+
+  /* Elevation. The console is flat: one drop shadow in the whole product
+     (the Take button) — everything else is a 1px inset hairline. */
+  --pm-hairline: inset 0 0 0 1px var(--pm-ink-500);
+  --pm-ring-armed: inset 0 0 0 1px var(--pm-cyan);
+  --pm-ring-air: inset 0 0 0 1px var(--pm-red);
+  /* The heaviest stroke in the product, and the only 1.5px one. */
+  --pm-ring-air-strong: inset 0 0 0 1.5px var(--pm-red);
+  --pm-shadow-take: 0 4px 12px 0 var(--pm-red-shadow);
+
+  /* Shape */
+  --pm-radius-3: 3px; /* ON AIR badge */
+  --pm-radius-4: 4px; /* pills, keycaps, buttons, id badges, thumbnails */
+  --pm-radius-6: 6px; /* rows, cards, fields */
+  --pm-radius-8: 8px; /* canvas well, layer card, take button */
+  --pm-radius-pill: 100px;
+  --pm-radius-track: 999px;
+
+  /* Type. The console lives between 9px and 18px; anything larger belongs to
+     rendered broadcast output, never to chrome. */
+  --pm-font-ui: 'Inter Variable', -apple-system, BlinkMacSystemFont,
+    'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+  --pm-font-mono: 'Spline Sans Mono Variable', ui-monospace, 'SF Mono', Menlo,
+    Consolas, monospace;
+  --pm-font-display: 'Instrument Serif', ui-serif, Georgia, 'Times New Roman',
+    serif;
+  --pm-tracking-caps: 1px; /* every uppercase run in the console */
+  --pm-tracking-wordmark: 0.5px;
+
+  /* Fixed chrome geometry, verbatim from the source frames */
+  --pm-header-height: 48px;
+  --pm-toolbar-height: 44px;
+  --pm-footer-height: 36px;
+  --pm-panel-header-height: 43px;
+  --pm-rail-width: 320px; /* Show rundown */
+  --pm-rail-width-edit: 280px; /* Edit playlists, Configure, Design browser */
+  --pm-inspector-width: 360px;
+  --pm-row-height: 45px;
+
+  /* --------------------------------------------------------------------
+     Legacy aliases. Feature CSS written before ADR 0020 reads these names;
+     they now resolve into the console ramp so nothing renders in the old
+     palette. Delete each once its stylesheet is migrated.
+     -------------------------------------------------------------------- */
+  --bg: var(--pm-bg-app);
+  --bg-sidebar: var(--pm-surface-chrome);
+  --bg-raised: var(--pm-surface-raised);
+  --bg-tile: var(--pm-surface-raised);
+  --bg-tile-hover: var(--pm-surface-field);
+  --border: var(--pm-border-hairline);
+  --border-subtle: var(--pm-ink-500);
+  --border-strong: var(--pm-ink-400);
+  --text: var(--pm-text-primary);
+  --text-dim: var(--pm-text-secondary);
+  --text-faint: var(--pm-text-muted);
+  --text-on-accent: var(--pm-ink-850);
+  --accent: var(--pm-cyan);
+  --accent-hover: var(--pm-cyan);
+  --accent-text: var(--pm-cyan);
+  --accent-soft: var(--pm-cyan-tint);
+  --accent-border: var(--pm-cyan);
+  --ok: var(--pm-green);
+  --ok-soft: rgba(48, 209, 88, 0.12);
+  --ok-border: rgba(48, 209, 88, 0.35);
   --warn: #ffb020;
   --warn-text: #ffcf70;
   --warn-soft: rgba(255, 176, 32, 0.12);
   --warn-border: rgba(255, 176, 32, 0.4);
-  --danger: #ff6b6b;
-  --danger-soft: rgba(255, 107, 107, 0.5);
-  --purple-text: #c79bff;
-  --purple-soft: rgba(175, 123, 240, 0.14);
-  --purple-border: rgba(175, 123, 240, 0.45);
-
-  /* On air. The one colour this app adds to the family palette, and the only
-     thing it may ever mean. Never reuse it for a warning or an error. */
-  --on-air: #ff3b30;
-  --on-air-soft: rgba(255, 59, 48, 0.14);
-  --on-air-border: rgba(255, 59, 48, 0.5);
-
-  /* Shape */
-  --radius-sm: 4px;
-  --radius: 6px;
-  --radius-lg: 8px;
-  --radius-xl: 10px;
-
-  /* Type */
-  --font-ui: 'IBM Plex Sans Variable', -apple-system, BlinkMacSystemFont,
-    'Segoe UI', system-ui, sans-serif;
-  --font-mono: 'IBM Plex Mono', 'SFMono-Regular', Consolas, monospace;
-
-  /* Layout */
-  --sidebar-w: 236px;
-  --sidebar-rail: 62px;
+  --danger: var(--pm-red);
+  --danger-soft: var(--pm-red-shadow);
+  --on-air: var(--pm-red);
+  --on-air-soft: var(--pm-red-tint);
+  --on-air-border: var(--pm-red);
+  --radius-sm: var(--pm-radius-4);
+  --radius: var(--pm-radius-6);
+  --radius-lg: var(--pm-radius-8);
+  --radius-xl: var(--pm-radius-8);
+  --font-ui: var(--pm-font-ui);
+  --font-mono: var(--pm-font-mono);
 }

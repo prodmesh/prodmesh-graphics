@@ -1,0 +1,111 @@
+/* The console shell: fixed header, flexing centre, fixed footer (ADR 0020).
+   Rails and inspectors are fixed width and scroll internally; only the centre
+   workspace grows. Nothing floats, nothing overlays. */
+
+.console {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  background: var(--pm-bg-app);
+}
+
+.console__header {
+  height: var(--pm-header-height);
+  flex-shrink: 0;
+  box-sizing: border-box;
+  background: var(--pm-surface-chrome);
+  border-bottom: 1px solid var(--pm-border-hairline);
+  padding: 0 16px;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 16px;
+}
+
+.console__header-status { display: flex; gap: 20px; align-items: center; }
+
+.console__main {
+  flex-grow: 1;
+  min-height: 0;
+  display: flex;
+  align-items: stretch;
+}
+
+.console__footer {
+  height: var(--pm-footer-height);
+  flex-shrink: 0;
+  box-sizing: border-box;
+  background: var(--pm-surface-chrome);
+  border-top: 1px solid var(--pm-border-hairline);
+  padding: 0 16px;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 16px;
+}
+.console__footer-left { display: flex; gap: 12px; align-items: center; min-width: 0; }
+.console__footer-mode {
+  font-family: var(--pm-font-mono);
+  font-weight: 600;
+  font-size: 10px;
+  line-height: 100%;
+  letter-spacing: var(--pm-tracking-caps);
+  color: var(--pm-text-secondary);
+  background: var(--pm-ink-600);
+  border-radius: var(--pm-radius-4);
+  padding: 4px 8px;
+  white-space: nowrap;
+}
+.console__footer-hint {
+  font-size: 11px;
+  color: var(--pm-text-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.console__footer-readout {
+  font-family: var(--pm-font-mono);
+  font-size: 11px;
+  color: var(--pm-text-idle);
+  white-space: nowrap;
+}
+
+/* The centre column between rails: workspace panels stack vertically. */
+.console__center {
+  flex-grow: 1;
+  min-width: 0;
+  min-height: 0;
+  background: var(--pm-bg-app);
+  display: flex;
+  flex-direction: column;
+}
+
+/* A mode that has not moved to panels yet scrolls as a page. */
+.mode-scroll {
+  flex-grow: 1;
+  min-width: 0;
+  overflow: auto;
+  padding: 22px 26px;
+}
+
+/* The toolbar strip some modes place under the header. */
+.console__toolbar {
+  height: var(--pm-toolbar-height);
+  flex-shrink: 0;
+  box-sizing: border-box;
+  background: var(--pm-bg-app);
+  border-bottom: 1px solid var(--pm-border-hairline);
+  padding: 0 16px;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 16px;
+}
+.console__toolbar-group { display: flex; gap: 14px; align-items: center; min-width: 0; }
+.console__toolbar-note {
+  font-size: 11px;
+  color: var(--pm-text-idle);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}

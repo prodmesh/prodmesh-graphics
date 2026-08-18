@@ -1,0 +1,148 @@
+/* Show — the console layout (ADR 0020): rundown rail, program well and layer
+   strip, armed inspector. Sized for a booth: big targets, high contrast, and
+   nothing destructive adjacent to something routine. */
+
+.show-console {
+  flex-grow: 1;
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.show-console__panels {
+  flex-grow: 1;
+  min-height: 0;
+  display: flex;
+  align-items: stretch;
+}
+
+/* The rail's focusable interior. The keyboard handler lives here. */
+.show-console__rail {
+  display: flex;
+  flex-direction: column;
+  align-self: stretch;
+  flex-grow: 1;
+  min-height: 0;
+  outline: none;
+}
+.show-console__rail:focus-visible { box-shadow: var(--pm-ring-armed); }
+
+.show-console__group { display: flex; flex-direction: column; gap: 4px; align-self: stretch; }
+
+.show-console__center { gap: 0; }
+
+.show-console__well {
+  flex-grow: 1;
+  min-height: 0;
+  box-sizing: border-box;
+  padding: 20px 20px 12px;
+  display: flex;
+}
+
+.show-console__layers {
+  flex-shrink: 0;
+  box-sizing: border-box;
+  background: var(--pm-surface-chrome);
+  border-top: 1px solid var(--pm-border-hairline);
+  padding: 12px 16px;
+  display: flex;
+  gap: 12px;
+  align-items: stretch;
+}
+
+.show-console__grid-wrap {
+  flex-shrink: 0;
+  max-height: 42%;
+  min-height: 0;
+  box-sizing: border-box;
+  background: var(--pm-surface-chrome);
+  border-top: 1px solid var(--pm-border-hairline);
+  padding: 12px 16px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.show-console__sections {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  flex-shrink: 0;
+}
+.show-console__grid {
+  min-height: 0;
+  overflow-y: auto;
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 10px;
+  align-content: start;
+}
+
+.show-console__armed-head { display: flex; flex-direction: column; gap: 6px; align-self: stretch; }
+.show-console__armed-title { font-weight: 700; font-size: 16px; color: var(--pm-text-primary); }
+
+/* Failure is a sentence, not a colour. Red means ON AIR and nothing else, so
+   a problem renders as words on a raised card the eye still catches. */
+.show-console__problem {
+  margin: 0;
+  border-radius: var(--pm-radius-6);
+  background: var(--pm-surface-raised);
+  box-shadow: var(--pm-hairline);
+  padding: 10px 12px;
+  display: flex;
+  gap: 8px;
+  align-items: flex-start;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--pm-text-primary);
+}
+.show-console__problem svg { flex-shrink: 0; margin-top: 2px; color: var(--pm-text-secondary); }
+
+.show-console__staging,
+.show-console__partial {
+  margin: 0;
+  font-family: var(--pm-font-mono);
+  font-size: 11px;
+  line-height: 1.5;
+  color: var(--pm-state-staged);
+}
+
+.show-console__diverged {
+  margin: 0;
+  padding: 4px 8px;
+  font-size: 11px;
+  line-height: 1.5;
+  color: var(--pm-text-secondary);
+}
+
+.show-console__dim { margin: 0; padding: 4px 8px; font-size: 11px; color: var(--pm-text-muted); }
+
+.show-console__dests { display: flex; flex-direction: column; gap: 6px; align-self: stretch; }
+.show-console__dest { display: flex; gap: 8px; align-items: center; min-width: 0; padding: 0 8px; }
+.show-console__dest-route {
+  font-family: var(--pm-font-mono);
+  font-size: 10px;
+  color: var(--pm-text-secondary);
+  white-space: nowrap;
+}
+.show-console__dest-note {
+  font-size: 11px;
+  color: var(--pm-text-idle);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.show-console__commit { display: flex; flex-direction: column; gap: 6px; align-self: stretch; }
+.show-console__commit-note {
+  font-family: var(--pm-font-mono);
+  font-size: 11px;
+  text-align: center;
+  color: var(--pm-text-muted);
+}
+
+.show-console__secondary { display: flex; gap: 6px; align-self: stretch; }
+.show-console__secondary > * { flex: 1; }
+
+.show-console__log { display: flex; flex-direction: column; gap: 8px; align-self: stretch; margin-top: auto; }
+.show-console__log-list { display: flex; flex-direction: column; gap: 6px; align-self: stretch; }

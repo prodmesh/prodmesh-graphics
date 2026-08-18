@@ -1,6 +1,10 @@
 /**
  * Design — for the person who makes it look right.
  *
+ * The console layout (ADR 0020): template browser in the left rail, the canvas
+ * in the centre workspace, template facts and publishing in the right
+ * inspector. Show has no route here, on purpose (ADR 0015).
+ *
  * # The canvas is the output, not a picture of it
  *
  * It renders with `pmg-render` compiled to WASM — the same code the playout
@@ -28,11 +32,24 @@
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { AlertTriangle, Check, Upload } from 'lucide-react'
+import { AlertTriangle, FileUp, Upload } from 'lucide-react'
 import { useQuery, invalidate } from '../../lib/useQuery'
 import { keys } from '../../lib/keys'
 import { ApiError, get, post } from '../../lib/api'
+import {
+  Button,
+  FormGroup,
+  GroupHeader,
+  KeyValueRow,
+  NavItem,
+  Panel,
+  PanelBody,
+  PanelHeader,
+  StatusPill,
+  Tag,
+} from '../../components/console'
 import { compileTemplate, useDesignCanvas } from './useDesign'
+import type { Item } from '../show/types'
 
 type TemplateSummary = { id: string; name: string; head_rev: string | null }
 type TemplateDetail = {
@@ -43,9 +60,17 @@ type Asset = { hash: string; size: number; kind: string }
 
 const FONT_KINDS = new Set(['font'])
 
+/**
+ * A revision, shortened for the eye. The full value is an address whose
+ * algorithm prefix is an internal fact (docs/UI_TEXT.md bans it on screen);
+ * eight characters is plenty to tell two revisions apart in a list.
+ */
+const shortRev = (rev: string) => rev.replace(/^[a-z0-9]+:/, '').slice(0, 8)
+
 export function Design() {
   const { data: templates } = useQuery<{ templates: TemplateSummary[] }>(keys.templates())
-  const { data: assets } = useQuery<{ assets: Asset[] }>('/api/assets')
+  const { data: assets } = useQuery<{ assets: Asset[] }>(keys.assets())
+  const { data: items } = useQuery<{ items: Item[] }>(keys.items())
 
   const [selected, setSelected] = useState<string | null>(null)
   const [doc, setDoc] = useState<Record<string, unknown> | null>(null)
@@ -131,12 +156,12 @@ export function Design() {
       headers: { 'content-type': 'application/octet-stream' },
       body: bytes,
     })
-    if (res.ok) invalidate('/api/assets')
+    if (res.ok) invalidate(keys.assets())
   }, [])
 
   const publish = useCallback(async () => {
     if (!doc) return
-    setPublishState('Compiling…')
+    setPublishState('Publishing…')
     try {
       // Compiled HERE, by the same Rust the CLI runs. The server stores the
       // bytes opaquely and checks only that their address matches the manifest.
@@ -156,7 +181,7 @@ export function Design() {
         },
       )
       invalidate(keys.templates())
-      const bits = [`Published ${r.template_rev.slice(0, 14)}…`]
+      const bits = [`Published — revision ${shortRev(r.template_rev)}`]
       if (r.warnings.length) bits.push(`${r.warnings.length} warning(s)`)
       // Named here, not discovered by a node at staging time on a Saturday.
       if (r.missing_assets.length) bits.push(`${r.missing_assets.length} asset(s) this server does not have`)
@@ -166,142 +191,198 @@ export function Design() {
     }
   }, [doc, list])
 
-  return (
-    <>
-      <h1>Design</h1>
+  const docId = doc ? String(doc.id ?? '') : null
+  const usedBy = docId ? (items?.items ?? []).filter((i) => i.template_id === docId).length : 0
+  const published = docId ? list.some((t) => t.id === docId && t.head_rev) : false
 
-      <div className="design">
-        <section className="design__stage" aria-label="Canvas">
-          {/* The checkerboard is CSS. The canvas itself is transparent, because
-              the output is a key and the designer must see what will key. */}
-          <div className="design__checker">
-            <canvas ref={canvasRef} className="design__canvas" />
+  return (
+    <div className="design-console">
+      <div className="console__toolbar">
+        <div className="console__toolbar-group">
+          <Button disabled={!doc} onClick={() => void publish()}>
+            <Upload size={14} aria-hidden /> Publish
+          </Button>
+          <span className="console__toolbar-note">
+            Publishing is what makes a Template usable by Items. Nodes stage it by its address.
+          </span>
+        </div>
+        <Tag tone="raised" size={10}>{`${list.length} templates`}</Tag>
+      </div>
+
+      <div className="design-console__panels">
+        <Panel width="var(--pm-rail-width-edit)" label="Template browser">
+          <PanelHeader title="Template Browser" />
+          <PanelBody>
+            <label className="design-console__file">
+              <FileUp size={14} aria-hidden />
+              <span>Open a template file…</span>
+              <input
+                type="file"
+                accept=".json"
+                onChange={(e) => { const f = e.target.files?.[0]; if (f) void onOpenFile(f) }}
+              />
+            </label>
+            {list.length === 0 ? (
+              <p className="design-console__dim">
+                Nothing published yet. Open a template file and publish it.
+              </p>
+            ) : (
+              <>
+                <GroupHeader label="Published" trailing={`${list.length}`} />
+                {list.map((t) => (
+                  <NavItem
+                    key={t.id}
+                    title={t.name}
+                    meta={t.head_rev ? `revision ${shortRev(t.head_rev)}` : 'no revision'}
+                    active={selected === t.id}
+                    onClick={() => void openTemplate(t.id)}
+                  />
+                ))}
+              </>
+            )}
+          </PanelBody>
+        </Panel>
+
+        <div className="console__center design-console__center">
+          <div className="design-console__stage" aria-label="Canvas">
+            {/* The checkerboard is CSS. The canvas itself is transparent, because
+                the output is a key and the designer must see what will key. */}
+            <div className="design__checker">
+              <canvas ref={canvasRef} className="design__canvas" />
+            </div>
+
+            {status === 'idle' ? (
+              <p className="design-console__dim">
+                Open a template file, and add a font, to see it render.
+              </p>
+            ) : null}
+            {status === 'loading' ? <p className="design-console__dim">Rendering…</p> : null}
+            {problem ? (
+              <p className="design-console__problem" role="alert">
+                <AlertTriangle size={15} aria-hidden /> {problem}
+              </p>
+            ) : null}
+
+            {info?.degraded ? (
+              <p className="design-console__problem" role="status">
+                <AlertTriangle size={15} aria-hidden />
+                Part of this template can’t be drawn by this version. It shows as magenta.
+              </p>
+            ) : null}
+            {info?.omitted.length ? (
+              // This is *why* the band got shorter. Guessing is much worse than
+              // being told.
+              <p className="design-console__dim">Hidden by a rule: {info.omitted.join(', ')}</p>
+            ) : null}
           </div>
 
-          {status === 'idle' ? (
-            <p className="show__dim show__pad">
-              Open a template file, and add a font, to see it render.
-            </p>
-          ) : null}
-          {status === 'loading' ? <p className="show__dim show__pad">Rendering…</p> : null}
-          {problem ? (
-            <p className="show__problem" role="alert">
-              <AlertTriangle size={15} aria-hidden /> {problem}
-            </p>
-          ) : null}
-
-          {info?.degraded ? (
-            <p className="show__problem" role="status">
-              <AlertTriangle size={15} aria-hidden />
-              Part of this template can’t be drawn by this version. It shows as magenta.
-            </p>
-          ) : null}
-          {info?.omitted.length ? (
-            // This is *why* the band got shorter. Guessing is much worse than
-            // being told.
-            <p className="show__dim show__pad">
-              Hidden by a rule: {info.omitted.join(', ')}
-            </p>
-          ) : null}
-
           {timelines.length > 0 ? (
-            <div className="design__scrub">
-              <select
-                value={timeline ?? ''}
-                onChange={(e) => {
-                  const v = e.target.value || undefined
-                  setTimeline(v)
-                  void paint(v, tMs)
-                }}
-                aria-label="Timeline"
-              >
-                <option value="">At rest</option>
-                {timelines.map((t) => (
-                  <option key={t} value={t}>{t}</option>
-                ))}
-              </select>
-              <input
-                type="range"
-                min={0}
-                max={2000}
-                step={1}
-                value={tMs}
-                aria-label="Time"
-                onChange={(e) => {
-                  const v = Number(e.target.value)
-                  setTMs(v)
-                  void paint(timeline, v)
-                }}
-              />
-              <span className="show__dim">{tMs} ms</span>
+            <div className="design-console__timeline">
+              <GroupHeader label="Timeline" trailing={`${tMs} ms`} />
+              <div className="design-console__scrub">
+                <select
+                  value={timeline ?? ''}
+                  onChange={(e) => {
+                    const v = e.target.value || undefined
+                    setTimeline(v)
+                    void paint(v, tMs)
+                  }}
+                  aria-label="Timeline"
+                >
+                  <option value="">At rest</option>
+                  {timelines.map((t) => (
+                    <option key={t} value={t}>{t}</option>
+                  ))}
+                </select>
+                <input
+                  type="range"
+                  min={0}
+                  max={2000}
+                  step={1}
+                  value={tMs}
+                  aria-label="Time"
+                  onChange={(e) => {
+                    const v = Number(e.target.value)
+                    setTMs(v)
+                    void paint(timeline, v)
+                  }}
+                />
+              </div>
             </div>
           ) : null}
-        </section>
+        </div>
 
-        <aside className="design__panel">
-          <label className="field">
-            <span>Template file</span>
-            <input
-              type="file"
-              accept=".json"
-              onChange={(e) => { const f = e.target.files?.[0]; if (f) void onOpenFile(f) }}
-            />
-          </label>
+        <Panel width="var(--pm-inspector-width)" label="Template and publish">
+          <PanelHeader
+            title="Template & Publish"
+            trailing={
+              doc ? (
+                <StatusPill tone={published ? 'ready' : 'staged'} variant="subtle" size={10}>
+                  {published ? 'PUBLISHED' : 'NOT PUBLISHED'}
+                </StatusPill>
+              ) : undefined
+            }
+          />
+          <PanelBody pad16>
+            {doc ? (
+              <>
+                <div className="design-console__name">
+                  <span className="design-console__title">{String(doc.name ?? 'Untitled')}</span>
+                  <span className="design-console__id">{docId}</span>
+                </div>
 
-          <label className="field">
-            <span>Add a font</span>
-            <input
-              type="file"
-              accept=".ttf,.otf,.ttc"
-              onChange={(e) => { const f = e.target.files?.[0]; if (f) void onUploadFont(f) }}
-            />
-          </label>
-          <p className="show__dim">
-            {fontAssets.length === 0
-              ? 'No fonts yet. A template can only render with a font this server holds — that is what makes it look the same on every machine.'
-              : `${fontAssets.length} font(s) available`}
-          </p>
+                <KeyValueRow
+                  label="Used by"
+                  value={usedBy === 1 ? '1 Item' : `${usedBy} Items`}
+                  tone={usedBy ? 'armed' : 'plain'}
+                />
 
-          {list.length > 0 ? (
-            <label className="field">
-              <span>Published templates</span>
-              <select value={selected ?? ''} onChange={(e) => void openTemplate(e.target.value)}>
-                <option value="">—</option>
-                {list.map((t) => (
-                  <option key={t.id} value={t.id}>{t.name}</option>
+                <GroupHeader label="Sample data" />
+                {Object.keys(data).map((k) => (
+                  <FormGroup key={k} label={k}>
+                    <input
+                      value={data[k] ?? ''}
+                      onChange={(e) => setData((d) => ({ ...d, [k]: e.target.value }))}
+                    />
+                  </FormGroup>
                 ))}
-              </select>
-            </label>
-          ) : null}
+              </>
+            ) : (
+              <p className="design-console__dim">
+                Open a template from the browser or from a file. There is no canvas interaction
+                yet — no selection, no moving a box, no property editing.
+              </p>
+            )}
 
-          {doc ? (
-            <>
-              <h2 className="design__h2">Sample data</h2>
-              {Object.keys(data).map((k) => (
-                <label className="field" key={k}>
-                  <span>{k}</span>
-                  <input
-                    value={data[k] ?? ''}
-                    onChange={(e) => setData((d) => ({ ...d, [k]: e.target.value }))}
-                  />
-                </label>
-              ))}
+            <div className="design-console__fonts">
+              <GroupHeader
+                label="Fonts"
+                trailing={fontAssets.length ? `${fontAssets.length}` : undefined}
+              />
+              <label className="design-console__file">
+                <FileUp size={14} aria-hidden />
+                <span>Add a font…</span>
+                <input
+                  type="file"
+                  accept=".ttf,.otf,.ttc"
+                  onChange={(e) => { const f = e.target.files?.[0]; if (f) void onUploadFont(f) }}
+                />
+              </label>
+              <p className="design-console__dim">
+                {fontAssets.length === 0
+                  ? 'No fonts yet. A template can only render with a font this server holds — that is what makes it look the same on every machine.'
+                  : 'Fonts are carried by content hash and staged to nodes like any other asset.'}
+              </p>
+            </div>
 
-              <div className="edit__actions">
-                <button type="button" className="btn btn--take" onClick={() => void publish()}>
-                  <Check size={15} aria-hidden /> Publish
-                </button>
-              </div>
-            </>
-          ) : null}
-
-          {publishState ? (
-            <p className="design__status" role="status">
-              <Upload size={14} aria-hidden /> {publishState}
-            </p>
-          ) : null}
-        </aside>
+            {publishState ? (
+              <p className="design-console__status" role="status">
+                <Upload size={14} aria-hidden /> {publishState}
+              </p>
+            ) : null}
+          </PanelBody>
+        </Panel>
       </div>
-    </>
+    </div>
   )
 }

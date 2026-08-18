@@ -107,7 +107,9 @@ function deferred<T>() {
 
 const paint = async () => {
   render(<Show />)
-  await screen.findByText('Pastor Dan')
+  // The label appears in the rail row and again in the armed inspector — the
+  // first item arms itself so the commit is one press away.
+  await screen.findAllByText('Pastor Dan')
   // Let the stream deliver its first snapshot before asserting.
   await act(async () => { await Promise.resolve() })
 }
@@ -215,7 +217,9 @@ describe('what is on air', () => {
       const onair = screen.getByLabelText('On air')
       expect(onair.textContent).toContain('Lower Third')
       expect(onair.textContent).toContain('Pastor Dan')
-      expect(onair.textContent).toContain('clear')
+      // An empty layer is stated, not left blank — a missing card could mean
+      // "no layer" as easily as "nothing on it".
+      expect(onair.textContent).toContain('Nothing on this layer')
     })
   })
 
@@ -253,5 +257,23 @@ describe('a destination that waits to be asked for — ADR 0018', () => {
     // in the log "the full screen went up" is a different sentence.
     expect(body.op).toBe('take_also')
     expect(body.item).toBe('item-1')
+  })
+})
+
+describe('clear all is guarded', () => {
+  test('one press arms it, the second fires it', async () => {
+    await paint()
+    const clear = screen.getByRole('button', { name: /^Clear all$/ })
+
+    await act(async () => { clear.click(); await Promise.resolve() })
+    // A mis-tap must not empty every layer. The first press only arms.
+    expect(vi.mocked(fetch).mock.calls.some((c) => String(c[0]) === '/api/cue')).toBe(false)
+
+    const primed = screen.getByRole('button', { name: /Press again to clear/ })
+    await act(async () => { primed.click(); await Promise.resolve() })
+
+    const call = vi.mocked(fetch).mock.calls.find((c) => String(c[0]) === '/api/cue')
+    expect(call).toBeDefined()
+    expect(JSON.parse(String((call![1] as RequestInit).body)).op).toBe('clear_all')
   })
 })

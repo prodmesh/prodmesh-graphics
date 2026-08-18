@@ -1,8 +1,10 @@
 /**
  * Edit — for the person preparing this week's service.
  *
- * Items: data bound to a Template plus a destination. Playlists and the Rundown
- * are M2.
+ * The console layout (ADR 0020): playlists and the rundown in the left rail,
+ * the selected list's items in the centre, the item being edited in the right
+ * inspector. Items, data, Playlists, Rundown order, destinations, readiness —
+ * and nothing that belongs to Design or Show (ADR 0015).
  *
  * # Two things this mode is responsible for saying out loud
  *
@@ -14,15 +16,38 @@
  * not change existing Items, which is what stops a design tweak from silently
  * altering a rundown. When an Item is behind head, this mode says so and moving
  * it forward is a deliberate click.
+ *
+ * # Reordering is a whole-list write
+ *
+ * Move an entry and the entire list is sent back. Per-position edits from two
+ * operators dragging at once produce an order neither of them chose; replacing
+ * the list wholesale means the second write wins cleanly and *visibly*.
+ *
+ * # No drag-and-drop
+ *
+ * Up and down buttons, on purpose. jsdom has no layout, so a simulated drag
+ * certifies nothing — a mode whose only path to reordering is a drag is a mode
+ * whose reordering is untested. Drag can be added later *alongside* these.
  */
 
 import { useCallback, useEffect, useState } from 'react'
-import { AlertTriangle, Check, Plus, X } from 'lucide-react'
+import { AlertTriangle, ChevronDown, ChevronUp, FolderPlus, ListOrdered, Plus, X } from 'lucide-react'
 import { useQuery, invalidate } from '../../lib/useQuery'
 import { useTopic } from '../../lib/stream'
 import { keys, topics } from '../../lib/keys'
-import { ApiError, patch, post } from '../../lib/api'
-import { Running } from './Running'
+import { ApiError, patch, post, put } from '../../lib/api'
+import {
+  Button,
+  FormGroup,
+  GroupHeader,
+  NavItem,
+  Panel,
+  PanelBody,
+  PanelHeader,
+  StatusDot,
+  StatusPill,
+  Tag,
+} from '../../components/console'
 import type { Item } from '../show/types'
 
 type Field = {
@@ -37,114 +62,516 @@ type Field = {
 
 type TemplateSummary = { id: string; name: string; head_rev: string | null; revisions: number }
 type TemplateDetail = { id: string; name: string; head_rev: string | null; head: { manifest: { fields: Field[] } } | null }
+type PlaylistSummary = { id: string; name: string; mode: string; items: number }
+type PlaylistDetail = {
+  id: string
+  name: string
+  mode: string
+  items: (Item & { section?: string | null })[]
+}
+type RundownDetail = { id: string; name: string; playlists: PlaylistDetail[] }
+
+/** Move the entry at `index` by `delta` and return the new order. */
+function moved<T>(list: T[], index: number, delta: number): T[] {
+  const to = index + delta
+  if (to < 0 || to >= list.length) return list
+  const copy = [...list]
+  const [entry] = copy.splice(index, 1)
+  copy.splice(to, 0, entry as T)
+  return copy
+}
 
 export function Edit() {
   const { data: templates } = useQuery<{ templates: TemplateSummary[] }>(keys.templates())
   const { data: items } = useQuery<{ items: Item[] }>(keys.items())
+  const { data: playlists } = useQuery<{ playlists: PlaylistSummary[] }>(keys.playlists())
+
+  const [listSel, setListSel] = useState<string | 'all'>('all')
   const [editing, setEditing] = useState<string | 'new' | null>(null)
 
   const publishable = (templates?.templates ?? []).filter((t) => t.head_rev)
+  const all = items?.items ?? []
+  const lists = playlists?.playlists ?? []
+  const currentList = listSel !== 'all' && lists.some((p) => p.id === listSel) ? listSel : 'all'
 
-  return (
-    <>
-      <h1>Edit</h1>
+  const addPlaylist = useCallback(async () => {
+    const p = await post<PlaylistSummary>(keys.playlists(), {
+      name: `Playlist ${lists.length + 1}`,
+    })
+    invalidate(keys.playlists())
+    setListSel(p.id)
+  }, [lists.length])
 
-      {publishable.length === 0 ? (
+  if (publishable.length === 0) {
+    return (
+      <div className="mode-scroll">
         <div className="mode__stub">
           <p>No template has been published yet.</p>
           <p>Build one in Design and publish it, then items can be built from it here.</p>
         </div>
-      ) : (
-        <div className="edit">
-          <div className="edit__list">
-            <div className="edit__list-head">
-              <h2>Items</h2>
-              <button type="button" className="btn btn--ghost" onClick={() => setEditing('new')}>
-                <Plus size={15} aria-hidden /> New item
-              </button>
-            </div>
-
-            {(items?.items ?? []).length === 0 ? (
-              <p className="show__dim show__pad">Nothing yet.</p>
-            ) : (
-              <ul className="edit__items">
-                {(items?.items ?? []).map((it) => (
-                  <ItemSummary
-                    key={it.id}
-                    item={it}
-                    templates={publishable}
-                    onEdit={() => setEditing(it.id)}
-                    selected={editing === it.id}
-                  />
-                ))}
-              </ul>
-            )}
-          </div>
-
-          {editing ? (
-            <ItemEditor
-              key={editing}
-              itemId={editing === 'new' ? null : editing}
-              item={editing === 'new' ? null : items?.items.find((i) => i.id === editing) ?? null}
-              templates={publishable}
-              onDone={() => setEditing(null)}
-            />
-          ) : null}
-        </div>
-      )}
-
-      {publishable.length > 0 ? <Running items={items?.items ?? []} /> : null}
-    </>
-  )
-}
-
-function ItemSummary({
-  item,
-  templates,
-  onEdit,
-  selected,
-}: {
-  item: Item
-  templates: TemplateSummary[]
-  onEdit: () => void
-  selected: boolean
-}) {
-  const readiness = useTopic<{ ready: boolean; missing: string[] }>(topics.itemReadiness(item.id))
-  const template = templates.find((t) => t.id === item.template_id)
-  const behind = template?.head_rev && template.head_rev !== item.template_rev
+      </div>
+    )
+  }
 
   return (
-    <li className={selected ? 'edit__item edit__item--selected' : 'edit__item'}>
-      <button type="button" className="edit__item-btn" onClick={onEdit}>
-        <span className="edit__item-label">{item.label}</span>
-        <span className="show__dim">{template?.name ?? 'unknown template'}</span>
-      </button>
-      <div className="edit__item-flags">
-        {behind ? (
-          // Pinned, on purpose. Saying it here is what makes the pinning a
-          // feature rather than a surprise.
-          <span className="edit__flag edit__flag--info">using an older version of this template</span>
-        ) : null}
-        {readiness && !readiness.ready ? (
-          <span className="edit__flag edit__flag--warn">
-            <AlertTriangle size={12} aria-hidden /> not ready on the node
+    <div className="edit-console">
+      <div className="console__toolbar">
+        <div className="console__toolbar-group">
+          <Button onClick={() => setEditing('new')}>
+            <Plus size={14} aria-hidden /> New item
+          </Button>
+          <span className="console__toolbar-note">
+            Changes reach the node when you save. Readiness is checked per destination.
           </span>
-        ) : null}
+        </div>
+        <Tag tone="raised" size={10}>{`${publishable.length} templates published`}</Tag>
       </div>
-    </li>
+
+      <div className="edit-console__panels">
+        <Panel width="var(--pm-rail-width-edit)" label="Playlists">
+          <PanelHeader
+            title="Playlists"
+            trailing={
+              <button
+                type="button"
+                className="edit-console__iconbtn"
+                aria-label="New playlist"
+                onClick={() => void addPlaylist()}
+              >
+                <FolderPlus size={14} aria-hidden />
+              </button>
+            }
+          />
+          <PanelBody>
+            <NavItem
+              title="All items"
+              meta={`${all.length} items`}
+              icon={<ListOrdered size={16} aria-hidden />}
+              active={currentList === 'all'}
+              onClick={() => setListSel('all')}
+            />
+            {lists.map((p) => (
+              <NavItem
+                key={p.id}
+                title={p.name}
+                meta={`${p.items} items  ·  ${p.mode}`}
+                active={currentList === p.id}
+                onClick={() => setListSel(p.id)}
+              />
+            ))}
+            <RundownRail playlists={lists} />
+          </PanelBody>
+        </Panel>
+
+        <div className="console__center edit-console__center">
+          {currentList === 'all' ? (
+            <AllItems
+              items={all}
+              templates={publishable}
+              editing={editing}
+              onEdit={setEditing}
+            />
+          ) : (
+            <PlaylistView
+              id={currentList}
+              allItems={all}
+              templates={publishable}
+              editing={editing}
+              onEdit={setEditing}
+            />
+          )}
+        </div>
+
+        <Panel width="var(--pm-inspector-width)" label="Item">
+          <PanelHeader
+            title={editing === 'new' ? 'New item' : editing ? 'Edit item' : 'Item'}
+            trailing={
+              editing ? (
+                <button
+                  type="button"
+                  className="edit-console__iconbtn"
+                  aria-label="Close editor"
+                  onClick={() => setEditing(null)}
+                >
+                  <X size={14} aria-hidden />
+                </button>
+              ) : undefined
+            }
+          />
+          <PanelBody pad16>
+            {editing ? (
+              <ItemEditor
+                key={editing}
+                itemId={editing === 'new' ? null : editing}
+                item={editing === 'new' ? null : (all.find((i) => i.id === editing) ?? null)}
+                templates={publishable}
+                onDone={() => setEditing(null)}
+              />
+            ) : (
+              <p className="edit-console__dim">
+                Select an item to edit it, or start a new one. The fields live once on the Item;
+                each destination renders them with its own template.
+              </p>
+            )}
+          </PanelBody>
+        </Panel>
+      </div>
+    </div>
   )
 }
 
 // ---------------------------------------------------------------------------
+// The rail's rundown block: which playlists make the show, in what order.
 
+function RundownRail({ playlists }: { playlists: PlaylistSummary[] }) {
+  const { data: rundowns } = useQuery<{ rundowns: { id: string; name: string }[] }>(keys.rundowns())
+  const rundownId = rundowns?.rundowns?.[0]?.id ?? null
+  const { data: rundown } = useQuery<RundownDetail>(rundownId ? keys.rundown(rundownId) : null)
+
+  const addRundown = useCallback(async () => {
+    await post(keys.rundowns(), { name: 'Sunday' })
+    invalidate(keys.rundowns())
+  }, [])
+
+  const save = useCallback(
+    async (ids: string[]) => {
+      if (!rundownId) return
+      await put(`${keys.rundown(rundownId)}/playlists`, { playlists: ids })
+      invalidate(keys.rundown(rundownId))
+      invalidate(keys.rundowns())
+    },
+    [rundownId],
+  )
+
+  const contents = rundown?.playlists ?? []
+  const inRundown = new Set(contents.map((p) => p.id))
+
+  return (
+    <div className="edit-console__rundown">
+      <GroupHeader
+        label={rundown ? `Rundown · ${rundown.name}` : 'Rundown'}
+        trailing={rundown ? `${contents.length} playlists` : undefined}
+      />
+      {!rundownId ? (
+        <Button variant="secondary" block onClick={() => void addRundown()}>
+          <Plus size={13} aria-hidden /> New rundown
+        </Button>
+      ) : (
+        <>
+          {contents.map((p, i) => (
+            <div key={p.id} className="edit-console__order-row">
+              <span className="edit-console__order-pos">{String(i + 1).padStart(2, '0')}</span>
+              <span className="edit-console__order-label">{p.name}</span>
+              <button
+                type="button"
+                className="edit-console__iconbtn"
+                aria-label={`Move ${p.name} up`}
+                disabled={i === 0}
+                onClick={() => void save(moved(contents, i, -1).map((x) => x.id))}
+              >
+                <ChevronUp size={13} aria-hidden />
+              </button>
+              <button
+                type="button"
+                className="edit-console__iconbtn"
+                aria-label={`Move ${p.name} down`}
+                disabled={i === contents.length - 1}
+                onClick={() => void save(moved(contents, i, 1).map((x) => x.id))}
+              >
+                <ChevronDown size={13} aria-hidden />
+              </button>
+              <button
+                type="button"
+                className="edit-console__iconbtn"
+                aria-label={`Remove ${p.name}`}
+                onClick={() => void save(contents.filter((x) => x.id !== p.id).map((x) => x.id))}
+              >
+                <X size={13} aria-hidden />
+              </button>
+            </div>
+          ))}
+          {playlists
+            .filter((p) => !inRundown.has(p.id))
+            .map((p) => (
+              <button
+                key={p.id}
+                type="button"
+                className="edit-console__addbtn"
+                onClick={() => void save([...contents.map((x) => x.id), p.id])}
+              >
+                <Plus size={12} aria-hidden /> {p.name}
+              </button>
+            ))}
+        </>
+      )}
+    </div>
+  )
+}
+
+// ---------------------------------------------------------------------------
+// Centre: every item, or one playlist's ordered entries.
+
+function AllItems({
+  items,
+  templates,
+  editing,
+  onEdit,
+}: {
+  items: Item[]
+  templates: TemplateSummary[]
+  editing: string | 'new' | null
+  onEdit: (id: string) => void
+}) {
+  return (
+    <div className="edit-console__list">
+      <div className="edit-console__list-head">
+        <span className="edit-console__list-title">All items</span>
+        <span className="edit-console__dim">
+          An Item may carry several destinations. The Take fires every ready destination at once.
+        </span>
+      </div>
+      {items.length === 0 ? (
+        <p className="edit-console__dim">Nothing yet.</p>
+      ) : (
+        items.map((it, i) => (
+          <ItemRow
+            key={it.id}
+            item={it}
+            index={String(i + 1).padStart(2, '0')}
+            templates={templates}
+            selected={editing === it.id}
+            onClick={() => onEdit(it.id)}
+          />
+        ))
+      )}
+    </div>
+  )
+}
+
+function PlaylistView({
+  id,
+  allItems,
+  templates,
+  editing,
+  onEdit,
+}: {
+  id: string
+  allItems: Item[]
+  templates: TemplateSummary[]
+  editing: string | 'new' | null
+  onEdit: (id: string) => void
+}) {
+  const { data: playlist } = useQuery<PlaylistDetail>(keys.playlist(id))
+  const contents = playlist?.items ?? []
+  const inList = new Set(contents.map((i) => i.id))
+
+  const save = useCallback(
+    async (entries: { item: string; section?: string | null }[]) => {
+      await put(`${keys.playlist(id)}/items`, { items: entries })
+      invalidate(keys.playlist(id))
+      invalidate(keys.playlists())
+      invalidate(keys.rundowns())
+    },
+    [id],
+  )
+
+  const entryOf = (it: Item & { section?: string | null }) => ({
+    item: it.id,
+    section: it.section ?? null,
+  })
+
+  const setMode = useCallback(
+    async (mode: string) => {
+      await put(`${keys.playlist(id)}/mode`, { mode })
+      invalidate(keys.playlist(id))
+      invalidate(keys.playlists())
+      invalidate(keys.rundowns())
+    },
+    [id],
+  )
+
+  if (!playlist) return null
+
+  return (
+    <div className="edit-console__list">
+      <div className="edit-console__list-head">
+        <span className="edit-console__list-title">{playlist.name}</span>
+        <Tag size={10} tone={playlist.mode === 'follow' ? 'armed' : 'quiet'}>
+          {playlist.mode}
+        </Tag>
+      </div>
+
+      {/* Its own control rather than a field that rides along with a rename:
+          this changes what the operator's arrow keys DO (ADR 0017). Authored
+          HERE because mode is a property of the content — Show only ever
+          indicates it. */}
+      <div className="edit-console__mode">
+        <FormGroup label="Playout mode">
+          <select value={playlist.mode} onChange={(e) => void setMode(e.target.value)}>
+            <option value="cue">Cue — arm a row, then take it</option>
+            <option value="follow">Follow — navigating is taking</option>
+          </select>
+        </FormGroup>
+        <span className="edit-console__dim">
+          {playlist.mode === 'follow'
+            ? 'In Show, clicking or arrowing to an entry puts it on air. For songs and scripture.'
+            : 'In Show, the arrows arm and taking is a separate act. For cued graphics.'}
+        </span>
+      </div>
+
+      {contents.length === 0 ? (
+        <p className="edit-console__dim">Empty. Add items from the pool below.</p>
+      ) : (
+        contents.map((it, i) => (
+          <div key={it.id} className="edit-console__entry">
+            <ItemRow
+              item={it}
+              index={String(i + 1).padStart(2, '0')}
+              templates={templates}
+              selected={editing === it.id}
+              onClick={() => onEdit(it.id)}
+            />
+            <div className="edit-console__entry-side">
+              <input
+                className="edit-console__section"
+                placeholder="Section"
+                aria-label={`Section for ${it.label}`}
+                defaultValue={it.section ?? ''}
+                onBlur={(e) => {
+                  const section = e.target.value.trim() || null
+                  if ((it.section ?? null) === section) return
+                  void save(contents.map((x, n) => (n === i ? { item: x.id, section } : entryOf(x))))
+                }}
+              />
+              <div className="edit-console__entry-btns">
+                <button
+                  type="button"
+                  className="edit-console__iconbtn"
+                  aria-label={`Move ${it.label} up`}
+                  disabled={i === 0}
+                  onClick={() => void save(moved(contents, i, -1).map(entryOf))}
+                >
+                  <ChevronUp size={13} aria-hidden />
+                </button>
+                <button
+                  type="button"
+                  className="edit-console__iconbtn"
+                  aria-label={`Move ${it.label} down`}
+                  disabled={i === contents.length - 1}
+                  onClick={() => void save(moved(contents, i, 1).map(entryOf))}
+                >
+                  <ChevronDown size={13} aria-hidden />
+                </button>
+                <button
+                  type="button"
+                  className="edit-console__iconbtn"
+                  aria-label={`Remove ${it.label}`}
+                  onClick={() => void save(contents.filter((x) => x.id !== it.id).map(entryOf))}
+                >
+                  <X size={13} aria-hidden />
+                </button>
+              </div>
+            </div>
+          </div>
+        ))
+      )}
+
+      {allItems.filter((it) => !inList.has(it.id)).length ? (
+        <div className="edit-console__pool">
+          <GroupHeader label="Add to this playlist" />
+          <div className="edit-console__pool-btns">
+            {allItems
+              .filter((it) => !inList.has(it.id))
+              .map((it) => (
+                <button
+                  key={it.id}
+                  type="button"
+                  className="edit-console__addbtn"
+                  onClick={() => void save([...contents.map(entryOf), { item: it.id }])}
+                >
+                  <Plus size={12} aria-hidden /> {it.label}
+                </button>
+              ))}
+          </div>
+        </div>
+      ) : null}
+    </div>
+  )
+}
 
 /**
- * Where an Item goes — the authoring half of ADR 0018.
+ * One item, the stacked treatment: every destination readable without opening
+ * the Item. Costs row height, keeps the fan-out visible at the moment it
+ * matters — a count would hide exactly the destination that is excluded.
+ */
+function ItemRow({
+  item,
+  index,
+  templates,
+  selected,
+  onClick,
+}: {
+  item: Item
+  index: string
+  templates: TemplateSummary[]
+  selected: boolean
+  onClick: () => void
+}) {
+  const readiness = useTopic<{ ready: boolean; missing: string[] }>(topics.itemReadiness(item.id))
+  const template = templates.find((t) => t.id === item.template_id)
+  const behind = template?.head_rev && template.head_rev !== item.template_rev
+  const dests = item.destinations ?? []
+
+  return (
+    <button
+      type="button"
+      className={selected ? 'edit-console__item edit-console__item--selected' : 'edit-console__item'}
+      onClick={onClick}
+    >
+      <span className="edit-console__item-index">{index}</span>
+      <span className="edit-console__item-body">
+        <span className="edit-console__item-title">{item.label}</span>
+        <span className="edit-console__item-kind">{template?.name ?? 'unknown template'}</span>
+        {dests.map((d, n) => (
+          <span key={n} className="edit-console__item-dest">
+            <StatusDot tone={d.blank ? 'muted' : 'ready'} size={6} />
+            <span className="edit-console__item-route">
+              {d.output || 'any output'}  ·  {d.layer}
+            </span>
+            <span className="edit-console__item-destnote">
+              {d.blank ? 'blanks this feed' : d.mode === 'on_request' ? 'only when asked for' : ''}
+            </span>
+          </span>
+        ))}
+      </span>
+      <span className="edit-console__item-flags">
+        {dests.length > 1 ? (
+          <StatusPill tone="armed" variant="subtle">{`${dests.length} DESTINATIONS`}</StatusPill>
+        ) : null}
+        {behind ? (
+          // Pinned, on purpose. Saying it here is what makes the pinning a
+          // feature rather than a surprise.
+          <span className="edit-console__flag">older template version</span>
+        ) : null}
+        {readiness && !readiness.ready ? (
+          <span className="edit-console__flag edit-console__flag--warn">
+            <AlertTriangle size={12} aria-hidden /> not ready on the node
+          </span>
+        ) : null}
+      </span>
+    </button>
+  )
+}
+
+// ---------------------------------------------------------------------------
+// The item inspector — the authoring half of ADR 0018.
+
+/**
+ * Where an Item goes.
  *
  * An Item is one set of words that appears in several places, each rendered by
  * its own template: a narrow strip over the key feed, full-bleed type on the
- * LED wall. Until now the model could express that and the app could not, so
- * the only way to build one was a script against the API.
+ * LED wall.
  *
  * # Three things a destination can be, and they are not degrees of the same one
  *
@@ -162,6 +589,8 @@ function ItemSummary({
  * the Item does not have is a mistake made now and discovered on Sunday. The
  * first destination's template defines the fields shown; the others are
  * checked against them on save and the server's sentence is rendered verbatim.
+ * There are deliberately no per-destination data overrides (ADR 0018): two
+ * values for one field re-opens "which one is the real Item".
  */
 function Destinations({
   value,
@@ -174,16 +603,16 @@ function Destinations({
   outputs: { output_id: string; layers: string[] }[]
   onChange: (next: DestinationDraft[]) => void
 }) {
-  const set = (i: number, patch: Partial<DestinationDraft>) =>
-    onChange(value.map((d, n) => (n === i ? { ...d, ...patch } : d)))
+  const set = (i: number, patchd: Partial<DestinationDraft>) =>
+    onChange(value.map((d, n) => (n === i ? { ...d, ...patchd } : d)))
 
   return (
-    <div className="edit__dests">
-      <div className="edit__list-head">
-        <h3>Where it goes</h3>
+    <div className="edit-console__dests">
+      <div className="edit-console__dests-head">
+        <GroupHeader label="Where it goes" />
         <button
           type="button"
-          className="btn btn--ghost btn--small"
+          className="edit-console__addbtn"
           onClick={() =>
             onChange([
               ...value,
@@ -202,19 +631,17 @@ function Destinations({
       {value.map((d, i) => {
         const layers = outputs.find((o) => o.output_id === d.output)?.layers ?? []
         return (
-          <div key={i} className="edit__dest">
-            <div className="edit__dest-row">
-              <label>
-                <span>Output</span>
+          <div key={i} className="edit-console__dest-card">
+            <div className="edit-console__dest-row">
+              <FormGroup label="Output">
                 <select value={d.output} onChange={(e) => set(i, { output: e.target.value, layer: '' })}>
                   <option value="">Whichever node has it</option>
                   {outputs.map((o) => (
                     <option key={o.output_id} value={o.output_id}>{o.output_id}</option>
                   ))}
                 </select>
-              </label>
-              <label>
-                <span>Layer</span>
+              </FormGroup>
+              <FormGroup label="Layer">
                 {/* By NAME. An index silently re-points at a different graphic
                     the moment someone reorders the stack. */}
                 <select value={d.layer} onChange={(e) => set(i, { layer: e.target.value })}>
@@ -224,11 +651,11 @@ function Destinations({
                     <option value={d.layer}>{d.layer} (not on this output)</option>
                   ) : null}
                 </select>
-              </label>
+              </FormGroup>
               {value.length > 1 ? (
                 <button
                   type="button"
-                  className="btn btn--ghost btn--small"
+                  className="edit-console__iconbtn edit-console__dest-remove"
                   aria-label={`Remove destination ${i + 1}`}
                   onClick={() => onChange(value.filter((_, n) => n !== i))}
                 >
@@ -237,9 +664,8 @@ function Destinations({
               ) : null}
             </div>
 
-            <div className="edit__dest-row">
-              <label>
-                <span>Rendered by</span>
+            <div className="edit-console__dest-row">
+              <FormGroup label="Rendered by">
                 <select
                   value={d.template_id}
                   disabled={d.blank}
@@ -247,9 +673,8 @@ function Destinations({
                 >
                   {templates.map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}
                 </select>
-              </label>
-              <label>
-                <span>When</span>
+              </FormGroup>
+              <FormGroup label="When">
                 <select
                   value={d.blank ? 'blank' : d.mode}
                   onChange={(e) => {
@@ -263,20 +688,19 @@ function Destinations({
                   <option value="on_request">Only when asked for</option>
                   <option value="blank">Render nothing — clear this feed</option>
                 </select>
-              </label>
+              </FormGroup>
             </div>
 
             {i === 0 && value.length > 1 ? (
-              <p className="edit__hint">
-                This one’s template decides which fields you fill in above. The
-                others are checked against them when you save.
+              <p className="edit-console__hint">
+                This one’s template decides which fields you fill in above. The others are checked
+                against them when you save.
               </p>
             ) : null}
             {d.blank ? (
-              <p className="edit__hint">
-                Taking this item will <b>clear</b> this feed. That is an
-                instruction, not a gap — it is how a full-screen graphic blanks
-                the wall.
+              <p className="edit-console__hint">
+                Taking this item will <b>clear</b> this feed. That is an instruction, not a gap —
+                it is how a full-screen graphic blanks the wall.
               </p>
             ) : null}
           </div>
@@ -417,19 +841,15 @@ function ItemEditor({
 
   return (
     <form
-      className="edit__editor"
+      className="edit-console__editor"
       onSubmit={(e) => {
         e.preventDefault()
         void save()
       }}
     >
-      <h2>{itemId ? 'Edit item' : 'New item'}</h2>
-
-
-      <label className="field">
-        <span>Name in the rundown</span>
+      <FormGroup label="Name in the rundown">
         <input value={label} onChange={(e) => setLabel(e.target.value)} placeholder="Pastor Dan" />
-      </label>
+      </FormGroup>
 
       {fields.map((f) => (
         <FieldInput
@@ -448,20 +868,20 @@ function ItemEditor({
       />
 
       {problems.length > 0 ? (
-        <ul className="edit__problems" role="alert">
+        <ul className="edit-console__problems" role="alert">
           {problems.map((p) => (
             <li key={p}>{p}</li>
           ))}
         </ul>
       ) : null}
 
-      <div className="edit__actions">
-        <button type="submit" className="btn btn--take" disabled={saving}>
-          <Check size={15} aria-hidden /> {saving ? 'Saving…' : 'Save'}
+      <div className="edit-console__actions">
+        <button type="submit" className="c-btn c-btn--primary" disabled={saving}>
+          {saving ? 'Saving…' : 'Save'}
         </button>
-        <button type="button" className="btn btn--ghost" onClick={onDone}>
+        <Button variant="secondary" onClick={onDone}>
           Cancel
-        </button>
+        </Button>
       </div>
     </form>
   )
@@ -481,17 +901,16 @@ function FieldInput({
   const used = [...value].length
   const over = field.max_len != null && used > field.max_len
 
+  const label = [
+    field.label ?? field.key,
+    field.required ? '· required' : '',
+    field.max_len != null ? `· ${used}/${field.max_len}${over ? ' — too long' : ''}` : '',
+  ]
+    .filter(Boolean)
+    .join(' ')
+
   return (
-    <label className="field">
-      <span>
-        {field.label ?? field.key}
-        {field.required ? <em className="field__req"> required</em> : null}
-        {field.max_len != null ? (
-          <em className={over ? 'field__count field__count--over' : 'field__count'}>
-            {used}/{field.max_len}
-          </em>
-        ) : null}
-      </span>
+    <FormGroup label={label}>
       {field.type === 'bool' ? (
         <input type="checkbox" checked={value === 'true'} onChange={(e) => onChange(String(e.target.checked))} />
       ) : field.type === 'enum' ? (
@@ -509,7 +928,7 @@ function FieldInput({
           placeholder={field.sample}
         />
       )}
-    </label>
+    </FormGroup>
   )
 }
 

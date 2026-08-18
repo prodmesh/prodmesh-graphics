@@ -59,9 +59,7 @@ export function Configure() {
   const strangers = nodes.filter((n) => !n.adopted)
 
   return (
-    <>
-      <h1>Configure</h1>
-
+    <div className="mode-scroll">
       {strangers.length > 0 ? (
         <section className="cfg__strangers" aria-label="New nodes">
           <h2>New nodes</h2>
@@ -86,7 +84,7 @@ export function Configure() {
           adopted.map((n) => <NodeCard key={n.node_id} node={n} />)
         )}
       </section>
-    </>
+    </div>
   )
 }
 

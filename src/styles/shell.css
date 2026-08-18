@@ -1,418 +1,141 @@
-.shell { display: flex; height: 100%; }
-
-.shell__sidebar {
-  width: var(--sidebar-w);
-  flex: 0 0 auto;
-  background: var(--bg-sidebar);
-  border-right: 1px solid var(--border);
-  display: flex;
-  flex-direction: column;
-  padding: 14px 10px;
-  gap: 4px;
-}
-
-.shell__brand {
-  font-weight: 600;
-  letter-spacing: -0.01em;
-  padding: 4px 10px 14px;
-}
-.shell__brand span { color: var(--text-faint); font-weight: 400; }
-
-.shell__nav { display: flex; flex-direction: column; gap: 2px; }
-
-.shell__link {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  padding: 9px 10px;
-  border-radius: var(--radius);
-  color: var(--text-dim);
-  text-decoration: none;
-  /* Touch targets: Show is used on a booth touchscreen under time pressure. */
-  min-height: 40px;
-}
-.shell__link:hover { background: var(--bg-tile-hover); color: var(--text); }
-.shell__link--active {
-  background: var(--accent-soft);
-  border: 1px solid var(--accent-border);
-  color: var(--accent-text);
-}
-
-.shell__hint {
-  margin-top: auto;
-  padding: 10px;
-  font-size: 12px;
-  color: var(--text-faint);
-  border-top: 1px solid var(--border-subtle);
-}
-
-.shell__main { flex: 1 1 auto; overflow: auto; padding: 22px 26px; }
+/* --------------------------------------------------------------------------
+   Legacy classes, kept only for Configure (and the mode__stub empty states)
+   until it moves to the console components. Everything here reads pm tokens;
+   delete each block as its last user migrates (ADR 0020).
+   -------------------------------------------------------------------------- */
 
 .mode__stub {
-  border: 1px dashed var(--border-strong);
-  border-radius: var(--radius-lg);
+  border: 1px dashed var(--pm-ink-400);
+  border-radius: var(--pm-radius-8);
   padding: 20px;
-  color: var(--text-dim);
+  color: var(--pm-text-secondary);
   max-width: 62ch;
 }
-.mode__stub code { color: var(--accent-text); }
+.mode__stub code { color: var(--pm-cyan); }
 
-@media (max-width: 860px) {
-  .shell__sidebar { width: var(--sidebar-rail); }
-  .shell__brand, .shell__link span, .shell__hint { display: none; }
-}
-
-/* --------------------------------------------------------------------------
-   Show and Edit.
-
-   Tokens only, never a literal colour — the same rule as ProdMesh-Control, and
-   the reason a theme change is one file rather than a search.
-
-   Show is sized for a booth: big targets, high contrast, and nothing
-   destructive adjacent to something routine.
-   -------------------------------------------------------------------------- */
-
-.show { display: grid; gap: 1.25rem; grid-template-columns: minmax(0, 1fr); }
-@media (min-width: 1100px) {
-  .show { grid-template-columns: minmax(0, 1fr) 22rem; grid-template-areas: "onair log" "rack log"; }
-  .show__onair { grid-area: onair; }
-  .show__rack  { grid-area: rack; }
-  .show__log   { grid-area: log; }
-}
-
-.show__dim { color: var(--text-dim); font-size: 0.85rem; }
-.show__pad { padding: 0.75rem 0; }
-
-.show__onair {
-  border: 1px solid var(--border); border-radius: var(--radius-lg);
-  background: var(--bg-raised); overflow: hidden;
-}
-.show__onair-head {
-  display: flex; align-items: center; gap: 0.6rem;
-  padding: 0.7rem 0.9rem; border-bottom: 1px solid var(--border-subtle);
-  font-weight: 600;
-}
-.show__layers { list-style: none; margin: 0; padding: 0; }
-.show__layer {
-  display: flex; align-items: baseline; gap: 0.75rem;
-  padding: 0.7rem 0.9rem; border-bottom: 1px solid var(--border-subtle);
-}
-.show__layer:last-child { border-bottom: 0; }
-/* On air gets its own token, not "red". It means one thing everywhere. */
-.show__layer--live { background: var(--on-air-soft); box-shadow: inset 3px 0 0 var(--on-air); }
-.show__layer-name { min-width: 8rem; font-weight: 600; }
-.show__layer-item { color: var(--text); }
-.show__degraded { color: var(--warn-text); display: inline-flex; align-items: center; gap: 0.25rem; font-size: 0.8rem; }
-
-.show__rack { display: grid; gap: 0.6rem; }
-.show__items { list-style: none; margin: 0; padding: 0; display: grid; gap: 0.5rem; }
-.show__item {
-  display: flex; align-items: center; justify-content: space-between; gap: 1rem;
-  padding: 0.7rem 0.9rem; border: 1px solid var(--border); border-radius: var(--radius);
-  background: var(--bg-tile);
-}
-.show__item-id { display: flex; flex-direction: column; gap: 0.15rem; min-width: 0; }
-.show__item-label { font-weight: 600; }
-.show__item-actions { display: flex; gap: 0.5rem; flex-shrink: 0; }
-.show__staging { color: var(--warn-text); font-size: 0.8rem; }
-/* Takeable, and it will not reach everywhere. Warn-coloured rather than
-   error-coloured on purpose: the take works, and colouring it like a failure
-   would teach an operator to hesitate over a button that fires. */
-.show__partial { color: var(--warn-text); font-size: 0.8rem; }
-.show__clear { margin-top: 0.5rem; }
-
+.show__dim { color: var(--pm-text-muted); font-size: 11px; }
 .show__problem {
-  display: flex; align-items: center; gap: 0.5rem;
-  padding: 0.7rem 0.9rem; border-radius: var(--radius);
-  background: var(--warn-soft); border: 1px solid var(--warn-border); color: var(--warn-text);
+  margin: 0;
+  border-radius: var(--pm-radius-6);
+  background: var(--pm-surface-raised);
+  box-shadow: var(--pm-hairline);
+  padding: 10px 12px;
+  display: flex;
+  gap: 8px;
+  align-items: flex-start;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--pm-text-primary);
 }
 
-.show__log { border: 1px solid var(--border); border-radius: var(--radius-lg); background: var(--bg-raised); }
-.show__log-head { margin: 0; padding: 0.7rem 0.9rem; font-size: 0.95rem; border-bottom: 1px solid var(--border-subtle); }
-.show__log-list { list-style: none; margin: 0; padding: 0.25rem 0; max-height: 32rem; overflow-y: auto; }
-.show__log-list li {
-  display: grid; grid-template-columns: 5.5rem 5rem minmax(0, 1fr) auto;
-  gap: 0.5rem; padding: 0.35rem 0.9rem; font-size: 0.85rem; align-items: baseline;
-}
-.show__log-bad { color: var(--warn-text); }
-.show__log-time { font-family: var(--font-mono); color: var(--text-faint); }
-.show__log-op { font-weight: 600; }
-.show__log-item { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-
+/* Buttons (Configure still uses these; new code uses .c-btn). */
 .btn {
-  display: inline-flex; align-items: center; gap: 0.4rem;
-  padding: 0.55rem 0.95rem; border-radius: var(--radius);
-  border: 1px solid var(--border-strong); background: var(--bg-tile);
-  color: var(--text); font: inherit; font-weight: 600; cursor: pointer;
-}
-.btn:hover:not(:disabled) { background: var(--bg-tile-hover); }
-.btn:disabled { opacity: 0.45; cursor: not-allowed; }
-.btn--take { background: var(--accent); border-color: var(--accent); color: var(--text-on-accent); min-width: 6rem; justify-content: center; }
-.btn--take:hover:not(:disabled) { background: var(--accent-hover); }
-.btn--ghost { background: transparent; }
-
-.edit { display: grid; gap: 1.25rem; align-items: start; }
-@media (min-width: 900px) { .edit { grid-template-columns: minmax(0, 1fr) minmax(0, 22rem); } }
-.edit__list-head { display: flex; align-items: center; justify-content: space-between; gap: 1rem; }
-.edit__list-head h2 { font-size: 1rem; margin: 0; }
-.edit__items { list-style: none; margin: 0.75rem 0 0; padding: 0; display: grid; gap: 0.4rem; }
-.edit__item { border: 1px solid var(--border); border-radius: var(--radius); background: var(--bg-tile); }
-.edit__item--selected { border-color: var(--accent-border); background: var(--accent-soft); }
-.edit__item-btn {
-  display: flex; flex-direction: column; gap: 0.15rem; align-items: flex-start;
-  width: 100%; padding: 0.65rem 0.85rem; background: none; border: 0; color: inherit;
-  font: inherit; text-align: left; cursor: pointer;
-}
-.edit__item-label { font-weight: 600; }
-.edit__item-flags { display: flex; flex-wrap: wrap; gap: 0.35rem; padding: 0 0.85rem 0.6rem; }
-.edit__flag { font-size: 0.75rem; padding: 0.1rem 0.45rem; border-radius: var(--radius-sm); display: inline-flex; align-items: center; gap: 0.25rem; }
-.edit__flag--info { background: var(--purple-soft); color: var(--purple-text); border: 1px solid var(--purple-border); }
-.edit__flag--warn { background: var(--warn-soft); color: var(--warn-text); border: 1px solid var(--warn-border); }
-
-/* Where an Item goes (ADR 0018). Grouped and boxed so several destinations
-   read as a list of places rather than as more form fields — an Item with
-   three of them is the normal case in a real service, not an advanced one. */
-.edit__dests { display: grid; gap: 0.5rem; }
-.edit__dest {
-  display: grid; gap: 0.5rem; padding: 0.7rem;
-  border: 1px solid var(--border); border-radius: var(--radius); background: var(--bg-tile);
-}
-.edit__dest-row { display: flex; gap: 0.6rem; align-items: end; flex-wrap: wrap; }
-.edit__dest-row label { display: grid; gap: 0.2rem; flex: 1 1 8rem; min-width: 8rem; }
-.edit__dest-row label span { font-size: 0.78rem; color: var(--text-dim); }
-.edit__dest-row select { padding: 0.4rem; border-radius: var(--radius-sm);
-  border: 1px solid var(--border-strong); background: var(--bg-raised); color: var(--text); font: inherit; }
-.edit__hint { margin: 0; font-size: 0.78rem; color: var(--text-dim); }
-.btn--small { padding: 0.3rem 0.55rem; font-size: 0.78rem; }
-
-.edit__editor {
-  display: grid; gap: 0.75rem; padding: 1rem;
-  border: 1px solid var(--border); border-radius: var(--radius-lg); background: var(--bg-raised);
-}
-.edit__editor h2 { margin: 0; font-size: 1rem; }
-.edit__actions { display: flex; gap: 0.5rem; margin-top: 0.25rem; }
-.edit__problems {
-  margin: 0; padding: 0.6rem 0.9rem 0.6rem 1.9rem; border-radius: var(--radius);
-  background: var(--warn-soft); border: 1px solid var(--warn-border); color: var(--warn-text); font-size: 0.88rem;
-}
-
-.field { display: grid; gap: 0.3rem; font-size: 0.9rem; }
-.field > span { display: flex; align-items: baseline; gap: 0.5rem; color: var(--text-dim); }
-.field input[type="text"], .field input[type="number"], .field select {
-  padding: 0.5rem 0.6rem; border-radius: var(--radius-sm);
-  border: 1px solid var(--border-strong); background: var(--bg); color: var(--text); font: inherit;
-}
-.field__req { font-style: normal; font-size: 0.75rem; color: var(--text-faint); }
-.field__count { font-style: normal; font-size: 0.75rem; color: var(--text-faint); margin-left: auto; font-family: var(--font-mono); }
-.field__count--over { color: var(--danger); }
-
-/* --------------------------------------------------------------------------
-   Design.
-
-   The canvas is TRANSPARENT and the checkerboard is here, in CSS. The output is
-   a key signal, so baking a background into the pixels would hide the one thing
-   a designer needs to see — what will actually key over live video.
-   -------------------------------------------------------------------------- */
-
-.design { display: grid; gap: 1.25rem; align-items: start; }
-@media (min-width: 1000px) { .design { grid-template-columns: minmax(0, 1fr) 20rem; } }
-
-.design__stage { display: grid; gap: 0.75rem; min-width: 0; }
-.design__checker {
-  border: 1px solid var(--border); border-radius: var(--radius);
-  overflow: hidden; line-height: 0;
-  background-color: #6e6e6e;
-  background-image:
-    linear-gradient(45deg, #8a8a8a 25%, transparent 25%, transparent 75%, #8a8a8a 75%),
-    linear-gradient(45deg, #8a8a8a 25%, transparent 25%, transparent 75%, #8a8a8a 75%);
-  background-size: 24px 24px;
-  background-position: 0 0, 12px 12px;
-}
-/* Fixed neutral greys, not tokens: this is a measurement backdrop, and it must
-   look identical in light and dark so a judgement about an edge is about the
-   edge. It is the one place in this app where a literal colour is correct. */
-.design__canvas { display: block; width: 100%; height: auto; }
-
-.design__scrub { display: flex; align-items: center; gap: 0.75rem; }
-.design__scrub input[type="range"] { flex: 1; }
-.design__scrub select {
-  padding: 0.4rem 0.5rem; border-radius: var(--radius-sm);
-  border: 1px solid var(--border-strong); background: var(--bg); color: var(--text); font: inherit;
-}
-
-.design__panel {
-  display: grid; gap: 0.85rem; padding: 1rem;
-  border: 1px solid var(--border); border-radius: var(--radius-lg); background: var(--bg-raised);
-}
-.design__h2 { margin: 0.25rem 0 0; font-size: 0.95rem; }
-.design__status {
-  margin: 0; padding: 0.55rem 0.7rem; border-radius: var(--radius);
-  background: var(--accent-soft); border: 1px solid var(--accent-border); color: var(--accent-text);
-  font-size: 0.85rem; display: flex; align-items: center; gap: 0.4rem;
-}
-.design__panel .field input[type="file"] { font-size: 0.8rem; }
-
-.show__group { display: grid; gap: 0.4rem; margin-bottom: 0.9rem; }
-.show__group-head { display: flex; align-items: center; justify-content: space-between; gap: 1rem; }
-.show__group-head h3 {
-  margin: 0; font-size: 0.8rem; text-transform: uppercase;
-  letter-spacing: 0.06em; color: var(--text-dim);
-}
-.btn--small { padding: 0.3rem 0.6rem; font-size: 0.78rem; }
-
-/* --------------------------------------------------------------------------
-   The rundown.
-
-   Two marks, deliberately different: the CURSOR is where the operator is, and
-   ON AIR is what the node reports. They are allowed to disagree, and the panel
-   shows both rather than reconciling them.
-   -------------------------------------------------------------------------- */
-
-.rundown {
-  border: 1px solid var(--border); border-radius: var(--radius-lg);
-  background: var(--bg-raised); display: grid; gap: 0.6rem; padding: 0.9rem;
-}
-.rundown__head { display: flex; align-items: baseline; justify-content: space-between; gap: 1rem; }
-.rundown__head h2 { margin: 0; font-size: 0.95rem; }
-/* Persistent, not a menu item. What the arrow keys DO changes when the cursor
-   crosses a playlist boundary mid-service, and an operator has to be able to
-   see which mode they are in without going to look for it (ADR 0017). */
-.rundown__mode {
-  margin-right: auto; padding: 0.1rem 0.45rem; border-radius: var(--radius);
-  font-size: 0.72rem; letter-spacing: 0.02em;
-  background: var(--bg-tile); border: 1px solid var(--border); color: var(--text-dim);
-}
-/* Follow is the one where navigating puts something on air, so it is the one
-   that gets the colour. */
-.rundown__mode--follow {
-  background: var(--warn-soft); border-color: var(--warn-border); color: var(--warn-text);
-}
-
-/* The song map. A row of targets rather than a list to scroll, because it is
-   used with the band playing and the operator's eyes elsewhere — so the
-   buttons are big enough to hit without aiming. */
-.rundown__sections { display: flex; flex-wrap: wrap; gap: 0.35rem; }
-.rundown__section {
-  padding: 0.45rem 0.7rem; border-radius: var(--radius); min-height: 36px;
-  border: 1px solid var(--border-strong); background: var(--bg-tile);
-  color: var(--text); font: inherit; font-size: 0.85rem; font-weight: 600;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  border: 0;
+  border-radius: var(--pm-radius-4);
+  padding: 6px 12px;
+  height: 27px;
+  font-family: var(--pm-font-ui);
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 100%;
   cursor: pointer;
+  background: var(--pm-action-secondary-bg);
+  color: var(--pm-action-secondary-fg);
+  box-shadow: var(--pm-hairline);
+  white-space: nowrap;
 }
-.rundown__section:hover:not(:disabled) { background: var(--bg-tile-hover); }
-.rundown__section:disabled { opacity: 0.45; cursor: not-allowed; }
-/* Where the cursor is now — the operator's place in the song. */
-.rundown__section--here {
-  background: var(--accent-soft); border-color: var(--accent-border); color: var(--accent-text);
+.btn:hover:not(:disabled) { background: var(--pm-surface-hover); }
+.btn:disabled { opacity: 0.45; cursor: default; }
+.btn--take { background: var(--pm-action-primary-bg); color: var(--pm-action-primary-fg); box-shadow: none; }
+.btn--take:hover:not(:disabled) { background: var(--pm-action-primary-bg); filter: brightness(1.08); }
+.btn--ghost { background: var(--pm-action-quiet-bg); color: var(--pm-action-quiet-fg); box-shadow: none; }
+.btn--small { height: 24px; padding: 4px 8px; font-size: 11px; }
+
+.field { display: grid; gap: 4px; font-size: 12px; }
+.field > span { display: flex; align-items: baseline; gap: 8px; color: var(--pm-text-secondary); font-size: 11px; font-weight: 600; }
+.field input[type='text'],
+.field input[type='number'],
+.field select {
+  height: 28px;
+  border: 0;
+  outline: none;
+  border-radius: var(--pm-radius-4);
+  background: var(--pm-surface-field);
+  color: var(--pm-text-primary);
+  font-family: var(--pm-font-ui);
+  font-size: 12px;
+  padding: 0 10px;
 }
 
-.rundown__transport { display: flex; gap: 0.5rem; align-items: center; }
-.rundown__transport .btn--take { flex: 1; justify-content: center; }
-
-.rundown__diverged {
-  margin: 0; padding: 0.5rem 0.7rem; border-radius: var(--radius); font-size: 0.83rem;
-  background: var(--warn-soft); border: 1px solid var(--warn-border); color: var(--warn-text);
-}
-
-.rundown__list, .rundown__list ol { list-style: none; margin: 0; padding: 0; }
-.rundown__playlist h3 {
-  margin: 0.6rem 0 0.25rem; font-size: 0.75rem; text-transform: uppercase;
-  letter-spacing: 0.06em; color: var(--text-faint);
-}
-.rundown__item {
-  display: flex; align-items: center; justify-content: space-between; gap: 0.5rem;
-  border-radius: var(--radius-sm); padding-right: 0.5rem;
-}
-/* Where the operator is: an accent bar on the leading edge. */
-.rundown__item--cursor { background: var(--accent-soft); box-shadow: inset 3px 0 0 var(--accent); }
-/* What the node says is showing: the on-air token, same as everywhere else. */
-.rundown__item--live .rundown__live { color: var(--on-air); }
-.rundown__jump {
-  flex: 1; text-align: left; background: none; border: 0; color: inherit;
-  font: inherit; padding: 0.4rem 0.55rem; cursor: pointer; border-radius: var(--radius-sm);
-}
-.rundown__jump:hover { background: var(--bg-tile-hover); }
-.rundown__live { display: inline-flex; align-items: center; gap: 0.25rem; font-size: 0.72rem; }
-
-.running { display: grid; gap: 1.5rem; margin-top: 1.75rem; }
-@media (min-width: 900px) { .running { grid-template-columns: 1fr 1fr; } }
-.running h2 { font-size: 1rem; margin: 0; }
-.running__editor {
-  margin-top: 0.75rem; padding: 0.85rem; display: grid; gap: 0.6rem;
-  border: 1px solid var(--border); border-radius: var(--radius); background: var(--bg-raised);
-}
-.running__editor h3 { margin: 0; font-size: 0.9rem; }
-.running__order { list-style: none; margin: 0; padding: 0; display: grid; gap: 0.3rem; }
-.running__order li {
-  display: flex; align-items: center; gap: 0.4rem;
-  padding: 0.3rem 0.4rem; border-radius: var(--radius-sm); background: var(--bg-tile);
-}
-.running__pos {
-  min-width: 1.4rem; text-align: right; font-family: var(--font-mono);
-  font-size: 0.8rem; color: var(--text-faint);
-}
-.running__label { flex: 1; min-width: 0; font-size: 0.88rem; }
-.running__add { display: flex; flex-wrap: wrap; gap: 0.35rem; }
+.running__pos { font-family: var(--pm-font-mono); font-size: 10px; color: var(--pm-text-idle); min-width: 18px; }
+.running__label { flex: 1 1 auto; min-width: 0; font-size: 12px; color: var(--pm-text-secondary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.running__add { display: flex; gap: 6px; flex-wrap: wrap; }
 
 /* Configure. */
-.cfg__h2 { font-size: 1rem; margin: 1.25rem 0 0.5rem; }
-.cfg__strangers { margin-bottom: 1.5rem; }
-.cfg__strangers h2 { font-size: 1rem; margin: 0 0 0.5rem; }
+.cfg__h2 { margin-top: 8px; }
+.cfg__strangers { margin-bottom: 16px; }
 .cfg__stranger {
-  display: flex; align-items: center; justify-content: space-between; gap: 1rem;
-  padding: 0.9rem; border-radius: var(--radius);
-  background: var(--accent-soft); border: 1px solid var(--accent-border);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  border-radius: var(--pm-radius-6);
+  background: var(--pm-state-armed-bg);
+  box-shadow: var(--pm-ring-armed);
+  padding: 12px 14px;
+  margin: 8px 0;
 }
-.cfg__stranger p { margin: 0.3rem 0 0; font-size: 0.85rem; }
-
 .cfg__node {
-  border: 1px solid var(--border); border-radius: var(--radius-lg);
-  background: var(--bg-raised); padding: 0.9rem; margin-bottom: 1rem;
+  border-radius: var(--pm-radius-8);
+  background: var(--pm-surface-chrome);
+  box-shadow: var(--pm-hairline);
+  padding: 16px;
+  margin: 10px 0;
+  display: grid;
+  gap: 12px;
 }
-.cfg__node header { display: flex; align-items: center; gap: 0.5rem; margin-bottom: 0.6rem; }
-.cfg__dot { width: 8px; height: 8px; border-radius: 50%; background: var(--text-faint); }
-.cfg__dot--up { background: var(--ok); }
-.cfg__caps { margin: 0 0 0.8rem; display: grid; gap: 0.25rem; font-size: 0.85rem; }
-.cfg__caps > div { display: grid; grid-template-columns: 8rem 1fr; gap: 0.5rem; }
-.cfg__caps dt { color: var(--text-dim); display: flex; align-items: center; gap: 0.3rem; }
-.cfg__caps dd { margin: 0; }
-
+.cfg__node > header { display: flex; align-items: center; gap: 10px; }
+.cfg__dot { width: 8px; height: 8px; border-radius: 50%; background: var(--pm-state-muted); }
+.cfg__dot--up { background: var(--pm-state-ready); }
+.cfg__caps { display: grid; gap: 6px; margin: 0; }
+.cfg__caps > div { display: flex; gap: 10px; align-items: baseline; }
+.cfg__caps dt { display: flex; gap: 5px; align-items: center; color: var(--pm-text-muted); font-size: 11px; min-width: 110px; }
+.cfg__caps dd { margin: 0; font-size: 12px; color: var(--pm-text-secondary); font-family: var(--pm-font-mono); }
+.cfg__lock { color: var(--pm-text-muted); font-family: var(--pm-font-mono); font-size: 11px; }
+.cfg__lock--ok { color: var(--pm-state-ready); }
+.cfg__lock--warn { color: var(--warn-text); }
+.cfg__saved { color: var(--pm-state-ready); font-size: 11px; }
 .cfg__output {
-  border-top: 1px solid var(--border-subtle); padding-top: 0.7rem; margin-top: 0.7rem;
+  border-top: 1px solid var(--pm-border-hairline);
+  padding-top: 12px;
+  display: grid;
+  gap: 8px;
 }
-.cfg__output h4 { margin: 0 0 0.15rem; font-size: 0.88rem; }
-.cfg__output p { margin: 0 0 0.5rem; }
-.cfg__saved { color: var(--ok); font-weight: 400; }
-.cfg__layers { list-style: none; margin: 0 0 0.6rem; padding: 0; display: grid; gap: 0.3rem; }
+.cfg__layers { list-style: none; margin: 0; padding: 0; display: grid; gap: 4px; }
 .cfg__layers li {
-  display: flex; align-items: center; gap: 0.4rem;
-  padding: 0.3rem 0.4rem; border-radius: var(--radius-sm); background: var(--bg-tile);
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  border-radius: var(--pm-radius-6);
+  background: var(--pm-surface-raised);
+  box-shadow: var(--pm-hairline);
+  padding: 6px 10px;
 }
-.cfg__add { display: flex; gap: 0.4rem; }
-.cfg__add input {
-  flex: 1; padding: 0.4rem 0.5rem; border-radius: var(--radius-sm);
-  border: 1px solid var(--border-strong); background: var(--bg); color: var(--text); font: inherit;
-}
-
-.shell__open {
-  margin: 0 0 1rem; padding: 0.6rem 0.85rem; border-radius: var(--radius);
-  background: var(--warn-soft); border: 1px solid var(--warn-border);
-  color: var(--warn-text); font-size: 0.85rem;
-}
-
-.show__preview {
-  display: block; width: 100%; height: auto;
-  border-bottom: 1px solid var(--border-subtle); background: var(--bg);
-}
-
-.cfg__color {
-  border: 1px solid var(--border-subtle); border-radius: var(--radius);
-  padding: 0.6rem 0.8rem; margin: 0.6rem 0; display: grid; gap: 0.5rem;
-}
-.cfg__color legend { font-size: 0.78rem; text-transform: uppercase; letter-spacing: 0.06em; color: var(--text-dim); }
-.cfg__color p { margin: 0; }
+.cfg__color { border: 1px solid var(--pm-border-hairline); border-radius: var(--pm-radius-6); padding: 10px 12px; display: grid; gap: 8px; }
+.cfg__color legend { font-size: 11px; font-weight: 600; color: var(--pm-text-secondary); padding: 0 4px; }
 .cfg__color .field { grid-template-columns: 7rem 1fr; display: grid; align-items: center; }
 .cfg__color .field > span { margin: 0; }
-
-.cfg__lock { color: var(--text-dim); }
-.cfg__lock--ok { color: var(--ok); }
-.cfg__lock--warn { color: var(--warn-text); }
+.cfg__add { display: flex; gap: 8px; align-items: center; }
+.cfg__add input {
+  height: 28px;
+  border: 0;
+  outline: none;
+  border-radius: var(--pm-radius-4);
+  background: var(--pm-surface-field);
+  color: var(--pm-text-primary);
+  font-size: 12px;
+  padding: 0 10px;
+}

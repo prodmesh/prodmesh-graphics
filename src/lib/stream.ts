@@ -89,11 +89,18 @@ function subscribe(topic: string, fn: Listener): () => void {
   }
 }
 
-/** Subscribe to a snapshot topic. Returns the newest value, or undefined. */
-export function useTopic<T = unknown>(topic: string): T | undefined {
+const noopSubscribe = () => () => {}
+
+/**
+ * Subscribe to a snapshot topic. Returns the newest value, or undefined.
+ *
+ * `null` subscribes to nothing — the same convention as useQuery, for the
+ * widget whose topic name depends on a fact it is still fetching.
+ */
+export function useTopic<T = unknown>(topic: string | null): T | undefined {
   return useSyncExternalStore(
-    (fn) => subscribe(topic, fn),
-    () => values.get(topic) as T | undefined,
+    topic === null ? noopSubscribe : (fn) => subscribe(topic, fn),
+    () => (topic === null ? undefined : (values.get(topic) as T | undefined)),
     () => undefined,
   )
 }

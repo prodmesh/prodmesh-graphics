@@ -1,0 +1,133 @@
+/* Design — the console layout (ADR 0020): template browser, canvas workspace,
+   template & publish inspector. */
+
+.design-console {
+  flex-grow: 1;
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+.design-console__panels {
+  flex-grow: 1;
+  min-height: 0;
+  display: flex;
+  align-items: stretch;
+}
+.design-console__center { min-height: 0; }
+
+.design-console__stage {
+  flex-grow: 1;
+  min-height: 0;
+  overflow: auto;
+  box-sizing: border-box;
+  padding: 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  align-items: stretch;
+}
+
+/* The checkerboard is deliberate: the output is a key signal, and the designer
+   must see what will actually key over live video. */
+.design__checker {
+  border-radius: var(--pm-radius-8);
+  box-shadow: var(--pm-hairline);
+  overflow: hidden;
+  align-self: center;
+  max-width: 100%;
+  background-color: var(--pm-bg-canvas);
+  background-image:
+    linear-gradient(45deg, var(--pm-ink-750) 25%, transparent 25%),
+    linear-gradient(-45deg, var(--pm-ink-750) 25%, transparent 25%),
+    linear-gradient(45deg, transparent 75%, var(--pm-ink-750) 75%),
+    linear-gradient(-45deg, transparent 75%, var(--pm-ink-750) 75%);
+  background-size: 16px 16px;
+  background-position: 0 0, 0 8px, 8px -8px, -8px 0;
+}
+.design__canvas { display: block; max-width: 100%; height: auto; }
+
+.design-console__timeline {
+  flex-shrink: 0;
+  box-sizing: border-box;
+  background: var(--pm-surface-chrome);
+  border-top: 1px solid var(--pm-border-hairline);
+  padding: 12px 16px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.design-console__scrub { display: flex; align-items: center; gap: 12px; }
+.design-console__scrub input[type='range'] { flex: 1; accent-color: var(--pm-red); }
+.design-console__scrub select {
+  height: 27px;
+  border: 0;
+  outline: none;
+  border-radius: var(--pm-radius-4);
+  background: var(--pm-surface-field);
+  color: var(--pm-text-primary);
+  font-family: var(--pm-font-ui);
+  font-size: 12px;
+  padding: 0 8px;
+}
+
+.design-console__dim { margin: 0; font-size: 11px; line-height: 1.6; color: var(--pm-text-muted); }
+
+.design-console__problem {
+  margin: 0;
+  border-radius: var(--pm-radius-6);
+  background: var(--pm-surface-raised);
+  box-shadow: var(--pm-hairline);
+  padding: 10px 12px;
+  display: flex;
+  gap: 8px;
+  align-items: flex-start;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--pm-text-primary);
+}
+.design-console__problem svg { flex-shrink: 0; margin-top: 2px; color: var(--pm-text-secondary); }
+
+.design-console__name { display: flex; flex-direction: column; gap: 4px; }
+.design-console__title { font-weight: 700; font-size: 15px; color: var(--pm-text-primary); }
+.design-console__id {
+  font-family: var(--pm-font-mono);
+  font-size: 11px;
+  color: var(--pm-text-muted);
+  word-break: break-all;
+}
+
+.design-console__fonts { display: flex; flex-direction: column; gap: 8px; margin-top: auto; }
+
+/* A file input styled as a row; the input itself is visually hidden but
+   remains focusable and testable. */
+.design-console__file {
+  position: relative;
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  border-radius: var(--pm-radius-4);
+  background: var(--pm-surface-field);
+  color: var(--pm-text-secondary);
+  padding: 7px 10px;
+  font-size: 12px;
+  cursor: pointer;
+}
+.design-console__file:hover { color: var(--pm-text-primary); }
+.design-console__file input[type='file'] {
+  position: absolute;
+  inset: 0;
+  opacity: 0;
+  cursor: pointer;
+}
+
+.design-console__status {
+  margin: 0;
+  display: flex;
+  gap: 8px;
+  align-items: flex-start;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--pm-text-secondary);
+}
+.design-console__status svg { flex-shrink: 0; margin-top: 2px; }

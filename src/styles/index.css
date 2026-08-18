@@ -1,5 +1,10 @@
-/* Import order matters: tokens first, then base, then feature stylesheets.
-   One stylesheet per feature area, same as ProdMesh-Control. */
+/* Import order matters: tokens first, then base, then components, then feature
+   stylesheets. One stylesheet per feature area, same as ProdMesh-Control. */
 @import './tokens.css';
 @import './base.css';
+@import './console.css';
+@import './console-shell.css';
+@import './show.css';
+@import './edit.css';
+@import './design.css';
 @import './shell.css';

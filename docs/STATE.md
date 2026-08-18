@@ -132,7 +132,7 @@ other than what they were.
 | `cueLog` | ✅ the log-tail bridge from ADR 0008, with gap recovery. 6 tests |
 | PMG Link | ⬜ spec only |
 | CAS | ⬜ spec only |
-| Web app | 🟡 four-mode shell, routing, tokens, `useTopic` + `useQuery`. 6 tests. No functionality |
+| Web app | 🟢 **the operator console** (ADR 0020) — the design-system tokens and 20+ components transcribed to first-party TSX/CSS, fonts bundled (no CDN), a header/footer console shell over the four modes. Show: rundown rail, live H.264 program well, layer strip, section jump map, slide grid, armed inspector with per-destination readiness; Edit: playlists + rundown composition, section authoring, playout-mode control, multi-destination item inspector; Design: template browser + publish rail. Verified against the rehearsal service end to end — take → on air → two marks → take log. 31 web tests |
 | `pmg-scene` | 🟢 **full document model**, canonical CBOR + JSON mirror, `template_rev`, validation, manifest, total binding evaluation. 25 tests |
 | `pmg-layout` | 🟢 **flexbox solver** over `TextMeasure` (taffy, ADR 0016). Shrink-and-grow and `visible_if` removal verified as numbers. 12 tests |
 | `pmg-text` | 🟢 fonts **from bytes**, swash shaping, subpixel glyph atlas at ⅛ px, real `TextMeasure`, **and line breaking** — hard `\n` plus greedy wrapping to the solved box, lines cut out of one shaped run so kerning does not shift when a later word wraps. Whitespace only: not UAX #14, so no hyphenation or CJK — that still wants parley. 20 tests. R3's three hazards structurally answered; quality still needs S2 |

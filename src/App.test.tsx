@@ -11,21 +11,26 @@ const at = (path: string) =>
   )
 
 describe('the four modes', () => {
+  // The mode is announced by the header tab (aria-current) and the footer's
+  // mode tag — the console has no page headings, the same as the design it
+  // transcribes (ADR 0020).
   test.each([
-    ['/configure', 'Configure'],
-    ['/design', 'Design'],
-    ['/edit', 'Edit'],
-    ['/show', 'Show'],
-  ])('%s renders %s', (path, heading) => {
+    ['/configure', 'Configure', 'CONFIGURE MODE'],
+    ['/design', 'Design', 'DESIGN MODE'],
+    ['/edit', 'Edit', 'EDIT MODE'],
+    ['/show', 'Show', 'SHOW MODE'],
+  ])('%s renders %s', (path, tab, footer) => {
     at(path)
-    expect(screen.getByRole('heading', { level: 1, name: heading })).toBeDefined()
+    const link = screen.getByRole('link', { name: tab })
+    expect(link.getAttribute('aria-current')).toBe('page')
+    expect(screen.getByText(footer)).toBeDefined()
   })
 
   test('an unknown route lands on Show, not on an error', () => {
     // A booth screen that has been sitting on a stale bookmark should come up
     // usable rather than showing a 404.
     at('/nonsense')
-    expect(screen.getByRole('heading', { level: 1, name: 'Show' })).toBeDefined()
+    expect(screen.getByRole('link', { name: 'Show' }).getAttribute('aria-current')).toBe('page')
   })
 })
 

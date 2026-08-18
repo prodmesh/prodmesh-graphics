@@ -5,6 +5,13 @@
  * of a mis-tap, no route into Design, and state in the present tense —
  * "Lower Third · Pastor Dan", not "Item 4 active".
  *
+ * # The console layout (ADR 0020)
+ *
+ * Rundown rail on the left, the program well and layer strip in the centre,
+ * the armed item and its commit on the right — so the operator reads what
+ * they are about to send next to the button that sends it. The frame never
+ * changes with the playlist; only the operator's controls do (ADR 0015).
+ *
  * # The take button must never lie
  *
  * `POST /api/cue` is synchronous and this view waits for it. There is
@@ -23,13 +30,36 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { startH264Preview, previewSocketUrl, type PreviewStatus } from '../../lib/previewH264'
-import { AlertTriangle, Radio, Square, X } from 'lucide-react'
+import { AlertTriangle, ListVideo, Target } from 'lucide-react'
 import { useTopic } from '../../lib/stream'
 import { useQuery } from '../../lib/useQuery'
 import { keys, topics } from '../../lib/keys'
-import { ApiError, newCueId, takeCue } from '../../lib/api'
-import { RundownPanel } from './Rundown'
-import type { Item, LayersSnapshot, NodeSummary, CueLogSnapshot, Readiness } from './types'
+import { ApiError, newCueId, takeCue, type CueRequest } from '../../lib/api'
+import {
+  Button,
+  GroupHeader,
+  FormGroup,
+  LayerCard,
+  LogRow,
+  Panel,
+  PanelBody,
+  PanelHeader,
+  ProgramCanvas,
+  RundownItem,
+  SectionCard,
+  SlideTile,
+  StatusDot,
+  StatusPill,
+  Tag,
+} from '../../components/console'
+import { useRundown } from './useRundown'
+import type {
+  Item,
+  LayersSnapshot,
+  NodeSummary,
+  CueLogSnapshot,
+  Readiness,
+} from './types'
 
 const SHOW = 'default'
 
@@ -42,239 +72,465 @@ export function Show() {
   const output = node?.state?.outputs?.[0]
   const rundown = rundowns?.rundowns?.[0]
 
-  return (
-    <>
-      <h1>Show</h1>
-      {!node ? (
-        <NoNodes />
-      ) : (
-        <div className="show">
-          <OnAir name={node.name} outputId={output?.id ?? 'out-0'} previewUrl={node.preview_url ?? null} />
-          <Rack
-            nodeId={node.node_id}
-            nodeName={node.name}
-            outputId={output?.id ?? 'out-0'}
-            items={items?.items ?? []}
-            reachable={node.reachable}
-          />
-          {rundown ? (
-            <RundownPanel
-              rundownId={rundown.id}
-              nodeId={node.node_id}
-              outputId={output?.id ?? 'out-0'}
-              reachable={node.reachable}
-              show={SHOW}
-            />
-          ) : null}
-          <TakeLog />
-        </div>
-      )}
-    </>
+  if (!node) return <NoNodes />
+
+  return rundown ? (
+    <RundownConsole
+      rundownId={rundown.id}
+      node={node}
+      outputId={output?.id ?? 'out-0'}
+      items={items?.items ?? []}
+    />
+  ) : (
+    <RackConsole node={node} outputId={output?.id ?? 'out-0'} items={items?.items ?? []} />
   )
 }
 
 function NoNodes() {
   return (
-    <div className="mode__stub">
-      <p>No playout node has connected yet.</p>
-      <p>
-        Start one and point it at this server. Nothing here can go on air until a
-        node is listening.
-      </p>
+    <div className="mode-scroll">
+      <div className="mode__stub">
+        <p>No playout node has connected yet.</p>
+        <p>
+          Start one and point it at this server. Nothing here can go on air until a node is
+          listening.
+        </p>
+      </div>
     </div>
   )
 }
 
 // ---------------------------------------------------------------------------
+// The rundown console: rail · program · armed. The normal Sunday.
 
-// The NAME, not the id. An id identifies a node to the system; a name is what
-// is written on the machine in the rack, and that is what an operator needs at
-// 10:15 on a Sunday.
-function OnAir({
-  name,
+function RundownConsole({
+  rundownId,
+  node,
   outputId,
-  previewUrl,
+  items,
 }: {
-  name: string
+  rundownId: string
+  node: NodeSummary
   outputId: string
-  previewUrl: string | null
+  items: Item[]
 }) {
-  const layers = useTopic<LayersSnapshot>(topics.outputLayers(outputId))
+  const r = useRundown({
+    rundownId,
+    nodeId: node.node_id,
+    outputId,
+    reachable: node.reachable,
+    show: SHOW,
+  })
+
+  const armed = r.at ? (items.find((i) => i.id === r.at!.id) ?? r.at) : null
+  const cursorPlaylist = r.rundown?.playlists.find((p) => p.items.some((i) => i.id === r.cursor?.item))
+
+  if (!r.rundown) return null
+
+  // A running position per entry, so the rail reads like a cue sheet.
+  let position = 0
+  const numbered = new Map<string, string>()
+  for (const it of r.running) numbered.set(it.id, String(++position).padStart(2, '0'))
 
   return (
-    <section className="show__onair" aria-label="On air">
-      <header className="show__onair-head">
-        <Radio size={16} aria-hidden />
-        <span>{name}</span>
-        <span className="show__dim">{outputId}</span>
-        {layers?.fps ? <span className="show__dim">{layers.fps.toFixed(2)} fps</span> : null}
-      </header>
+    <div className="show-console">
+      <div className="console__toolbar">
+        <div className="console__toolbar-group">
+          <Tag pill tone="raised">{r.rundown.name}</Tag>
+          {r.known ? (
+            <Tag tone={r.follow ? 'armed' : 'quiet'} size={10}>
+              {r.follow ? 'Follow — arrows take' : 'Cue — arrows move'}
+            </Tag>
+          ) : null}
+          <span className="console__toolbar-note">
+            {r.follow
+              ? 'Navigating is taking. Mode belongs to the playlist, not this screen.'
+              : 'Arm a row, then commit it. Mode belongs to the playlist, not this screen.'}
+          </span>
+        </div>
+        <ClearAll nodeId={node.node_id} outputId={outputId} disabled={!node.reachable} onProblem={r.setProblem} />
+      </div>
 
-      {previewUrl ? <Preview url={previewUrl} name={name} outputId={outputId} /> : null}
+      <div className="show-console__panels">
+        {/* Focusable so the arrow keys reach it, and the handler is a function
+            of the mode. A rundown mixes playlists of both kinds — that is the
+            normal Sunday — so what the keyboard does changes as the cursor
+            crosses a boundary, and the toolbar indicator is how an operator
+            knows without looking for it. */}
+        <Panel width="var(--pm-rail-width)">
+          <section
+            aria-label="Rundown"
+            tabIndex={0}
+            className="show-console__rail"
+            onKeyDown={r.onKeyDown}
+          >
+            <PanelHeader
+              title="Live Rundown"
+              icon={<ListVideo size={16} aria-hidden color="var(--pm-white)" />}
+              trailing={<Tag size={10}>{`${r.running.length} items`}</Tag>}
+            />
+            <PanelBody>
+              {!r.known ? (
+                // Refused, not guessed at. Falling back to `cue` would give the
+                // operator an arm step in a playlist authored to fire on
+                // navigation, with nothing on screen saying the keyboard is not
+                // doing what the content asked for.
+                <p className="show-console__problem" role="alert">
+                  <AlertTriangle size={15} aria-hidden /> This playlist uses a playout mode this
+                  version does not know (“{r.mode}”). Its keyboard shortcuts are off until you
+                  update.
+                </p>
+              ) : null}
 
-      {!layers?.layers?.length ? (
-        <p className="show__dim show__pad">Nothing on air.</p>
-      ) : (
-        <ul className="show__layers">
-          {/* Top of the stack first. The wire order is compositing order,
-              bottom-first, but an operator reads a stack the way they see it:
-              what is in front is at the top of the list. */}
-          {layers.layers.toReversed().map((l) => (
-            <li key={l.name} className={l.occupant ? 'show__layer show__layer--live' : 'show__layer'}>
-              <span className="show__layer-name">{l.name}</span>
-              {l.occupant ? (
-                <>
-                  {/* Present tense, and the graphic's own words — not an id. */}
-                  <span className="show__layer-item">{l.occupant.item_label ?? l.occupant.item_id}</span>
-                  <span className="show__dim">{l.occupant.phase}</span>
-                  {l.occupant.degraded ? (
-                    <span className="show__degraded" title="Part of this graphic could not be drawn">
-                      <AlertTriangle size={13} aria-hidden /> degraded
-                    </span>
-                  ) : null}
-                </>
-              ) : (
-                <span className="show__dim">clear</span>
-              )}
-            </li>
-          ))}
-        </ul>
-      )}
-    </section>
+              {r.rundown.playlists.map((p) => (
+                <div key={p.id} className="show-console__group">
+                  <GroupHeader
+                    label={p.name}
+                    trailing={`${p.items.length} items · ${p.mode ?? 'cue'}`}
+                  />
+                  {p.items.map((it) => {
+                    const atCursor = r.cursor?.item === it.id
+                    const showing = r.onAir.has(it.id)
+                    return (
+                      <RundownItem
+                        key={it.id}
+                        id={numbered.get(it.id)}
+                        title={it.label}
+                        subtitle={it.section ?? undefined}
+                        state={showing ? 'air' : atCursor ? 'armed' : 'idle'}
+                        pill={
+                          showing
+                            ? { label: 'ON AIR', tone: 'air' }
+                            : atCursor
+                              ? { label: r.follow ? 'NEXT' : 'ARMED', tone: 'armed' }
+                              : undefined
+                        }
+                        onClick={() => r.jumpItem(it.id)}
+                      />
+                    )
+                  })}
+                </div>
+              ))}
+
+              {r.strangerLabels.length ? (
+                <p className="show-console__diverged" role="status">
+                  On air from outside this rundown: {r.strangerLabels.join(', ')}.
+                </p>
+              ) : null}
+            </PanelBody>
+          </section>
+        </Panel>
+
+        <div className="console__center show-console__center">
+          <div className="show-console__well">
+            <ProgramWell node={node} outputId={outputId} layers={r.layers} />
+          </div>
+          <LayerStrip
+            layers={r.layers}
+            nodeId={node.node_id}
+            outputId={outputId}
+            reachable={node.reachable}
+            onProblem={r.setProblem}
+          />
+          {cursorPlaylist && cursorPlaylist.items.length > 1 ? (
+            <div className="show-console__grid-wrap">
+              {r.sections.length > 1 ? (
+                <div className="show-console__sections" role="group" aria-label="Sections">
+                  {r.sections.map((sec) => (
+                    <SectionCard
+                      key={sec.name}
+                      label={sec.name}
+                      state={r.at?.section === sec.name ? 'HERE' : 'JUMP'}
+                      active={r.at?.section === sec.name}
+                      disabled={!node.reachable}
+                      onClick={() => void r.jumpSection(sec)}
+                    />
+                  ))}
+                </div>
+              ) : null}
+              <div className="show-console__grid">
+                {cursorPlaylist.items.map((it, n) => {
+                  const cursorIdx = cursorPlaylist.items.findIndex((x) => x.id === r.cursor?.item)
+                  const state = r.onAir.has(it.id)
+                    ? 'air'
+                    : r.cursor?.item === it.id
+                      ? 'armed'
+                      : cursorIdx >= 0 && n < cursorIdx
+                        ? 'past'
+                        : 'upcoming'
+                  return (
+                    <SlideTile
+                      key={it.id}
+                      num={String(n + 1).padStart(2, '0')}
+                      line1={it.label}
+                      line2={it.section ?? undefined}
+                      state={state}
+                      pill={
+                        state === 'air'
+                          ? { label: 'ON AIR', tone: 'air' }
+                          : state === 'armed'
+                            ? { label: r.follow ? 'NEXT' : 'ARMED', tone: 'armed' }
+                            : undefined
+                      }
+                      disabled={!node.reachable}
+                      onClick={() => r.jumpItem(it.id)}
+                    />
+                  )
+                })}
+              </div>
+            </div>
+          ) : null}
+        </div>
+
+        <Panel width="var(--pm-inspector-width)" label="Armed">
+          <PanelHeader
+            title="Armed"
+            icon={<Target size={16} aria-hidden color="var(--pm-state-armed)" />}
+            trailing={
+              r.busy ? (
+                <StatusPill tone="staged" variant="subtle" size={10}>WAITING</StatusPill>
+              ) : armed ? (
+                <StatusPill tone="armed" variant="subtle" size={10}>READY</StatusPill>
+              ) : undefined
+            }
+          />
+          <PanelBody pad16>
+            {armed ? (
+              <ArmedDetail
+                item={armed}
+                reachable={node.reachable}
+                busy={r.busy}
+                problem={r.problem}
+                takeLabel={r.busy ? 'Taking…' : 'Take next'}
+                takeNote={
+                  r.follow
+                    ? 'Arrow keys take. [Space] takes and advances.'
+                    : 'Use Arrow Keys [↑/↓] to arm, [Space] to commit.'
+                }
+                onTake={() => void r.takeNext()}
+                onAlso={(req) => takeCue(req).catch((e) => r.setProblem(e instanceof ApiError ? e.message : String(e)))}
+                onTakeOut={(req) => takeCue(req).catch((e) => r.setProblem(e instanceof ApiError ? e.message : String(e)))}
+                nodeId={node.node_id}
+                outputId={outputId}
+              />
+            ) : (
+              <p className="show-console__dim">Nothing is armed. Click a row or use the arrows.</p>
+            )}
+            <TakeLog />
+          </PanelBody>
+        </Panel>
+      </div>
+    </div>
   )
 }
 
 // ---------------------------------------------------------------------------
+// The rack console: no rundown yet, so the rail lists the items themselves.
 
-function Rack({
-  nodeId,
-  nodeName,
+function RackConsole({
+  node,
   outputId,
   items,
-  reachable,
 }: {
-  nodeId: string
-  nodeName: string
+  node: NodeSummary
   outputId: string
   items: Item[]
-  reachable: boolean
 }) {
+  const layersSnap = useTopic<LayersSnapshot>(topics.outputLayers(outputId))
+  const [selected, setSelected] = useState<string | null>(null)
   const [busy, setBusy] = useState<string | null>(null)
   const [problem, setProblem] = useState<string | null>(null)
 
-  const fire = useCallback(
-    async (key: string, req: Parameters<typeof takeCue>[0]) => {
-      setBusy(key)
-      setProblem(null)
-      try {
-        await takeCue(req)
-      } catch (e) {
-        // The server's own sentence, verbatim. It already names the node and
-        // says what is still on air; rewriting it here would lose that.
-        setProblem(e instanceof ApiError ? e.message : String(e))
-      } finally {
-        setBusy(null)
-      }
-    },
-    [],
+  const armed = items.find((i) => i.id === selected) ?? items[0] ?? null
+  const onAir = new Set(
+    (layersSnap?.layers ?? []).map((l) => l.occupant?.item_id).filter(Boolean) as string[],
   )
 
+  const fire = useCallback(async (key: string, req: CueRequest) => {
+    setBusy(key)
+    setProblem(null)
+    try {
+      await takeCue(req)
+    } catch (e) {
+      // The server's own sentence, verbatim. It already names the node and
+      // says what is still on air; rewriting it here would lose that.
+      setProblem(e instanceof ApiError ? e.message : String(e))
+    } finally {
+      setBusy(null)
+    }
+  }, [])
+
+  const layers = [...new Set(items.map((it) => it.destination?.layer ?? 'Lower Third'))]
+
   return (
-    <section className="show__rack" aria-label="Items">
-      {problem ? (
-        <p className="show__problem" role="alert">
-          <AlertTriangle size={15} aria-hidden /> {problem}
-        </p>
-      ) : null}
+    <div className="show-console">
+      <div className="console__toolbar">
+        <div className="console__toolbar-group">
+          <Tag pill tone="raised">Items</Tag>
+          <span className="console__toolbar-note">
+            No rundown yet. Build playlists and a rundown in Edit; until then every item is one
+            take away.
+          </span>
+        </div>
+        <ClearAll nodeId={node.node_id} outputId={outputId} disabled={!node.reachable} onProblem={setProblem} />
+      </div>
 
-      {!reachable ? (
-        <p className="show__problem" role="status">
-          {nodeName} is offline. Anything already on air is still on air.
-        </p>
-      ) : null}
+      <div className="show-console__panels">
+        <Panel width="var(--pm-rail-width)" label="Items">
+          <PanelHeader
+            title="Items"
+            icon={<ListVideo size={16} aria-hidden color="var(--pm-white)" />}
+            trailing={<Tag size={10}>{`${items.length} items`}</Tag>}
+          />
+          <PanelBody>
+            {!node.reachable ? (
+              <p className="show-console__problem" role="status">
+                {node.name} is offline. Anything already on air is still on air.
+              </p>
+            ) : null}
+            {items.length === 0 ? (
+              <p className="show-console__dim">No items yet. Build one in Edit.</p>
+            ) : (
+              layers.map((layer) => (
+                <div key={layer} className="show-console__group">
+                  <GroupHeader label={layer} />
+                  {items
+                    .filter((it) => (it.destination?.layer ?? 'Lower Third') === layer)
+                    .map((it) => (
+                      <RackRow
+                        key={it.id}
+                        item={it}
+                        armed={armed?.id === it.id}
+                        showing={onAir.has(it.id)}
+                        onClick={() => setSelected(it.id)}
+                      />
+                    ))}
+                </div>
+              ))
+            )}
+          </PanelBody>
+        </Panel>
 
-      {items.length === 0 ? (
-        <p className="show__dim show__pad">No items yet. Build one in Edit.</p>
-      ) : (
-        // Grouped by destination, so the rack reads the same way the stack
-        // does: everything that can go on a layer, under that layer's name.
-        [...new Set(items.map((it) => it.destination?.layer ?? 'Lower Third'))].map((layer) => (
-          <div key={layer} className="show__group">
-            <div className="show__group-head">
-              <h3>{layer}</h3>
-              <button
-                type="button"
-                className="btn btn--ghost btn--small"
-                disabled={!reachable || busy !== null}
-                onClick={() =>
-                  fire(`clear:${layer}`, {
+        <div className="console__center show-console__center">
+          <div className="show-console__well">
+            <ProgramWell node={node} outputId={outputId} layers={layersSnap} />
+          </div>
+          <LayerStrip
+            layers={layersSnap}
+            nodeId={node.node_id}
+            outputId={outputId}
+            reachable={node.reachable}
+            onProblem={setProblem}
+          />
+        </div>
+
+        <Panel width="var(--pm-inspector-width)" label="Armed">
+          <PanelHeader
+            title="Armed"
+            icon={<Target size={16} aria-hidden color="var(--pm-state-armed)" />}
+            trailing={
+              armed ? (
+                <StatusPill tone="armed" variant="subtle" size={10}>READY</StatusPill>
+              ) : undefined
+            }
+          />
+          <PanelBody pad16>
+            {armed ? (
+              <ArmedDetail
+                item={armed}
+                reachable={node.reachable}
+                busy={busy !== null}
+                problem={problem}
+                takeLabel={busy === `take:${armed.id}` ? 'Taking…' : 'Take'}
+                takeNote="Selecting an item arms it. Nothing appears until you take."
+                onTake={() =>
+                  // Minted HERE, at the press, and not regenerated on retry —
+                  // that is what makes a double-click one take rather than two.
+                  void fire(`take:${armed.id}`, {
                     cue_id: newCueId(),
-                    node: nodeId,
+                    node: node.node_id,
                     output: outputId,
-                    layer,
-                    op: 'clear_layer',
+                    layer: armed.destination?.layer ?? 'Lower Third',
+                    op: 'take',
+                    item: armed.id,
                     show: SHOW,
                   })
                 }
-              >
-                Clear
-              </button>
-            </div>
-            <ul className="show__items">
-              {items
-                .filter((it) => (it.destination?.layer ?? 'Lower Third') === layer)
-                .map((it) => (
-                  <ItemRow
-                    key={it.id}
-                    item={it}
-                    nodeId={nodeId}
-                    outputId={outputId}
-                    busy={busy}
-                    onFire={fire}
-                    disabled={!reachable}
-                  />
-                ))}
-            </ul>
-          </div>
-        ))
-      )}
-
-      <div className="show__clear">
-        <button
-          type="button"
-          className="btn btn--ghost"
-          disabled={!reachable || busy !== null}
-          onClick={() =>
-            fire('clear-all', {
-              cue_id: newCueId(),
-              node: nodeId,
-              output: outputId,
-              op: 'clear_all',
-              show: SHOW,
-            })
-          }
-        >
-          <X size={15} aria-hidden /> Clear everything
-        </button>
+                onAlso={(req) => void fire(`also:${armed.id}`, req)}
+                onTakeOut={(req) => void fire(`out:${armed.id}`, req)}
+                nodeId={node.node_id}
+                outputId={outputId}
+              />
+            ) : (
+              <p className="show-console__dim">Nothing yet. Build an item in Edit.</p>
+            )}
+            <TakeLog />
+          </PanelBody>
+        </Panel>
       </div>
-    </section>
+    </div>
   )
 }
 
-function ItemRow({
+/** A rack row with its own readiness ear, so staging shows where the eye is. */
+function RackRow({
   item,
-  nodeId,
-  outputId,
-  busy,
-  onFire,
-  disabled,
+  armed,
+  showing,
+  onClick,
 }: {
   item: Item
+  armed: boolean
+  showing: boolean
+  onClick: () => void
+}) {
+  const readiness = useTopic<Readiness>(topics.itemReadiness(item.id))
+  const staging = readiness ? !readiness.ready : false
+  return (
+    <RundownItem
+      title={item.label}
+      subtitle={item.destination?.layer ?? 'Lower Third'}
+      state={showing ? 'air' : armed ? 'armed' : 'idle'}
+      pill={
+        showing
+          ? { label: 'ON AIR', tone: 'air' }
+          : armed
+            ? { label: 'ARMED', tone: 'armed' }
+            : undefined
+      }
+      dot={!showing && !armed ? (staging ? 'staged' : 'ready') : undefined}
+      onClick={onClick}
+    />
+  )
+}
+
+// ---------------------------------------------------------------------------
+// The armed inspector: the values about to be sent, next to what sends them.
+
+function ArmedDetail({
+  item,
+  reachable,
+  busy,
+  problem,
+  takeLabel,
+  takeNote,
+  onTake,
+  onAlso,
+  onTakeOut,
+  nodeId,
+  outputId,
+}: {
+  item: Item
+  reachable: boolean
+  busy: boolean
+  problem: string | null
+  takeLabel: string
+  takeNote: string
+  onTake: () => void
+  onAlso: (req: CueRequest) => void
+  onTakeOut: (req: CueRequest) => void
   nodeId: string
   outputId: string
-  busy: string | null
-  onFire: (key: string, req: Parameters<typeof takeCue>[0]) => void
-  disabled: boolean
 }) {
   const readiness = useTopic<Readiness>(topics.itemReadiness(item.id))
   const layer = item.destination?.layer ?? 'Lower Third'
@@ -283,73 +539,99 @@ function ItemRow({
   // assets cannot be taken, and the button says why rather than failing later
   // (ADR 0006).
   //
-  // `ready` now means at least ONE destination is ready (ADR 0018). The take
+  // `ready` means at least ONE destination is ready (ADR 0018). The take
   // works and does less than it looks like it will, so `partial` gets its own
   // line naming the destinations that will not fire. Said BEFORE the press:
   // afterwards it is just the ack reporting something that was knowable.
   const staging = readiness ? !readiness.ready : false
-  const blocked = disabled || staging
+  const blocked = !reachable || staging
   const notFiring = (readiness?.destinations ?? []).filter((d) => !d.ready)
   // Destinations that wait to be asked for. Read from the Item rather than
   // from readiness, because whether one EXISTS is a property of the content
   // and whether it is ready is a property of the node.
   const onRequest = (item.destinations ?? []).filter((d) => d.mode === 'on_request')
 
+  const fields = Object.entries(item.data ?? {}).slice(0, 6)
+
   return (
-    <li className="show__item">
-      <div className="show__item-id">
-        <span className="show__item-label">{item.label}</span>
-        <span className="show__dim">{layer}</span>
-        {staging ? (
-          // Two different sentences, because they are two different futures.
-          // "Still copying" resolves itself by waiting; a template this node is
-          // too old to read never will, and saying "still copying" about it
-          // sends an operator to wait through something already decided.
-          <span className="show__staging">
-            {readiness?.unreadable
-              ? `cannot be played here — ${readiness.unreadable}`
-              : `still copying${readiness?.missing?.length ? ` · ${readiness.missing.length} file(s)` : ''}`}
-          </span>
-        ) : null}
-        {readiness?.partial ? (
-          <span className="show__partial">
-            will not reach {notFiring.map((d) => `${d.node} ${d.output}/${d.layer}`).join(', ')}
-          </span>
-        ) : null}
+    <>
+      <div className="show-console__armed-head">
+        <GroupHeader label="Armed item" />
+        <span className="show-console__armed-title">{item.label}</span>
       </div>
-      <div className="show__item-actions">
-        <button
-          type="button"
-          className="btn btn--take"
-          disabled={blocked || busy !== null}
-          onClick={() =>
-            // Minted HERE, at the press, and not regenerated on retry — that is
-            // what makes a double-click one take rather than two.
-            onFire(`take:${item.id}`, {
-              cue_id: newCueId(),
-              node: nodeId,
-              output: outputId,
-              layer,
-              op: 'take',
-              item: item.id,
-              show: SHOW,
-            })
-          }
-        >
-          {busy === `take:${item.id}` ? 'Taking…' : 'Take'}
-        </button>
+
+      {problem ? (
+        <p className="show-console__problem" role="alert">
+          <AlertTriangle size={15} aria-hidden /> {problem}
+        </p>
+      ) : null}
+
+      {staging ? (
+        // Two different sentences, because they are two different futures.
+        // "Still copying" resolves itself by waiting; a template this node is
+        // too old to read never will, and saying "still copying" about it
+        // sends an operator to wait through something already decided.
+        <p className="show-console__staging">
+          {readiness?.unreadable
+            ? `cannot be played here — ${readiness.unreadable}`
+            : `still copying${readiness?.missing?.length ? ` · ${readiness.missing.length} file(s)` : ''}`}
+        </p>
+      ) : null}
+      {readiness?.partial ? (
+        <p className="show-console__partial">
+          will not reach {notFiring.map((d) => `${d.node} ${d.output}/${d.layer}`).join(', ')}
+        </p>
+      ) : null}
+
+      {fields.map(([k, v]) => (
+        <FormGroup key={k} label={k} value={String(v)} />
+      ))}
+
+      {(item.destinations ?? []).length ? (
+        <div className="show-console__dests">
+          <GroupHeader label="Destinations" />
+          {(item.destinations ?? []).map((d, n) => {
+            const dr = readiness?.destinations?.find(
+              (x) => x.output === d.output && x.layer === d.layer,
+            )
+            return (
+              <div key={n} className="show-console__dest">
+                <StatusDot tone={d.blank ? 'muted' : dr && !dr.ready ? 'staged' : 'ready'} />
+                <span className="show-console__dest-route">
+                  {d.output}  ·  {d.layer}
+                </span>
+                <span className="show-console__dest-note">
+                  {d.blank
+                    ? 'clears this feed'
+                    : d.mode === 'on_request'
+                      ? 'only when asked for'
+                      : 'fires with the take'}
+                </span>
+              </div>
+            )
+          })}
+        </div>
+      ) : null}
+
+      <div className="show-console__commit">
+        <Button take disabled={blocked || busy} onClick={onTake}>
+          {takeLabel}
+        </Button>
+        <span className="show-console__commit-note">{takeNote}</span>
+      </div>
+
+      <div className="show-console__secondary">
         {onRequest.length ? (
           // The second of the rundown's two actions: *"lower thirds always
           // have a full screen version we can take if we need to"*. Shown only
-          // when this Item actually has one, so the rack does not grow a dead
-          // button on every row.
-          <button
-            type="button"
-            className="btn btn--ghost"
+          // when this Item actually has one, so the panel does not grow a dead
+          // button on every graphic.
+          <Button
+            variant="secondary"
+            disabled={blocked || busy}
             title={`Also take to ${onRequest.map((d) => `${d.output}/${d.layer}`).join(', ')}`}
-            disabled={blocked || busy !== null}
             onClick={() =>
-              onFire(`also:${item.id}`, {
+              onAlso({
                 cue_id: newCueId(),
                 node: nodeId,
                 output: outputId,
@@ -360,15 +642,14 @@ function ItemRow({
               })
             }
           >
-            {busy === `also:${item.id}` ? 'Taking…' : 'Also full screen'}
-          </button>
+            {busy ? 'Taking…' : 'Also full screen'}
+          </Button>
         ) : null}
-        <button
-          type="button"
-          className="btn btn--ghost"
-          disabled={disabled || busy !== null}
+        <Button
+          variant="secondary"
+          disabled={!reachable || busy}
           onClick={() =>
-            onFire(`out:${item.id}`, {
+            onTakeOut({
               cue_id: newCueId(),
               node: nodeId,
               output: outputId,
@@ -378,10 +659,146 @@ function ItemRow({
             })
           }
         >
-          <Square size={13} aria-hidden /> Take out
-        </button>
+          Take out
+        </Button>
       </div>
-    </li>
+    </>
+  )
+}
+
+// ---------------------------------------------------------------------------
+// Clear all, guarded. One press arms it, the second fires it — a mis-tap must
+// not empty every layer, and a confirm dialog would be an overlay this
+// console does not have. The guard disarms itself.
+
+function ClearAll({
+  nodeId,
+  outputId,
+  disabled,
+  onProblem,
+}: {
+  nodeId: string
+  outputId: string
+  disabled: boolean
+  onProblem: (p: string | null) => void
+}) {
+  const [primed, setPrimed] = useState(false)
+  useEffect(() => {
+    if (!primed) return
+    const t = setTimeout(() => setPrimed(false), 3000)
+    return () => clearTimeout(t)
+  }, [primed])
+
+  return (
+    <Button
+      variant={primed ? 'primary' : 'secondary'}
+      disabled={disabled}
+      onClick={() => {
+        if (!primed) {
+          setPrimed(true)
+          return
+        }
+        setPrimed(false)
+        takeCue({
+          cue_id: newCueId(),
+          node: nodeId,
+          output: outputId,
+          op: 'clear_all',
+          show: SHOW,
+        }).catch((e) => onProblem(e instanceof ApiError ? e.message : String(e)))
+      }}
+    >
+      {primed ? 'Press again to clear' : 'Clear all'}
+    </Button>
+  )
+}
+
+// ---------------------------------------------------------------------------
+// The program well and the layer strip.
+
+function ProgramWell({
+  node,
+  outputId,
+  layers,
+}: {
+  node: NodeSummary
+  outputId: string
+  layers: LayersSnapshot | undefined
+}) {
+  const anyOnAir = (layers?.layers ?? []).some((l) => l.occupant)
+  const caption = `${outputId}${layers?.fps ? `  ·  ${layers.fps.toFixed(2)} fps` : ''}`
+
+  return (
+    <ProgramCanvas label="Program output" onAir={anyOnAir} output={caption}>
+      {node.preview_url ? (
+        <Preview url={node.preview_url} name={node.name} outputId={outputId} anyOnAir={anyOnAir} />
+      ) : (
+        <div className="c-program__empty">
+          {anyOnAir
+            ? `${node.name} publishes no preview. What is on air is listed below.`
+            : 'Nothing on air, and no preview from this node.'}
+        </div>
+      )}
+    </ProgramCanvas>
+  )
+}
+
+/**
+ * The layer strip: what the NODE says each layer holds, one card per layer.
+ * Top of the stack first — the wire order is compositing order, bottom-first,
+ * but an operator reads a stack the way they see it.
+ */
+function LayerStrip({
+  layers,
+  nodeId,
+  outputId,
+  reachable,
+  onProblem,
+}: {
+  layers: LayersSnapshot | undefined
+  nodeId: string
+  outputId: string
+  reachable: boolean
+  onProblem: (p: string | null) => void
+}) {
+  if (!layers?.layers?.length) {
+    return (
+      <section className="show-console__layers" aria-label="On air">
+        <p className="show-console__dim">Nothing on air.</p>
+      </section>
+    )
+  }
+  return (
+    <section className="show-console__layers" aria-label="On air">
+      {layers.layers.toReversed().map((l) => (
+        <LayerCard
+          key={l.name}
+          layer={l.name}
+          state={l.occupant ? 'ON AIR' : 'CLEAR'}
+          tone={l.occupant ? 'air' : 'muted'}
+          content={
+            l.occupant
+              ? // Present tense, and the graphic's own words — not an id. A
+                // graphic that could not be drawn as authored says so: it is on
+                // air AND it is wrong, and saying nothing would be the failure.
+                `${l.occupant.item_label ?? l.occupant.item_id} · ${l.occupant.phase}${l.occupant.degraded ? ' · degraded' : ''}`
+              : 'Nothing on this layer'
+          }
+          action={l.occupant ? 'Take out' : undefined}
+          actionDisabled={!reachable}
+          onAction={() =>
+            takeCue({
+              cue_id: newCueId(),
+              node: nodeId,
+              output: outputId,
+              layer: l.name,
+              op: 'take_out',
+              show: SHOW,
+            }).catch((e) => onProblem(e instanceof ApiError ? e.message : String(e)))
+          }
+        />
+      ))}
+    </section>
   )
 }
 
@@ -421,25 +838,35 @@ function TakeLog() {
     .slice(0, 40)
 
   return (
-    <section className="show__log" aria-label="Take log">
-      <h2 className="show__log-head">Take log</h2>
+    <section className="show-console__log" aria-label="Take log">
+      <GroupHeader label="Take log" />
       {entries.length === 0 ? (
-        <p className="show__dim show__pad">Nothing has been taken yet.</p>
+        <p className="show-console__dim">Nothing has been taken yet.</p>
       ) : (
-        <ol className="show__log-list">
+        <div className="show-console__log-list">
           {entries.map((e) => (
-            <li key={e.seq} className={e.result === 'applied' ? undefined : 'show__log-bad'}>
-              <span className="show__log-time">
-                {new Date(e.at_utc).toLocaleTimeString(undefined, { hour12: false })}
-              </span>
-              <span className="show__log-op">{e.op.replace('_', ' ')}</span>
-              <span className="show__log-item">{e.item_label ?? e.layer ?? ''}</span>
-              {/* Which surface fired it. Without this the log is baffling the
-                  first time someone uses a GPI or Companion (ADR 0014). */}
-              <span className="show__dim">{e.surface.replace('_', ' ')}</span>
-            </li>
+            <LogRow
+              key={e.seq}
+              entry={[
+                new Date(e.at_utc).toLocaleTimeString(undefined, { hour12: false }),
+                e.op.replace('_', ' '),
+                e.item_label ?? e.layer ?? '',
+                // Which surface fired it. Without this the log is baffling the
+                // first time someone uses a GPI or Companion (ADR 0014).
+                e.surface.replace('_', ' '),
+              ]
+                .filter(Boolean)
+                .join('  ·  ')}
+              result={
+                e.result === 'applied'
+                  ? e.op === 'take' || e.op === 'take_also'
+                    ? 'LIVE'
+                    : 'CLEAR'
+                  : e.result.toUpperCase()
+              }
+            />
           ))}
-        </ol>
+        </div>
       )}
     </section>
   )
@@ -454,7 +881,17 @@ function TakeLog() {
  * Every failure says which one it is. "No preview" and "no graphic" need
  * completely different responses from an operator, and a blank box says both.
  */
-function Preview({ url, name, outputId }: { url: string; name: string; outputId: string }) {
+function Preview({
+  url,
+  name,
+  outputId,
+  anyOnAir,
+}: {
+  url: string
+  name: string
+  outputId: string
+  anyOnAir: boolean
+}) {
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const [status, setStatus] = useState<PreviewStatus>({ state: 'connecting' })
 
@@ -469,16 +906,16 @@ function Preview({ url, name, outputId }: { url: string; name: string; outputId:
     <>
       <canvas
         ref={canvasRef}
-        className="show__preview"
+        className="c-program__frame"
         aria-label={`Preview of ${outputId}`}
         hidden={status.state !== 'live'}
       />
       {status.state !== 'live' ? (
-        <p className="show__dim show__pad">
+        <div className="c-program__empty">
           {status.state === 'connecting' || status.state === 'waiting-for-key'
-            ? `Connecting to ${name}\u2019s preview\u2026`
-            : `No preview from ${name}. ${status.detail} What\u2019s on air is unaffected.`}
-        </p>
+            ? `Connecting to ${name}’s preview…`
+            : `No preview from ${name}. ${status.detail} What’s on air is unaffected${anyOnAir ? ' — see the layers below' : ''}.`}
+        </div>
       ) : null}
     </>
   )

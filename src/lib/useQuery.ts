@@ -32,7 +32,14 @@ function notify(key: string) {
 }
 
 function start<T>(key: string): Entry<T> {
-  const next: Entry<T> = { at: Date.now() }
+  // Carry the last-known data forward while the refetch is in flight. A
+  // refetch is not an unknown: blanking subscribers between the write and the
+  // response made every consumer that renders nothing without data — the
+  // whole Show console among them — unmount for a frame on every take, which
+  // tore down the preview socket. Same principle as the wall display: show
+  // the last known good state, never a loading hole.
+  const prev = cache.get(key) as Entry<T> | undefined
+  const next: Entry<T> = { at: Date.now(), data: prev?.data }
   next.promise = fetch(key)
     .then(async (r) => {
       if (!r.ok) throw new Error(`${r.status} ${r.statusText}`)
@@ -83,16 +90,24 @@ export function useQuery<T>(key: string | null): { data?: T; error?: Error; load
 }
 
 /**
- * Drop a cache entry and refetch it for anyone watching.
+ * Refetch a key for anyone watching; forget it if nobody is.
  *
  * Deleting alone is not enough: a mounted component's effect depends on the
  * key, which has not changed, so it would never look again. Callers use this
  * after a write, and they are entitled to expect the screen to catch up.
+ *
+ * For a watched key this does NOT pass through an empty state — the stale
+ * value stays on screen until the fresh one lands (see start()). Between a
+ * write and its refetch the old value is the last known good state, and a
+ * subscriber seeing `undefined` there treated it as "gone" rather than
+ * "changing" — unmounting, in Show's case, the preview socket under the
+ * operator on every take.
  */
 export function invalidate(key: string) {
-  cache.delete(key)
   if (subscribers.has(key)) {
     start(key)
+  } else {
+    cache.delete(key)
   }
   notify(key)
 }
