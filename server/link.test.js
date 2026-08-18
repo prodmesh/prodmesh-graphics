@@ -659,3 +659,40 @@ test('a configured layer stack is not overwritten when the node reconnects', asy
   assert.deepEqual(JSON.parse(row.layers), ['Bug', 'Lower Third'])
   await n.close()
 })
+
+test('take_also fires the destinations a take deliberately skipped', async () => {
+  // The rundown's *"lower thirds always have a full screen version we can take
+  // if we need to"*. Before this op existed, on_request was modelled end to
+  // end and there was no way to invoke it.
+  seedDestinations('also-1')
+  const d = db.handle()
+  const rev = `blake3:${'0'.repeat(64)}`
+  d.prepare(
+    `INSERT INTO item_destinations (item_id, ordinal, node_id, output, layer, template_rev, mode, blank)
+     VALUES ('item-1', 1, 'also-1', 'out-0', 'Fullscreen', ?, 'on_request', 0)`,
+  ).run(rev)
+
+  const seen = []
+  const n = await fakeNode({ nodeId: 'also-1', answer: (c) => { seen.push(wire.tagOf(c.op)); return { result: 'Applied' } } })
+  const r = await post('/api/cue', { cue_id: 'also-1a', op: 'take_also', item: 'item-1', surface: 'show_view' })
+
+  assert.equal(r.status, 200)
+  assert.equal(seen.at(-1)[0], 'TakeAlso')
+  // The SAME destination list goes down; the node picks the on_request ones.
+  // Sending only the wanted subset would let the two ops disagree about what
+  // an Item's destinations are.
+  assert.equal(seen.at(-1)[1].destinations.length, 2)
+  await n.close()
+})
+
+test('take_also on an item with nothing on request says so', async () => {
+  seedDestinations('also-2')
+  const n = await fakeNode({ nodeId: 'also-2' })
+  const r = await post('/api/cue', { cue_id: 'also-2a', op: 'take_also', item: 'item-1', surface: 'show_view' })
+  // Refused at the server, before a cue goes anywhere: it already knows the
+  // Item's destinations, and a round trip to be told nothing happened is worse
+  // than a sentence.
+  assert.equal(r.status, 422)
+  assert.match(r.json.label, /waits to be asked for/)
+  await n.close()
+})

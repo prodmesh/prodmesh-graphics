@@ -10,8 +10,22 @@ export type Item = {
   template_id: string
   template_rev: string
   data: Record<string, string | number | boolean>
+  /** The one-destination answer, kept for Items that predate ADR 0018. */
   destination: { node?: string; output?: string; layer?: string }
+  /** Every place this Item goes, and how each one behaves (ADR 0018). */
+  destinations?: ItemDestination[]
   updated_at: number
+}
+
+export type ItemDestination = {
+  node_id: string | null
+  output: string
+  layer: string
+  template_rev: string
+  /** `auto` fires with the take; `on_request` waits to be asked for. */
+  mode: string
+  /** Render nothing here, deliberately — an instruction, not an absence. */
+  blank: boolean
 }
 
 export type Occupant = {

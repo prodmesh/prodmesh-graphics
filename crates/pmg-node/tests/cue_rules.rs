@@ -553,3 +553,72 @@ fn a_replay_of_a_cue_that_already_fired_is_deduped_not_superseded() {
     assert_eq!(e.apply(&c, &Empty, 0, false).result, CueResult::Applied);
     assert_eq!(e.supersede(&c, 0).result, CueResult::Deduped);
 }
+
+// ---------------------------------------------------------------------------
+// TakeAlso — the destinations a take deliberately skips (ADR 0018).
+//
+// "Lower thirds always have a full screen version we can take if we need to."
+// The full-screen destination is on_request, a take leaves it alone, and this
+// is the action that fires it. Before this existed the mode was modelled end
+// to end, correctly excluded from the fan-out, and impossible to invoke.
+// ---------------------------------------------------------------------------
+
+fn dst(layer: &str, mode: &str) -> Destination {
+    Destination {
+        output: "out-0".into(),
+        layer: layer.into(),
+        template_rev: "r".into(),
+        mode: mode.into(),
+        blank: false,
+    }
+}
+
+#[test]
+fn take_and_take_also_claim_the_same_layers_so_a_repeat_supersedes() {
+    // Both fan over one Item's destinations, so an operator pressing either
+    // twice while the node is busy means the later press.
+    let both = vec![dst("Lower Third", "auto"), dst("Fullscreen", "on_request")];
+    let take = CueOp::Take {
+        item: "i".into(), output: "out-0".into(), layer: "L".into(),
+        destinations: both.clone(),
+    };
+    let also = CueOp::TakeAlso {
+        item: "i".into(), output: "out-0".into(), layer: "L".into(),
+        destinations: both,
+    };
+    assert_eq!(take.take_layers(), also.take_layers());
+    assert!(also.is_deadline_bearing(), "it puts something on air");
+    assert_eq!(also.output(), Some("out-0"));
+}
+
+#[test]
+fn take_also_on_an_item_with_nothing_on_request_is_refused() {
+    // Refused rather than quietly doing nothing, and refused rather than
+    // re-firing the auto destinations — an operator pressing "also full
+    // screen" on a graphic that has no full-screen version should be told.
+    let mut e = engine();
+    let ack = e.apply(
+        &cue(1, "a", CueOp::TakeAlso {
+            item: "i".into(), output: "out-0".into(), layer: "Lower Third".into(),
+            destinations: vec![dst("Lower Third", "auto")],
+        }),
+        &Empty, 0, false,
+    );
+    assert_eq!(ack.result, CueResult::Rejected);
+    assert_eq!(ack.reason, Some(RejectReason::NotReady));
+}
+
+#[test]
+fn an_item_predating_destinations_has_nothing_to_also_take() {
+    // Empty list means the Item was made before ADR 0018. Falling through to
+    // the plain Take path would fire its single destination a second time.
+    let mut e = engine();
+    let ack = e.apply(
+        &cue(1, "a", CueOp::TakeAlso {
+            item: "i".into(), output: "out-0".into(), layer: "Lower Third".into(),
+            destinations: Vec::new(),
+        }),
+        &Empty, 0, false,
+    );
+    assert_eq!(ack.reason, Some(RejectReason::NotReady));
+}

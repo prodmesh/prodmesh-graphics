@@ -419,11 +419,19 @@ impl LayerEngine {
             // Applied as a unit: every destination is ARMED before any is put
             // on air, so a template that will not build cannot leave the key
             // feed live and the full-screen feed empty.
+            // A take fires the AUTO destinations; TakeAlso fires the ones it
+            // deliberately skipped (ADR 0018). Identical otherwise, so the two
+            // share this arm and differ by one predicate — the alternative was
+            // a second copy of the fan-out, which is where the two would drift.
             CueOp::Take {
                 item, destinations, ..
+            }
+            | CueOp::TakeAlso {
+                item, destinations, ..
             } if !destinations.is_empty() => {
+                let wanted = matches!(op, CueOp::Take { .. });
                 let mut prepared = Vec::new();
-                for d in destinations.iter().filter(|d| d.is_auto()) {
+                for d in destinations.iter().filter(|d| d.is_auto() == wanted) {
                     let fps = self
                         .outputs
                         .iter()
@@ -441,8 +449,10 @@ impl LayerEngine {
                     prepared.push((d.output.clone(), d.layer.clone(), armed));
                 }
                 if prepared.is_empty() {
-                    // Every destination was on_request. Nothing to fire, and
-                    // saying so beats reporting a take that put nothing on air.
+                    // Nothing this op was asked to fire. For a take that means
+                    // every destination is on_request; for a TakeAlso it means
+                    // the Item has none. Either way, saying so beats reporting
+                    // an action that put nothing on air.
                     return Err(RejectReason::NotReady);
                 }
 
@@ -514,6 +524,12 @@ impl LayerEngine {
                     Ok(None)
                 }
             }
+
+            // An Item with no destination list at all predates ADR 0018 and
+            // therefore has nothing marked on_request. Refusing beats firing
+            // its single destination a second time, which is what falling
+            // through to Take would do.
+            CueOp::TakeAlso { .. } => Err(RejectReason::NotReady),
 
             CueOp::TakeOut { output, layer } => {
                 let out = self.output_mut(output).ok_or(RejectReason::NoSuchLayer)?;

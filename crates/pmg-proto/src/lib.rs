@@ -506,6 +506,29 @@ pub enum CueOp {
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         destinations: Vec<Destination>,
     },
+    /// Fire the destinations a take deliberately leaves alone (ADR 0018).
+    ///
+    /// *"Lower thirds always have a full screen version we can take if we
+    /// need to"* — so the full-screen destination is `on_request`, a take
+    /// skips it, and this is how it goes on. Two operator actions, "take it"
+    /// and "also put it full screen", because that is how the rundown
+    /// describes them.
+    ///
+    /// A separate op rather than a flag on `Take` so the cue log and a control
+    /// surface can tell the two apart: on a panel they are different buttons,
+    /// and in the log afterwards "the full screen went up" is a different
+    /// sentence from "the graphic went up".
+    ///
+    /// Deliberately independent of what is already on air. An operator may want
+    /// the full-screen version alone, and requiring the lower third first would
+    /// be a rule with nothing behind it.
+    TakeAlso {
+        item: String,
+        output: String,
+        layer: String,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        destinations: Vec<Destination>,
+    },
     TakeOut {
         output: String,
         layer: String,
@@ -562,6 +585,7 @@ impl CueOp {
         match self {
             CueOp::Arm { output, .. }
             | CueOp::Take { output, .. }
+            | CueOp::TakeAlso { output, .. }
             | CueOp::TakeOut { output, .. }
             | CueOp::Update { output, .. }
             | CueOp::ClearLayer { output, .. }
@@ -583,14 +607,20 @@ impl CueOp {
     /// Sorted so two takes that fan to the same destinations in a different
     /// order still compare equal (ADR 0018).
     pub fn take_layers(&self) -> Option<Vec<(String, String)>> {
-        let CueOp::Take {
-            output,
-            layer,
-            destinations,
-            ..
-        } = self
-        else {
-            return None;
+        let (output, layer, destinations) = match self {
+            CueOp::Take {
+                output,
+                layer,
+                destinations,
+                ..
+            }
+            | CueOp::TakeAlso {
+                output,
+                layer,
+                destinations,
+                ..
+            } => (output, layer, destinations),
+            _ => return None,
         };
         let mut keys: Vec<(String, String)> = if destinations.is_empty() {
             vec![(output.clone(), layer.clone())]

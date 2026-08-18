@@ -149,15 +149,27 @@ they cannot.
 
 ---
 
-## Confirmed gap: `on_request` has no action
+## Confirmed gap: `on_request` had no action — FIXED
 
-Modelled end to end — stored, assigned, and correctly excluded from the fan-out
+Was modelled end to end — stored, assigned, and correctly excluded from the fan-out
 at the node — and **there is no operator action that fires one**. The rundown's
 *"lower thirds always have a full screen version we can take if we need to"* is
 a destination that can only ever be skipped.
 
-Needs one cue op and one button. Small, well-defined, and it is the last piece
-of ADR 0018 that the model describes and the system cannot do.
+Now `CueOp::TakeAlso` plus an "Also full screen" button that appears only when
+an Item actually has such a destination.
+
+A separate op rather than a flag on `Take`, because on a control surface these
+are different buttons and in the log afterwards *"the full screen went up"* is
+a different sentence from *"the graphic went up"*. It shares the fan-out arm
+with `Take` and differs by one predicate — `d.is_auto() == wanted` — since two
+copies of the fan-out is where the two would drift.
+
+Deliberately independent of what is already on air: an operator may want the
+full-screen version alone, and requiring the lower third first would be a rule
+with nothing behind it. An Item with nothing on request is refused **at the
+server**, which already holds the destinations, rather than after a round trip
+that reports nothing happened.
 
 ---
 

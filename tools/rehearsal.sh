@@ -18,6 +18,10 @@ ALL_NDI=0
 # Sub-device 1: the second BNC on the Quad 2, and the one already known to be
 # cabled to the converter.
 DECKLINK=1
+# The face the node renders with. Fonts travel as CAS assets in the real
+# system; this is the stand-in until they do, and it is worth overriding
+# because a look judged in the wrong typeface is not the look.
+FONT="${PMG_FONT:-/System/Library/Fonts/Helvetica.ttc}"
 while [ $# -gt 0 ]; do
   case "$1" in
     --all-ndi) ALL_NDI=1; shift ;;
@@ -45,10 +49,9 @@ say "2. the web app"
 npm run build 2>&1 | tail -3
 
 say "3. server"
-NODE_ENV=production PMG_DB="$RUN/var/pmg.db" PMG_CAS="$RUN/var/cas" \
+NODE_ENV=production nohup env PMG_DB="$RUN/var/pmg.db" PMG_CAS="$RUN/var/cas" \
   node server/index.js > "$RUN/server.log" 2>&1 &
 SERVER_PID=$!
-trap 'kill $SERVER_PID 2>/dev/null || true; kill ${NODE_PID:-0} 2>/dev/null || true' EXIT
 for _ in $(seq 1 40); do curl -sf "$API/api/health" >/dev/null 2>&1 && break; sleep 0.5; done
 
 say "4. the service"
@@ -70,9 +73,9 @@ else
 fi
 
 rm -rf "$RUN/node"
-"$REPO/target/release/pmg-node" --state-dir "$RUN/node" --server ws://127.0.0.1:8519 \
+nohup "$REPO/target/release/pmg-node" --state-dir "$RUN/node" --server ws://127.0.0.1:8519 \
   --name booth-1 "${OUTPUTS[@]}" \
-  --font /System/Library/Fonts/Helvetica.ttc > "$RUN/node.log" 2>&1 &
+  --font "$FONT" > "$RUN/node.log" 2>&1 &
 NODE_PID=$!
 
 for _ in $(seq 1 60); do
@@ -115,6 +118,11 @@ for n,m,c in d['playlists']: print(f'    {n:20} {m:7} {c:3} items')
       graphic.
     · In Sermon, take "Verse — part 1", then take part 2 and part 3.
 
-  Ctrl-C here stops both.
+  Both run DETACHED — this script exits and leaves them up. Stop them with:
+
+    tools/rehearsal-stop.sh
+
+  There is deliberately no trap: an EXIT trap killed the server every time
+  this was run from anything that reaps its shell, and the symptom was a node
+  logging "link down — still playing" while the browser showed nothing.
 EOF
-wait $NODE_PID

@@ -290,6 +290,10 @@ function ItemRow({
   const staging = readiness ? !readiness.ready : false
   const blocked = disabled || staging
   const notFiring = (readiness?.destinations ?? []).filter((d) => !d.ready)
+  // Destinations that wait to be asked for. Read from the Item rather than
+  // from readiness, because whether one EXISTS is a property of the content
+  // and whether it is ready is a property of the node.
+  const onRequest = (item.destinations ?? []).filter((d) => d.mode === 'on_request')
 
   return (
     <li className="show__item">
@@ -334,6 +338,31 @@ function ItemRow({
         >
           {busy === `take:${item.id}` ? 'Taking…' : 'Take'}
         </button>
+        {onRequest.length ? (
+          // The second of the rundown's two actions: *"lower thirds always
+          // have a full screen version we can take if we need to"*. Shown only
+          // when this Item actually has one, so the rack does not grow a dead
+          // button on every row.
+          <button
+            type="button"
+            className="btn btn--ghost"
+            title={`Also take to ${onRequest.map((d) => `${d.output}/${d.layer}`).join(', ')}`}
+            disabled={blocked || busy !== null}
+            onClick={() =>
+              onFire(`also:${item.id}`, {
+                cue_id: newCueId(),
+                node: nodeId,
+                output: outputId,
+                layer,
+                op: 'take_also',
+                item: item.id,
+                show: SHOW,
+              })
+            }
+          >
+            {busy === `also:${item.id}` ? 'Taking…' : 'Also full screen'}
+          </button>
+        ) : null}
         <button
           type="button"
           className="btn btn--ghost"

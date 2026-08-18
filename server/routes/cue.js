@@ -176,6 +176,28 @@ function buildOp(body, item) {
         null,
       ]
     }
+    // "Also put it full screen" — fires the destinations a take skipped
+    // (ADR 0018). The server sends the SAME destination list; the node picks
+    // the on_request ones, so the two ops cannot disagree about what an Item's
+    // destinations are.
+    case 'take_also': {
+      const dests = destinationsFor(item.id, body.node)
+      const wanted = dests.filter((d) => d.mode === 'on_request')
+      if (!wanted.length) {
+        return [null, 'Nothing on this item waits to be asked for.']
+      }
+      return [
+        {
+          TakeAlso: {
+            item: item.id,
+            output: wanted[0].output,
+            layer: wanted[0].layer,
+            destinations: dests,
+          },
+        },
+        null,
+      ]
+    }
     case 'arm':       return [{ Arm: { item: item.id, output, layer } }, null]
     case 'take_out':  return [{ TakeOut: { output, layer } }, null]
     // tween_ms rides through untouched. 0 is a hard cut — correcting a
@@ -212,7 +234,7 @@ function toWireData(data) {
   return out
 }
 
-const OPS_NEEDING_ITEM = new Set(['take', 'arm', 'preload'])
+const OPS_NEEDING_ITEM = new Set(['take_also', 'take', 'arm', 'preload'])
 
 async function dispatch(body, ctx) {
   const db = handle()
@@ -234,9 +256,32 @@ async function dispatch(body, ctx) {
     item = row
   }
 
+  // Answerable here, without asking a node.
+  //
+  // Since the fan-out, a problem from buildOp surfaces as a per-node rejection
+  // rather than a validation failure — right for something only the node can
+  // judge, wrong for this: the server holds the destinations, so a round trip
+  // to be told nothing happened is worse than a sentence.
+  if (body.op === 'take_also') {
+    const any = handle()
+      .prepare(`SELECT 1 FROM item_destinations WHERE item_id = ? AND mode = 'on_request'`)
+      .get(item.id)
+    if (!any) {
+      return {
+        http: 422,
+        payload: {
+          error: 'nothing_on_request',
+          label: 'Nothing on this item waits to be asked for.',
+        },
+      }
+    }
+  }
+
   // Which nodes this action reaches. One for everything except a take, which
   // an Item's destinations may spread across several (ADR 0018).
-  const targets = body.op === 'take' ? nodesFor(item.id, body.node) : [body.node]
+  const targets = ['take', 'take_also'].includes(body.op)
+    ? nodesFor(item.id, body.node)
+    : [body.node]
   if (!targets.length) {
     return {
       http: 409,

@@ -30,8 +30,14 @@ const ITEM = {
   template_rev: 'blake3:aa',
   data: {},
   destination: { layer: 'Lower Third' },
+  destinations: [] as { node_id: string | null; output: string; layer: string;
+                        template_rev: string; mode: string; blank: boolean }[],
   updated_at: 0,
 }
+
+const dest = (layer: string, mode: string) => ({
+  node_id: null, output: 'out-0', layer, template_rev: 'blake3:aa', mode, blank: false,
+})
 
 /** Topic values the fake EventSource will deliver on subscribe. */
 let topicValues: Record<string, unknown> = {}
@@ -71,6 +77,7 @@ beforeEach(() => {
   resetStream()
   FakeEventSource.instances = []
   topicValues = {}
+  ITEM.destinations = []
   vi.stubGlobal('EventSource', FakeEventSource)
   vi.stubGlobal('crypto', { ...globalThis.crypto, randomUUID: () => 'cue-fixed' })
   vi.stubGlobal('fetch', vi.fn(async (url: string, init?: RequestInit) => {
@@ -220,5 +227,31 @@ describe('what is on air', () => {
     await paint()
     // It is on air AND it is wrong. Saying nothing would be the failure.
     await waitFor(() => expect(screen.getByText(/degraded/)).toBeDefined())
+  })
+})
+
+describe('a destination that waits to be asked for — ADR 0018', () => {
+  test('no button when the item has nothing on request', async () => {
+    ITEM.destinations = [dest('Lower Third', 'auto')]
+    await paint()
+    // Every row growing a dead button would be worse than the feature is good.
+    expect(screen.queryByRole('button', { name: /Also full screen/ })).toBeNull()
+  })
+
+  test('the button appears, and fires take_also rather than take', async () => {
+    ITEM.destinations = [dest('Lower Third', 'auto'), dest('Fullscreen', 'on_request')]
+    await paint()
+
+    const btn = await screen.findByRole('button', { name: /Also full screen/ })
+    await act(async () => { btn.click(); await Promise.resolve() })
+
+    const call = (globalThis.fetch as unknown as { mock: { calls: [string, RequestInit][] } })
+      .mock.calls.find((c) => String(c[0]) === '/api/cue')
+    expect(call).toBeDefined()
+    const body = JSON.parse(String(call![1].body))
+    // A separate op, not a flag: on a panel these are different buttons, and
+    // in the log "the full screen went up" is a different sentence.
+    expect(body.op).toBe('take_also')
+    expect(body.item).toBe('item-1')
   })
 })
