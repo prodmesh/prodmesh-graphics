@@ -273,6 +273,34 @@ export function createApp() {
     res.json(j)
   })
 
+  /**
+   * The Media Browser's one answer: every asset, which templates use it, and
+   * each adopted node's possession of it — derived from what nodes already
+   * report, no new protocol. `used_by` reads head revisions only: an old
+   * revision's assets matter to a node that is pinned to it, and that shows in
+   * the node's own required list rather than here.
+   */
+  app.get('/api/assets/sync', (_req, res) => {
+    const db = openDb()
+    const usedBy = {}
+    const heads = db.prepare(
+      `SELECT t.name AS name, r.manifest AS manifest
+         FROM templates t JOIN template_revisions r ON r.template_rev = t.head_rev`,
+    ).all()
+    for (const h of heads) {
+      let manifest
+      try { manifest = JSON.parse(h.manifest) } catch { continue }
+      for (const hash of manifest.assets ?? []) {
+        ;(usedBy[hash] ??= []).push(h.name)
+      }
+    }
+    res.json({
+      assets: db.prepare('SELECT * FROM assets ORDER BY first_seen DESC').all(),
+      used_by: usedBy,
+      nodes: nodeLink.assetSync(),
+    })
+  })
+
   app.get('/api/assets', (_req, res) => {
     res.json({
       assets: openDb()

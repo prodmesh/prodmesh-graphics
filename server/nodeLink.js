@@ -475,6 +475,31 @@ export function attach(server) {
   return wss
 }
 
+/**
+ * Re-offer current content to every adopted node whose assignment CHANGED.
+ *
+ * Called after content mutations (items, publishes) — without this, a node
+ * adopted this morning plays this morning's rundown until something re-adopts
+ * it, and the Media Browser's "required" column reads yesterday. The digest
+ * short-circuit matters: most edits touch one node's content, and bumping
+ * every session's gen for an identical assignment would churn acks for
+ * nothing.
+ */
+export function reofferAll() {
+  for (const s of sessions.values()) {
+    if (!s.adopted) continue
+    let built
+    try {
+      built = buildAssignment({ nodeId: s.nodeId })
+    } catch (e) {
+      console.error('link: could not rebuild content for', s.nodeId, e)
+      continue
+    }
+    if (s.assignment?.digest === built.digest) continue
+    offerAssignment(s.nodeId, built)
+  }
+}
+
 export function offerAssignment(nodeId, assignment) {
   const s = find(nodeId)
   if (!s) return null
@@ -571,6 +596,38 @@ export function list() {
     // point at before then.
     preview_url: s.address ? `http://${s.address}:${PREVIEW_PORT}/` : null,
   }))
+}
+
+/**
+ * Per-node asset possession, DERIVED — a node never reports a cache listing.
+ *
+ * What it does report is enough: the assignment names every hash the node
+ * must hold, readiness names the ones still outstanding per destination, and
+ * `SyncProgress` carries the transfer aggregate. Required minus missing is
+ * held. `missing` is null (unknown, not empty) until the node has reported
+ * against the assignment we actually sent — "we have not heard" and "nothing
+ * is missing" must never render as the same chip.
+ */
+export function assetSync() {
+  return [...sessions.values()]
+    .filter((s) => s.adopted)
+    .map((s) => {
+      const current = s.ready && s.ready.assignment_gen === s.gen
+      return {
+        node_id: s.nodeId,
+        name: s.name,
+        reachable: isOnline(s),
+        reported: !!current,
+        required: s.assignment?.assets ?? [],
+        missing: current
+          ? [...new Set(
+              (s.ready.items ?? []).flatMap((i) =>
+                (i.destinations ?? []).flatMap((d) => d.missing ?? [])),
+            )]
+          : null,
+        staging: s.staging ?? null,
+      }
+    })
 }
 
 /**

@@ -44,6 +44,7 @@ const NOT_PUBLIC = new Map([
   ['GET /cas/:hash', 'Content-addressed asset transfer — plain HTTP with Range, deliberately NOT on the control socket (ADR 0007). Its own spec: asset-cas.md.'],
   ['HEAD /cas/:hash', 'As above.'],
   ['GET /api/assets', 'Asset management, used by Design.'],
+  ['GET /api/assets/sync', 'Per-node asset possession for the Media Browser. Derived view, not a contract.'],
   ['POST /api/assets', 'Asset management, used by Design.'],
   ['POST /api/assets/ingest', 'Server-side transcode on ingest. Design and Edit only.'],
   ['GET /api/ingest', 'Ingest job status. Design and Edit only.'],

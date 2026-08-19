@@ -58,9 +58,13 @@ pub fn compile(doc_json: &str) -> Result<Compiled, String> {
 
 /// Build a font database from raw face bytes.
 ///
-/// Each face is registered under every family the document names, because M1
-/// has no font-asset mapping yet. That is provisional and says so, rather than
-/// pretending to match families it cannot resolve.
+/// Every face is first registered under **its own name** — the family and
+/// weight the file itself states — so a family picked from the dropdown
+/// resolves to the face that actually carries it. Then, for any family the
+/// document declares that no face answered to, every face is registered under
+/// that name as well: the M1 shim, kept as the fallback so a template written
+/// before real names existed (or one whose font is renamed) still renders
+/// rather than failing on bookkeeping.
 fn font_db(doc: &SceneDoc, faces: &[Vec<u8>]) -> Result<FontDb, String> {
     let mut db = FontDb::new();
     let mut families: Vec<(String, u16)> = doc
@@ -88,8 +92,20 @@ fn font_db(doc: &SceneDoc, faces: &[Vec<u8>]) -> Result<FontDb, String> {
     if families.is_empty() {
         families.push(("Default".into(), 400));
     }
+
+    let mut named: Vec<String> = Vec::new();
     for bytes in faces {
-        for (family, weight) in &families {
+        if let Some((family, weight)) = pmg_text::face_info(bytes) {
+            db.add_face(bytes.clone(), family.clone(), weight)
+                .map_err(|e| format!("font: {e}"))?;
+            named.push(family);
+        }
+    }
+    for (family, weight) in &families {
+        if named.iter().any(|n| n == family) {
+            continue;
+        }
+        for bytes in faces {
             db.add_face(bytes.clone(), family.clone(), *weight)
                 .map_err(|e| format!("font: {e}"))?;
         }
@@ -370,9 +386,10 @@ pub fn set_font_family(
     id: &str,
     family: &str,
     weight: u16,
+    asset: Option<&str>,
 ) -> Result<String, String> {
     let mut doc = armed.doc.clone();
-    interact::apply_set_font_family(&mut doc, id, family, weight)?;
+    interact::apply_set_font_family(&mut doc, id, family, weight, asset)?;
     edited_json(doc)
 }
 

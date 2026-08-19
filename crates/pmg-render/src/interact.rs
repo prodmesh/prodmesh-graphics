@@ -1195,12 +1195,15 @@ pub fn apply_set_font_size(doc: &mut SceneDoc, id: &str, size: f32) -> Result<()
 
 /// Set a text node's family and weight, declaring the family in `doc.fonts`
 /// when it is new — a family named by content but not declared would fail
-/// compile, and the declaration is where a font asset gets attached later.
+/// compile. `asset` is the font file's content hash when the caller knows it
+/// (a picker does; typed input may not): carried on the declaration, it is
+/// what lets a node stage exactly the bytes the designer chose.
 pub fn apply_set_font_family(
     doc: &mut SceneDoc,
     id: &str,
     family: &str,
     weight: u16,
+    asset: Option<&str>,
 ) -> Result<(), String> {
     let family = family.trim();
     if family.is_empty() {
@@ -1211,18 +1214,23 @@ pub fn apply_set_font_family(
         font.family = family.to_string();
         font.weight = weight;
     }
-    if !doc
+    match doc
         .fonts
-        .iter()
-        .any(|f| f.family == family && f.weight == weight)
+        .iter_mut()
+        .find(|f| f.family == family && f.weight == weight)
     {
-        doc.fonts.push(pmg_scene::doc::FontRef {
+        Some(f) => {
+            if let Some(hash) = asset {
+                f.asset = Some(hash.to_string());
+            }
+        }
+        None => doc.fonts.push(pmg_scene::doc::FontRef {
             family: family.to_string(),
             weight,
             style: None,
-            asset: None,
+            asset: asset.map(String::from),
             system_fallback: false,
-        });
+        }),
     }
     Ok(())
 }
@@ -1783,7 +1791,15 @@ mod tests {
 
         // Size clamps; a new family is declared beside the first.
         apply_set_font_size(&mut doc, &id, 0.0).unwrap();
-        apply_set_font_family(&mut doc, &id, "IBM Plex Sans", 600).unwrap();
+        apply_set_font_family(&mut doc, &id, "IBM Plex Sans", 600, Some("blake3:ffff")).unwrap();
+        // The picked file's hash rides on the declaration — staging needs it.
+        assert_eq!(
+            doc.fonts
+                .iter()
+                .find(|f| f.family == "IBM Plex Sans")
+                .and_then(|f| f.asset.as_deref()),
+            Some("blake3:ffff")
+        );
         apply_set_text_align(&mut doc, &id, "center").unwrap();
         let node = find_node(&doc.root, &id).unwrap();
         let Some(Content::Text { font, align, .. }) = &node.content else {

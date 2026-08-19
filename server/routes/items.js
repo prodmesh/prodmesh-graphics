@@ -25,6 +25,7 @@ import { handle } from '../db.js'
 import { validateItemData } from '../manifest.js'
 import { newId } from '../ids.js'
 import { requirePermission } from '../auth.js'
+import { reofferAll } from '../nodeLink.js'
 
 const mayEdit = requirePermission('graphics.rundown.edit')
 
@@ -186,6 +187,10 @@ router.post('/api/items', mayEdit, (req, res) => {
      VALUES (@id, @take_id, @label, @template_id, @template_rev, @data, @destination, @created_at, @updated_at)`,
   ).run(row)
   writeDestinations(db, id, dests)
+  // Content changed: nodes whose assignment this touches get the new one NOW,
+  // not at their next reconnect. The digest short-circuit keeps this from
+  // churning nodes the change does not reach.
+  reofferAll()
   res.status(201).json(hydrate(row, db))
 })
 
@@ -232,11 +237,13 @@ router.patch('/api/items/:id', mayEdit, (req, res) => {
     cur.id,
   )
   writeDestinations(db, cur.id, dests)
+  reofferAll()
   res.json(hydrate(db.prepare('SELECT * FROM items WHERE id = ?').get(cur.id), db))
 })
 
 router.delete('/api/items/:id', mayEdit, (req, res) => {
   const info = handle().prepare('DELETE FROM items WHERE id = ?').run(req.params.id)
   if (!info.changes) return fail(res, 404, 'not_found', 'There is no item with that id.')
+  reofferAll()
   res.status(204).end()
 })

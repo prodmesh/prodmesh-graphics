@@ -82,6 +82,24 @@ impl Face {
     }
 }
 
+/// What a font file says about itself: the name to offer in a picker, and the
+/// weight the designer gets by picking it.
+///
+/// The **typographic** family is preferred over the plain one — "IBM Plex
+/// Sans", not "IBM Plex Sans SemiBold" — because that is the axis a family
+/// dropdown groups by; the weight carries the rest.
+pub fn face_info(bytes: &[u8]) -> Option<(String, u16)> {
+    use swash::StringId;
+    let font = swash::FontRef::from_index(bytes, 0)?;
+    let strings = font.localized_strings();
+    let family = strings
+        .find_by_id(StringId::TypographicFamily, None)
+        .or_else(|| strings.find_by_id(StringId::Family, None))
+        .map(|s| s.chars().collect::<String>())
+        .filter(|s| !s.trim().is_empty())?;
+    Some((family, font.attributes().weight().0))
+}
+
 /// Faces available to a document, loaded from bytes.
 ///
 /// **There is deliberately no system font enumeration here.** A scene may name

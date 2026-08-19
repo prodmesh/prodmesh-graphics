@@ -101,6 +101,18 @@ export async function compileTemplate(doc: unknown): Promise<Compiled> {
   return wasm.compile_template(JSON.stringify(doc))
 }
 
+/** What one uploaded face is: its content hash, and the name and weight the
+ *  file itself states. What a font picker offers must be the file's own name,
+ *  not a string somebody typed near it. */
+export type FaceInfo = { hash: string; family: string; weight: number }
+
+/** Read a font file's own family and weight, via the same parser that shapes
+ *  with it. Null for bytes that are not a font. */
+export async function fontFacts(bytes: Uint8Array): Promise<{ family: string; weight: number } | null> {
+  const wasm = await loadWasm()
+  return wasm.fontFacts(bytes) as { family: string; weight: number } | null
+}
+
 type Status = 'idle' | 'loading' | 'ready' | 'error'
 
 /**

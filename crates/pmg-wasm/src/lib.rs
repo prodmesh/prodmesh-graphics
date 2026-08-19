@@ -219,6 +219,22 @@ mod design_api {
     /// `template_rev` here is **byte-identical** to the one `pmgctl scene
     /// compile` produces for the same document, because it is the same encoder
     /// over the same types (ADR 0001).
+    /// What a font file says about itself: `{ family, weight }`, or null for
+    /// bytes that are not a font. The name shown in a picker must be the
+    /// file's own, not a string someone typed near it.
+    #[wasm_bindgen(js_name = fontFacts)]
+    pub fn font_facts(bytes: &[u8]) -> JsValue {
+        match pmg_text::face_info(bytes) {
+            Some((family, weight)) => {
+                let out = js_sys::Object::new();
+                let _ = js_sys::Reflect::set(&out, &"family".into(), &family.into());
+                let _ = js_sys::Reflect::set(&out, &"weight".into(), &f64::from(weight).into());
+                out.into()
+            }
+            None => JsValue::NULL,
+        }
+    }
+
     #[wasm_bindgen]
     pub fn compile_template(doc_json: &str) -> Result<JsValue, JsValue> {
         let c = design::compile(doc_json).map_err(|e| JsValue::from_str(&e))?;
@@ -551,15 +567,18 @@ mod design_api {
             design::set_font_size(&self.armed, &id, size).map_err(|e| JsValue::from_str(&e))
         }
 
-        /// Set family and weight, declaring the family when it is new.
+        /// Set family and weight, declaring the family when it is new. `asset`
+        /// is the picked font file's content hash when the caller knows it —
+        /// carried on the declaration so a node can stage exactly those bytes.
         #[wasm_bindgen(js_name = setFontFamily)]
         pub fn set_font_family(
             &self,
             id: String,
             family: String,
             weight: u16,
+            asset: Option<String>,
         ) -> Result<String, JsValue> {
-            design::set_font_family(&self.armed, &id, &family, weight)
+            design::set_font_family(&self.armed, &id, &family, weight, asset.as_deref())
                 .map_err(|e| JsValue::from_str(&e))
         }
 

@@ -165,6 +165,111 @@
 .tl__keybar > .c-formgroup { width: 110px; }
 .tl__keybar > .c-formgroup:last-of-type { width: 170px; }
 
+/* ---- The Media Browser ----------------------------------------------------
+   A dialog, not a mode: assets and their possession per node, summoned and
+   dismissed. The overlay dims the console rather than hiding it — the
+   operator is still IN the room. */
+
+.mdb {
+  position: fixed;
+  inset: 0;
+  z-index: 40;
+  background: rgb(0 0 0 / 55%);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 40px;
+}
+.mdb__panel {
+  width: 760px;
+  max-width: 100%;
+  max-height: 100%;
+  display: flex;
+  flex-direction: column;
+  border-radius: var(--pm-radius-8);
+  background: var(--pm-surface-chrome);
+  box-shadow: var(--pm-hairline), 0 24px 64px rgb(0 0 0 / 45%);
+  overflow: hidden;
+}
+.mdb__header {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--pm-border-hairline);
+}
+.mdb__title {
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: var(--pm-tracking-caps);
+  text-transform: uppercase;
+  color: var(--pm-text-primary);
+}
+.mdb__body {
+  overflow-y: auto;
+  min-height: 0;
+  padding: 14px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.mdb__copying {
+  margin: 0;
+  font-size: 11px;
+  color: var(--pm-text-secondary);
+}
+.mdb__row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 8px;
+  border-radius: var(--pm-radius-6);
+  background: var(--pm-surface-raised);
+  box-shadow: var(--pm-hairline);
+}
+.mdb__swatch {
+  width: 36px;
+  height: 24px;
+  flex-shrink: 0;
+  border-radius: var(--pm-radius-4);
+  background: var(--pm-surface-field);
+}
+.mdb__thumb {
+  width: 36px;
+  height: 24px;
+  flex-shrink: 0;
+  border-radius: var(--pm-radius-4);
+  object-fit: cover;
+  background: var(--pm-bg-canvas);
+}
+.mdb__name {
+  min-width: 0;
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  font-size: 12px;
+  color: var(--pm-text-primary);
+}
+.mdb__name > span:first-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.mdb__meta {
+  font-family: var(--pm-font-mono);
+  font-size: 10px;
+  color: var(--pm-text-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.mdb__chips { display: flex; gap: 6px; flex-shrink: 0; flex-wrap: wrap; justify-content: flex-end; }
+.mdb__dim { margin: 0; font-size: 11px; color: var(--pm-text-muted); }
+.mdb__footer {
+  flex-shrink: 0;
+  padding: 10px 16px;
+  border-top: 1px solid var(--pm-border-hairline);
+}
+.mdb__footer .mdb__dim { line-height: 1.5; }
+
 /* ---- The layer tree -------------------------------------------------------
    Selection is ARMED cyan, matching the canvas: one selection, two views.
    Drop marks are lines for before/after and a tint for "into", because the

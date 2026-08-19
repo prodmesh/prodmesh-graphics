@@ -32,7 +32,7 @@
  */
 
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { AlertTriangle, FileUp, Image as ImageIcon, Plus, Redo2, Type, Undo2, Upload } from 'lucide-react'
+import { AlertTriangle, FileUp, FolderOpen, Image as ImageIcon, Plus, Redo2, Type, Undo2, Upload } from 'lucide-react'
 import { useQuery, invalidate } from '../../lib/useQuery'
 import { keys } from '../../lib/keys'
 import { ApiError, get, post } from '../../lib/api'
@@ -50,11 +50,14 @@ import {
 } from '../../components/console'
 import {
   compileTemplate,
+  fontFacts,
   useDesignCanvas,
   type DesignSession,
+  type FaceInfo,
   type Handles,
   type NodeFacts,
 } from './useDesign'
+import { MediaBrowser } from './MediaBrowser'
 import { useDocHistory } from './useHistory'
 import { LayerTree } from './LayerTree'
 import { TimelinePanel } from './TimelinePanel'
@@ -100,7 +103,7 @@ function SelectedNode({
   ready,
   generation,
   selected,
-  families,
+  faces,
   imageAssets,
   onEdit,
   onDelete,
@@ -110,8 +113,9 @@ function SelectedNode({
   /** The session's replacement counter — geometry is only new when it is. */
   generation: number
   selected: string
-  /** Families the document declares — what the font picker offers. */
-  families: string[]
+  /** The faces this server holds, by their files' own names — what the font
+   *  picker offers. */
+  faces: FaceInfo[]
   /** Image assets this server holds — what the picture picker offers. */
   imageAssets: { hash: string; size: number }[]
   onEdit: (doc: Record<string, unknown>) => void
@@ -209,12 +213,19 @@ function SelectedNode({
     edit((s) => s.setFontSize(selected, v))
   }
 
-  const commitFont = (familyOverride?: string) => {
+  const commitFont = (familyOverride?: string, weightOverride?: number) => {
     const fam = (familyOverride ?? family).trim()
-    const wt = Number(weight)
+    const wt = weightOverride ?? Number(weight)
     if (!facts?.text || !fam || !Number.isFinite(wt)) return
     if (fam === facts.text.family && wt === facts.text.weight) return
-    edit((s) => s.setFontFamily(selected, fam, Math.max(1, Math.min(1000, Math.round(wt)))))
+    // The nearest face in the picked family carries the hash — that is the
+    // file a node will stage for this declaration.
+    const match = faces
+      .filter((f) => f.family === fam)
+      .toSorted((a, b) => Math.abs(a.weight - wt) - Math.abs(b.weight - wt))[0]
+    edit((s) =>
+      s.setFontFamily(selected, fam, Math.max(1, Math.min(1000, Math.round(wt))), match?.hash),
+    )
   }
 
   return (
@@ -306,19 +317,34 @@ function SelectedNode({
               </FormGroup>
               <div className="design-console__size">
                 <FormGroup label="Font family">
-                  <input
-                    list="design-families"
+                  {/* A dropdown of what the server's font files call
+                      THEMSELVES. Picking one carries the file's weight and
+                      its hash into the declaration — the exact bytes a node
+                      will stage. */}
+                  <select
                     value={family}
-                    onChange={(e) => setFamily(e.target.value)}
-                    onBlur={() => commitFont()}
-                    onKeyDown={enterCommits(() => commitFont())}
                     aria-label="Font family"
-                  />
-                  <datalist id="design-families">
-                    {families.map((f) => (
-                      <option key={f} value={f} />
+                    onChange={(e) => {
+                      const fam = e.target.value
+                      // Of the picked family's faces, keep the weight closest
+                      // to what the node already has — switching family should
+                      // not also silently switch Regular to Bold.
+                      const wt = Number(weight) || 400
+                      const face = faces
+                        .filter((f) => f.family === fam)
+                        .toSorted((a, b) => Math.abs(a.weight - wt) - Math.abs(b.weight - wt))[0]
+                      setFamily(fam)
+                      if (face) setWeight(String(face.weight))
+                      commitFont(fam, face?.weight)
+                    }}
+                  >
+                    {family && !faces.some((f) => f.family === family) ? (
+                      <option value={family}>{family} — no file on this server</option>
+                    ) : null}
+                    {[...new Set(faces.map((f) => f.family))].map((f) => (
+                      <option key={f} value={f}>{f}</option>
                     ))}
-                  </datalist>
+                  </select>
                 </FormGroup>
                 <FormGroup label="Weight">
                   <input
@@ -508,6 +534,7 @@ export function Design() {
   const [timeline, setTimeline] = useState<string | undefined>(undefined)
   const [tMs, setTMs] = useState(0)
   const [publishState, setPublishState] = useState<string | null>(null)
+  const [mediaOpen, setMediaOpen] = useState(false)
 
   // Image bytes by hash, for the assets THIS document references. The cache
   // outlives the state so an undo that re-references a picture never
@@ -553,15 +580,24 @@ export function Design() {
   const fontAssets = (assets?.assets ?? []).filter((a) => FONT_KINDS.has(a.kind))
   const imageAssets = (assets?.assets ?? []).filter((a) => a.kind === 'image')
 
-  // Load the fonts this server holds. One fetch per hash, and they are
-  // immutable, so this never needs invalidating.
+  // Load the fonts this server holds, and read each file's OWN name — the
+  // family a picker offers must be what the file states, not a typed string.
+  // One fetch per hash, and they are immutable, so this never needs
+  // invalidating.
+  const [faces, setFaces] = useState<FaceInfo[]>([])
   useEffect(() => {
     if (fontAssets.length === 0) return
     let cancelled = false
     Promise.all(
-      fontAssets.map((a) => fetch(`/cas/${a.hash}`).then((r) => r.arrayBuffer())),
-    ).then((bufs) => {
-      if (!cancelled) setFonts(bufs.map((b) => new Uint8Array(b)))
+      fontAssets.map(async (a) => {
+        const bytes = new Uint8Array(await (await fetch(`/cas/${a.hash}`)).arrayBuffer())
+        const info = await fontFacts(bytes)
+        return { bytes, face: info ? { hash: a.hash, ...info } : null }
+      }),
+    ).then((loaded) => {
+      if (cancelled) return
+      setFonts(loaded.map((l) => l.bytes))
+      setFaces(loaded.map((l) => l.face).filter((f): f is FaceInfo => f !== null))
     }).catch(() => {})
     return () => { cancelled = true }
   }, [assets])
@@ -690,10 +726,6 @@ export function Design() {
   // The families this document declares, deduplicated — what the font picker
   // offers. Declaring a NEW one happens by typing it; the editor adds the
   // FontRef.
-  const families = [
-    ...new Set(((doc?.fonts as { family: string }[] | undefined) ?? []).map((f) => f.family)),
-  ]
-
   /** Add a node — into the selection when there is one, else the canvas root —
    *  and select what was just made, so the next act is styling it. */
   const addNode = useCallback(
@@ -751,6 +783,9 @@ export function Design() {
             onClick={() => addNode('image')}
           >
             <ImageIcon size={14} aria-hidden /> Add an image
+          </Button>
+          <Button variant="secondary" onClick={() => setMediaOpen(true)}>
+            <FolderOpen size={14} aria-hidden /> Media Browser
           </Button>
           <Button variant="secondary" disabled={!canUndo} onClick={undo} title="Undo (Cmd+Z)">
             <Undo2 size={14} aria-hidden /> Undo
@@ -907,7 +942,7 @@ export function Design() {
                     ready={status === 'ready'}
                     generation={generation}
                     selected={selNode}
-                    families={families}
+                    faces={faces}
                     imageAssets={imageAssets}
                     onEdit={edit}
                     onDelete={selNode === rootId ? undefined : deleteSelected}
@@ -984,6 +1019,8 @@ export function Design() {
           </PanelBody>
         </Panel>
       </div>
+
+      {mediaOpen ? <MediaBrowser faces={faces} onClose={() => setMediaOpen(false)} /> : null}
     </div>
   )
 }
