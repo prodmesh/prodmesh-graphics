@@ -500,6 +500,27 @@ mod design_api {
             design::delete_node(&self.armed, &id).map_err(|e| JsValue::from_str(&e))
         }
 
+        /// Move a node to `(newParent, index)` — the layer tree's drop:
+        /// reorder, reparent, and un-parent are all this one edit. Returns the
+        /// edited document; cycles and the root are refused with sentences.
+        #[wasm_bindgen(js_name = reparent)]
+        pub fn reparent(
+            &self,
+            id: String,
+            new_parent: String,
+            index: usize,
+        ) -> Result<String, JsValue> {
+            design::reparent(&self.armed, &id, &new_parent, index)
+                .map_err(|e| JsValue::from_str(&e))
+        }
+
+        /// Name a layer for the eye (null clears back to the id). The id
+        /// underneath never changes, so timelines keep addressing it.
+        #[wasm_bindgen(js_name = setName)]
+        pub fn set_name(&self, id: String, name: Option<String>) -> Result<String, JsValue> {
+            design::set_name(&self.armed, &id, name.as_deref()).map_err(|e| JsValue::from_str(&e))
+        }
+
         // -- Timeline edits, each returning the edited document --------------
 
         #[wasm_bindgen(js_name = addTimeline)]

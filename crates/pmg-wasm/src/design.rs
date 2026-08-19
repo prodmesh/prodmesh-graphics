@@ -304,6 +304,23 @@ pub fn delete_node(armed: &Armed, id: &str) -> Result<String, String> {
     edited_json(doc)
 }
 
+/// Move a node to `(new_parent, index)` — the layer tree's drop, covering
+/// reorder, reparent, and un-parent in one operation. Cycles and the root are
+/// refused with sentences.
+pub fn reparent(armed: &Armed, id: &str, new_parent: &str, index: usize) -> Result<String, String> {
+    let mut doc = armed.doc.clone();
+    interact::apply_reparent(&mut doc, id, new_parent, index)?;
+    edited_json(doc)
+}
+
+/// Name a layer for the eye; `None` returns it to showing its id. The id
+/// underneath never changes, so timelines and fields keep addressing it.
+pub fn set_name(armed: &Armed, id: &str, name: Option<&str>) -> Result<String, String> {
+    let mut doc = armed.doc.clone();
+    interact::apply_set_name(&mut doc, id, name)?;
+    edited_json(doc)
+}
+
 // -- Timeline edits ---------------------------------------------------------
 
 pub fn add_timeline(armed: &Armed, name: &str, duration_ms: f32) -> Result<String, String> {
@@ -578,5 +595,29 @@ mod interaction_tests {
         assert!(h2.contains("\"bbox\":[1.0,0.0,120.0,40.0]"));
 
         assert!(handles_json(&armed, &frame, "ghost").is_err());
+    }
+
+    #[test]
+    fn reparent_and_rename_round_trip_the_document() {
+        let armed = arm(&doc_json(), "{}", &[]).expect("arms");
+
+        // The chip named for the eye, then moved into a fresh sibling — and
+        // the edited documents still arm, which is the editor's real contract.
+        let (box_id, doc2) = add_box(&armed, None).unwrap();
+        let armed2 = arm(&doc2, "{}", &[]).expect("arms");
+        let doc3 = set_name(&armed2, "chip", Some("Title chip")).unwrap();
+        let armed3 = arm(&doc3, "{}", &[]).expect("arms");
+        let doc4 = reparent(&armed3, "chip", &box_id, 0).unwrap();
+        let armed4 = arm(&doc4, "{}", &[]).expect("arms");
+
+        let parent = &armed4.doc.root.children[0];
+        assert_eq!(parent.id, box_id);
+        assert_eq!(parent.children[0].id, "chip");
+        assert_eq!(
+            parent.children[0].display_name.as_deref(),
+            Some("Title chip")
+        );
+
+        assert!(reparent(&armed4, &box_id, "chip", 0).is_err(), "no cycles");
     }
 }

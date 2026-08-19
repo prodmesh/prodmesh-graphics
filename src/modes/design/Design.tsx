@@ -56,6 +56,7 @@ import {
   type NodeFacts,
 } from './useDesign'
 import { useDocHistory } from './useHistory'
+import { LayerTree } from './LayerTree'
 import { TimelinePanel } from './TimelinePanel'
 import { CanvasStage } from './CanvasStage'
 import type { Item } from '../show/types'
@@ -572,6 +573,19 @@ export function Design() {
                 ))}
               </>
             )}
+          </PanelBody>
+          {/* Structure below the browser, Figma-style: what is in THIS
+              template, selectable and rearrangeable. Same selection as the
+              canvas — one thing is selected, seen from two sides. */}
+          <PanelHeader title="Layers" />
+          <PanelBody>
+            <LayerTree
+              session={session}
+              doc={doc}
+              selected={selNode}
+              onSelect={setSelNode}
+              onEdit={edit}
+            />
           </PanelBody>
         </Panel>
 

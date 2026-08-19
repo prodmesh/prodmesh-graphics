@@ -165,6 +165,67 @@
 .tl__keybar > .c-formgroup { width: 110px; }
 .tl__keybar > .c-formgroup:last-of-type { width: 170px; }
 
+/* ---- The layer tree -------------------------------------------------------
+   Selection is ARMED cyan, matching the canvas: one selection, two views.
+   Drop marks are lines for before/after and a tint for "into", because the
+   difference between beside and inside is the whole point of the gesture. */
+
+.lt { display: flex; flex-direction: column; gap: 8px; min-height: 0; }
+.lt__list {
+  display: flex;
+  flex-direction: column;
+  overflow-y: auto;
+  min-height: 0;
+  touch-action: none;
+}
+.lt__row {
+  height: 24px; /* LAYER_ROW_H — the drag math counts on it */
+  flex-shrink: 0;
+  box-sizing: border-box;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding-right: 8px;
+  border-radius: var(--pm-radius-4);
+  font-size: 12px;
+  color: var(--pm-text-secondary);
+  cursor: default;
+  user-select: none;
+  border-top: 1px solid transparent;
+  border-bottom: 1px solid transparent;
+}
+.lt__row:hover { color: var(--pm-text-primary); background: var(--pm-surface-raised); }
+.lt__row:focus-visible { outline: none; box-shadow: var(--pm-ring-armed); }
+.lt__row--selected { color: var(--pm-text-primary); background: var(--pm-cyan-tint); }
+.lt__row--dragging { opacity: 0.45; }
+.lt__row--drop-before { border-top-color: var(--pm-state-armed); border-radius: 0; }
+.lt__row--drop-after { border-bottom-color: var(--pm-state-armed); border-radius: 0; }
+.lt__row--drop-into { background: var(--pm-cyan-tint); box-shadow: inset 0 0 0 1px var(--pm-state-armed); }
+.lt__row--drop-bad { cursor: not-allowed; border-top-color: transparent; border-bottom-color: transparent; box-shadow: none; background: transparent; }
+.lt__row svg { flex-shrink: 0; color: var(--pm-text-muted); }
+.lt__label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.lt__count {
+  margin-left: auto;
+  font-family: var(--pm-font-mono);
+  font-size: 10px;
+  color: var(--pm-text-idle);
+}
+.lt__rename {
+  flex: 1;
+  min-width: 0;
+  height: 18px;
+  border: 0;
+  outline: none;
+  border-radius: var(--pm-radius-4);
+  background: var(--pm-surface-field);
+  color: var(--pm-text-primary);
+  font-family: var(--pm-font-ui);
+  font-size: 12px;
+  padding: 0 6px;
+  box-shadow: var(--pm-ring-armed);
+}
+.lt__hint { margin: 0; font-size: 10px; line-height: 1.5; color: var(--pm-text-idle); }
+
 .design-console__dim { margin: 0; font-size: 11px; line-height: 1.6; color: var(--pm-text-muted); }
 
 .design-console__problem {

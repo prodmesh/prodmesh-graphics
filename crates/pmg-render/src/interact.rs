@@ -876,6 +876,67 @@ pub fn apply_add_box(doc: &mut SceneDoc, parent: Option<&str>) -> Result<String,
     Ok(id)
 }
 
+fn extract_from(n: &mut Node, id: &str) -> Option<Node> {
+    if let Some(at) = n.children.iter().position(|c| c.id == id) {
+        return Some(n.children.remove(at));
+    }
+    n.children.iter_mut().find_map(|c| extract_from(c, id))
+}
+
+/// Move a node to a new parent at `index` among its children — one operation
+/// that is reorder (same parent), reparent (into a container), and un-parent
+/// (back out to an ancestor), because a layer tree's drop is all three and a
+/// seam between them would be the editor's, not the designer's.
+///
+/// The node keeps its AUTHORED margins, not its solved position: position here
+/// is spacing within a flow, and a new flow answers differently. That is
+/// flexbox telling the truth, the same contract as [`apply_move`]. Timeline
+/// tracks keep working untouched — they address `id/property`, and the id is
+/// the one thing this never changes (§3.1).
+pub fn apply_reparent(
+    doc: &mut SceneDoc,
+    id: &str,
+    new_parent: &str,
+    index: usize,
+) -> Result<(), String> {
+    if doc.root.id == id {
+        return Err("the root is the canvas itself and cannot be moved".into());
+    }
+    // Into itself or its own contents would detach the subtree from the
+    // document entirely — the tree equivalent of division by zero.
+    if let Some(moving) = find_node(&doc.root, id) {
+        if find_node(moving, new_parent).is_some() {
+            return Err(format!("{new_parent} is inside {id} and cannot contain it"));
+        }
+    } else {
+        return Err(format!("no node {id}"));
+    }
+    if find_node(&doc.root, new_parent).is_none() {
+        return Err(format!("no node {new_parent}"));
+    }
+    let node = extract_from(&mut doc.root, id).ok_or_else(|| format!("no node {id}"))?;
+    let p =
+        find_node_mut(&mut doc.root, new_parent).ok_or_else(|| format!("no node {new_parent}"))?;
+    // `index` counts positions AFTER the node left its old place — the natural
+    // meaning of a drop target — and clamps rather than errors: the caller
+    // computed it against a list this removal may just have shortened.
+    let at = index.min(p.children.len());
+    p.children.insert(at, node);
+    Ok(())
+}
+
+/// Name a layer for the eye. The `display_name` is presentation only — the id
+/// underneath is what timelines and fields address, and renaming can never
+/// break either. `None` returns the node to showing its id.
+pub fn apply_set_name(doc: &mut SceneDoc, id: &str, name: Option<&str>) -> Result<(), String> {
+    let n = find_node_mut(&mut doc.root, id).ok_or_else(|| format!("no node {id}"))?;
+    n.display_name = name
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(String::from);
+    Ok(())
+}
+
 fn remove_from(n: &mut Node, id: &str) -> bool {
     if let Some(at) = n.children.iter().position(|c| c.id == id) {
         n.children.remove(at);
@@ -1240,5 +1301,76 @@ mod tests {
         assert_eq!(doc.timelines[0].duration_ms, 1200.0);
         apply_delete_timeline(&mut doc, "In").unwrap();
         assert!(apply_delete_timeline(&mut doc, "In").is_err());
+    }
+
+    #[test]
+    fn reparent_is_reorder_unparent_and_refusal() {
+        // root ── a ── inner, and b beside a.
+        let mut doc: SceneDoc = serde_json::from_value(serde_json::json!({
+            "format": "pmg.scene",
+            "format_version": {"major": 1, "minor": 0},
+            "min_reader": 1,
+            "id": "t", "name": "t",
+            "canvas": {"width": 400, "height": 300},
+            "fields": [], "fonts": [], "assets": [],
+            "root": {
+                "id": "root", "kind": "box", "layout": {}, "transform": {}, "style": {},
+                "children": [
+                    {"id": "a", "kind": "box", "layout": {}, "transform": {}, "style": {},
+                     "children": [
+                        {"id": "inner", "kind": "box", "layout": {}, "transform": {},
+                         "style": {}, "children": []}
+                     ]},
+                    {"id": "b", "kind": "box", "layout": {}, "transform": {}, "style": {},
+                     "children": []}
+                ]
+            },
+            "timelines": []
+        }))
+        .expect("fixture doc parses");
+
+        let order = |doc: &SceneDoc| {
+            doc.root
+                .children
+                .iter()
+                .map(|c| c.id.clone())
+                .collect::<Vec<_>>()
+        };
+
+        // Reorder among siblings: b before a. The index counts positions after
+        // the node has left its old place.
+        apply_reparent(&mut doc, "b", "root", 0).unwrap();
+        assert_eq!(order(&doc), vec!["b", "a"]);
+
+        // Un-parent: inner climbs out of a to the root, between b and a.
+        apply_reparent(&mut doc, "inner", "root", 1).unwrap();
+        assert_eq!(order(&doc), vec!["b", "inner", "a"]);
+        assert!(doc.root.children[2].children.is_empty());
+
+        // Reparent: b dives into a. An oversized index clamps to the end.
+        apply_reparent(&mut doc, "b", "a", 99).unwrap();
+        assert_eq!(order(&doc), vec!["inner", "a"]);
+        assert_eq!(doc.root.children[1].children[0].id, "b");
+
+        // Refusals, each with a sentence: the root cannot move, a node cannot
+        // enter itself or its own contents, and both ends must exist.
+        assert!(apply_reparent(&mut doc, "root", "a", 0).is_err());
+        assert!(apply_reparent(&mut doc, "a", "a", 0).is_err());
+        assert!(
+            apply_reparent(&mut doc, "a", "b", 0).is_err(),
+            "b is inside a"
+        );
+        assert!(apply_reparent(&mut doc, "ghost", "root", 0).is_err());
+        assert!(apply_reparent(&mut doc, "b", "ghost", 0).is_err());
+
+        // Naming is presentation: set, trim to nothing, and clear.
+        apply_set_name(&mut doc, "a", Some("Backdrop")).unwrap();
+        assert_eq!(
+            doc.root.children[1].display_name.as_deref(),
+            Some("Backdrop")
+        );
+        apply_set_name(&mut doc, "a", Some("   ")).unwrap();
+        assert_eq!(doc.root.children[1].display_name, None);
+        assert!(apply_set_name(&mut doc, "ghost", Some("x")).is_err());
     }
 }
