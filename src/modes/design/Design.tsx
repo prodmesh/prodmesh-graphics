@@ -32,7 +32,7 @@
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { AlertTriangle, FileUp, Plus, Upload } from 'lucide-react'
+import { AlertTriangle, FileUp, Plus, Redo2, Undo2, Upload } from 'lucide-react'
 import { useQuery, invalidate } from '../../lib/useQuery'
 import { keys } from '../../lib/keys'
 import { ApiError, get, post } from '../../lib/api'
@@ -55,6 +55,7 @@ import {
   type Handles,
   type NodeFacts,
 } from './useDesign'
+import { useDocHistory } from './useHistory'
 import { CanvasStage } from './CanvasStage'
 import type { Item } from '../show/types'
 
@@ -331,7 +332,10 @@ export function Design() {
   const { data: items } = useQuery<{ items: Item[] }>(keys.items())
 
   const [selected, setSelected] = useState<string | null>(null)
-  const [doc, setDoc] = useState<Record<string, unknown> | null>(null)
+  // The document, behind its undo history: `edit` for changes, `load` for
+  // opening — a load starts a new timeline (ADR 0019: undo operates on the
+  // SceneDoc, and lives where the document does).
+  const { doc, load, edit, undo, redo, canUndo, canRedo } = useDocHistory()
   const [data, setData] = useState<Record<string, string>>({})
   const [fonts, setFonts] = useState<Uint8Array[]>([])
   const [timeline, setTimeline] = useState<string | undefined>(undefined)
@@ -364,8 +368,9 @@ export function Design() {
   // IS its address in the CAS.
   const openTemplate = useCallback(async (id: string) => {
     setSelected(id)
+    setSelNode(null)
     setPublishState(null)
-    if (!id) { setDoc(null); return }
+    if (!id) { load(null); return }
     try {
       const t = await get<TemplateDetail>(keys.template(id))
       if (!t.head?.mirror_hash) {
@@ -374,33 +379,52 @@ export function Design() {
         // format would be the second implementation of the thing that must
         // never disagree (ADR 0004). Without a mirror the file is the only way
         // back in, and saying so beats an empty canvas.
-        setDoc(null)
+        load(null)
         setPublishState(
           'This template was published without its editable copy. Open the original file to edit it.',
         )
         return
       }
       const mirror = await (await fetch(`/cas/${t.head.mirror_hash}`)).json()
-      setDoc(mirror as Record<string, unknown>)
+      load(mirror as Record<string, unknown>)
       setData(Object.fromEntries(
         (t.head.manifest.fields ?? []).map((f) => [f.key, f.sample ?? '']),
       ))
     } catch (e) {
       setPublishState(e instanceof ApiError ? e.message : String(e))
     }
-  }, [])
+  }, [load])
 
   const timelines = useMemo(
     () => ((doc?.timelines as { name: string }[] | undefined) ?? []).map((t) => t.name),
     [doc],
   )
 
+  // Cmd/Ctrl+Z and Shift+Cmd/Ctrl+Z (plus Ctrl+Y), anywhere in Design except
+  // inside a text control — a field keeps its own native undo, because taking
+  // it over would make typing corrections rewind the document.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (!(e.metaKey || e.ctrlKey)) return
+      const key = e.key.toLowerCase()
+      if (key !== 'z' && key !== 'y') return
+      const t = e.target as HTMLElement | null
+      if (t && ['INPUT', 'TEXTAREA', 'SELECT'].includes(t.tagName)) return
+      e.preventDefault()
+      if (key === 'y' || e.shiftKey) redo()
+      else undo()
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [undo, redo])
+
   const onOpenFile = useCallback(async (file: File) => {
     setPublishState(null)
     try {
       const json = JSON.parse(await file.text()) as Record<string, unknown>
-      setDoc(json)
+      load(json)
       setSelected(null)
+      setSelNode(null)
       setData(Object.fromEntries(
         ((json.fields as { key: string; sample?: string }[] | undefined) ?? [])
           .map((f) => [f.key, f.sample ?? '']),
@@ -408,7 +432,7 @@ export function Design() {
     } catch (e) {
       setPublishState(`That file is not a template: ${String(e)}`)
     }
-  }, [])
+  }, [load])
 
   const onUploadFont = useCallback(async (file: File) => {
     const bytes = new Uint8Array(await file.arrayBuffer())
@@ -467,7 +491,7 @@ export function Design() {
         id: string
         doc: Record<string, unknown>
       }
-      setDoc(r.doc)
+      edit(r.doc)
       setSelNode(r.id)
     } catch (e) {
       // A failed edit is the designer's to know about, in words.
@@ -481,7 +505,7 @@ export function Design() {
     const s = session.current
     if (!s || !selNode || selNode === rootId) return
     try {
-      setDoc(JSON.parse(s.deleteNode(selNode)) as Record<string, unknown>)
+      edit(JSON.parse(s.deleteNode(selNode)) as Record<string, unknown>)
       setSelNode(null)
     } catch {
       // The node may already be gone; the selection effect clears it.
@@ -497,6 +521,12 @@ export function Design() {
           </Button>
           <Button variant="secondary" disabled={status !== 'ready'} onClick={addBox}>
             <Plus size={14} aria-hidden /> Add a box
+          </Button>
+          <Button variant="secondary" disabled={!canUndo} onClick={undo} title="Undo (Cmd+Z)">
+            <Undo2 size={14} aria-hidden /> Undo
+          </Button>
+          <Button variant="secondary" disabled={!canRedo} onClick={redo} title="Redo (Shift+Cmd+Z)">
+            <Redo2 size={14} aria-hidden /> Redo
           </Button>
           <span className="console__toolbar-note">
             Publishing is what makes a Template usable by Items. Nodes stage it by its address.
@@ -553,7 +583,7 @@ export function Design() {
               generation={generation}
               selected={selNode}
               onSelect={setSelNode}
-              onEdit={(d) => setDoc(d)}
+              onEdit={edit}
               onDelete={deleteSelected}
             />
 
@@ -649,7 +679,7 @@ export function Design() {
                     ready={status === 'ready'}
                     generation={generation}
                     selected={selNode}
-                    onEdit={(d) => setDoc(d)}
+                    onEdit={edit}
                     onDelete={selNode === rootId ? undefined : deleteSelected}
                   />
                 ) : (
