@@ -10,7 +10,9 @@
 
 use pmg_layout::TextMeasure;
 use pmg_scene::doc::FontSpec;
-use pmg_text::{quantize, FontDb, Measurer, TextEngine, Wrap, SUBPIXEL_PHASES};
+use pmg_text::{
+    build_font_db, face_info, quantize, FontDb, Measurer, TextEngine, Wrap, SUBPIXEL_PHASES,
+};
 
 /// Somewhere to get real font bytes on a developer machine or a CI runner.
 ///
@@ -565,4 +567,59 @@ fn the_gamma_curve_is_monotonic_and_pinned_at_both_ends() {
     // And it LIFTS: a half-covered pixel must end up brighter than half, which
     // is the whole correction.
     assert!(f(128) > 150, "half coverage only reached {}", f(128));
+}
+
+/// A SECOND face, distinct from [`font_bytes`]'s, so multi-font behaviour can
+/// be tested for real. Fails loudly like everything else here.
+fn second_font_bytes(first_family: &str) -> Vec<u8> {
+    const CANDIDATES: &[&str] = &[
+        "/System/Library/Fonts/Supplemental/Georgia.ttf",
+        "/System/Library/Fonts/Supplemental/Times New Roman.ttf",
+        "/System/Library/Fonts/Supplemental/Verdana.ttf",
+        "/usr/share/fonts/truetype/dejavu/DejaVuSerif.ttf",
+        "/usr/share/fonts/truetype/liberation/LiberationSerif-Regular.ttf",
+        "C:\\Windows\\Fonts\\georgia.ttf",
+        "C:\\Windows\\Fonts\\times.ttf",
+    ];
+    for p in CANDIDATES {
+        if let Ok(b) = std::fs::read(p) {
+            if let Some((family, _)) = face_info(&b) {
+                if family != first_family {
+                    return b;
+                }
+            }
+        }
+    }
+    panic!("no second distinct font found; install one of {CANDIDATES:?}")
+}
+
+#[test]
+fn two_declared_families_select_two_different_faces() {
+    // The bug this guards: registering every face under every family made
+    // `select` resolve BOTH families to whichever face landed first — every
+    // text box on air rendered in one font while the designer showed two.
+    let (a_bytes, _) = font_bytes();
+    let (a_family, a_weight) = face_info(&a_bytes).expect("first font has a name");
+    let b_bytes = second_font_bytes(&a_family);
+    let (b_family, b_weight) = face_info(&b_bytes).expect("second font has a name");
+
+    let declared = vec![
+        (a_family.clone(), a_weight),
+        (b_family.clone(), b_weight),
+        // And one family no face answers to: the fallback shim serves it.
+        ("Ghost Grotesk".to_string(), 400),
+    ];
+    let db = build_font_db(&[a_bytes, b_bytes], &declared).expect("builds");
+
+    let fa = db
+        .select(&a_family, a_weight)
+        .expect("first family resolves");
+    let fb = db
+        .select(&b_family, b_weight)
+        .expect("second family resolves");
+    assert_ne!(fa, fb, "two families must mean two faces");
+    assert!(
+        db.select("Ghost Grotesk", 400).is_some(),
+        "an unmatched declared family still renders via the fallback"
+    );
 }

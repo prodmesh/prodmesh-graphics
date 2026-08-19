@@ -71,16 +71,11 @@ impl Library for Assigned {
     }
 
     fn text_engine(&self) -> Result<pmg_text::TextEngine> {
-        let mut db = pmg_text::FontDb::new();
-        let faces: Vec<&Vec<u8>> = if self.font_bytes.is_empty() {
-            self.fallback_font.iter().collect()
+        let faces: Vec<Vec<u8>> = if self.font_bytes.is_empty() {
+            self.fallback_font.iter().cloned().collect()
         } else {
-            self.font_bytes.iter().collect()
+            self.font_bytes.clone()
         };
-        // Register each face under every family any staged template names, so
-        // the slice runs with whatever face is available. Real family matching
-        // arrives with font assets in M3; pretending to match now would hide
-        // that this is provisional.
         let mut families: Vec<(String, u16)> = self
             .templates
             .values()
@@ -91,11 +86,13 @@ impl Library for Assigned {
         if families.is_empty() {
             families.push(("Default".into(), 400));
         }
-        for bytes in faces {
-            for (family, weight) in &families {
-                db.add_face(bytes.clone(), family.clone(), *weight)?;
-            }
-        }
+        // Faces register under their OWN names, with the every-face-per-family
+        // shim only for families no face answered to (which is also how the
+        // single `--font` stand-in keeps working). The rule is SHARED with the
+        // designer (pmg-text): registering every face under every family here
+        // made two staged fonts collapse to one on air, while the preview
+        // showed both — the disagreement ADR 0001 exists to prevent.
+        let db = pmg_text::build_font_db(&faces, &families)?;
         Ok(pmg_text::TextEngine::new(db))
     }
 }

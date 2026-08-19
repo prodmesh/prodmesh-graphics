@@ -66,7 +66,6 @@ pub fn compile(doc_json: &str) -> Result<Compiled, String> {
 /// before real names existed (or one whose font is renamed) still renders
 /// rather than failing on bookkeeping.
 fn font_db(doc: &SceneDoc, faces: &[Vec<u8>]) -> Result<FontDb, String> {
-    let mut db = FontDb::new();
     let mut families: Vec<(String, u16)> = doc
         .fonts
         .iter()
@@ -93,24 +92,9 @@ fn font_db(doc: &SceneDoc, faces: &[Vec<u8>]) -> Result<FontDb, String> {
         families.push(("Default".into(), 400));
     }
 
-    let mut named: Vec<String> = Vec::new();
-    for bytes in faces {
-        if let Some((family, weight)) = pmg_text::face_info(bytes) {
-            db.add_face(bytes.clone(), family.clone(), weight)
-                .map_err(|e| format!("font: {e}"))?;
-            named.push(family);
-        }
-    }
-    for (family, weight) in &families {
-        if named.iter().any(|n| n == family) {
-            continue;
-        }
-        for bytes in faces {
-            db.add_face(bytes.clone(), family.clone(), *weight)
-                .map_err(|e| format!("font: {e}"))?;
-        }
-    }
-    Ok(db)
+    // The registration rule itself is shared with the node (pmg-text), so the
+    // preview and the output cannot disagree about which font a family means.
+    pmg_text::build_font_db(faces, &families).map_err(|e| format!("font: {e}"))
 }
 
 /// Everything expensive, done once — exactly as a node does it at arm.

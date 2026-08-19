@@ -100,6 +100,39 @@ pub fn face_info(bytes: &[u8]) -> Option<(String, u16)> {
     Some((family, font.attributes().weight().0))
 }
 
+/// Build a database from raw faces plus the families a document declares.
+///
+/// Every face registers under **its own name** first, so a document naming two
+/// real families gets two real faces — registering every face under every
+/// family (the M1 shim) made `select` resolve both to whichever face landed
+/// first, and every text box rendered in one font. The shim survives only as
+/// the FALLBACK: a declared family no face answered to gets every face, so a
+/// document older than real names (or missing its font) still renders rather
+/// than failing on bookkeeping.
+///
+/// One implementation, used by the browser designer and the playout node —
+/// two copies of this rule would be two ways for the preview and the output
+/// to disagree about which font a family means.
+pub fn build_font_db(faces: &[Vec<u8>], declared: &[(String, u16)]) -> Result<FontDb, TextError> {
+    let mut db = FontDb::new();
+    let mut named: Vec<String> = Vec::new();
+    for bytes in faces {
+        if let Some((family, weight)) = face_info(bytes) {
+            db.add_face(bytes.clone(), family.clone(), weight)?;
+            named.push(family);
+        }
+    }
+    for (family, weight) in declared {
+        if named.iter().any(|n| n == family) {
+            continue;
+        }
+        for bytes in faces {
+            db.add_face(bytes.clone(), family.clone(), *weight)?;
+        }
+    }
+    Ok(db)
+}
+
 /// Faces available to a document, loaded from bytes.
 ///
 /// **There is deliberately no system font enumeration here.** A scene may name
