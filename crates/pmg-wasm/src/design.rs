@@ -288,6 +288,22 @@ pub fn set_position(armed: &Armed, id: &str, absolute: bool) -> Result<String, S
     edited_json(doc)
 }
 
+/// Add a box under `parent` (root when None). Returns the new node's id AND
+/// the edited document — the caller selects what it just made.
+pub fn add_box(armed: &Armed, parent: Option<&str>) -> Result<(String, String), String> {
+    let mut doc = armed.doc.clone();
+    let id = interact::apply_add_box(&mut doc, parent)?;
+    Ok((id, edited_json(doc)?))
+}
+
+/// Delete a node and everything inside it. The root is refused with a
+/// sentence.
+pub fn delete_node(armed: &Armed, id: &str) -> Result<String, String> {
+    let mut doc = armed.doc.clone();
+    interact::apply_delete(&mut doc, id)?;
+    edited_json(doc)
+}
+
 /// The timeline values at a moment, for the scrubber.
 ///
 /// `None` for the timeline name means the resting state — no timeline applied,

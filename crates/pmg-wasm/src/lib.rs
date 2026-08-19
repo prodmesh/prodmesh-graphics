@@ -480,6 +480,26 @@ mod design_api {
             design::set_position(&self.armed, &id, absolute).map_err(|e| JsValue::from_str(&e))
         }
 
+        /// Add a box under `parent` (the root when null). Returns
+        /// `{ id, doc }` as JSON, the document embedded as an object — one
+        /// parse on the JS side, and the caller selects what it just made.
+        #[wasm_bindgen(js_name = addBox)]
+        pub fn add_box(&self, parent: Option<String>) -> Result<String, JsValue> {
+            let (id, doc) = design::add_box(&self.armed, parent.as_deref())
+                .map_err(|e| JsValue::from_str(&e))?;
+            let doc: serde_json::Value =
+                serde_json::from_str(&doc).map_err(|e| JsValue::from_str(&e.to_string()))?;
+            serde_json::to_string(&serde_json::json!({ "id": id, "doc": doc }))
+                .map_err(|e| JsValue::from_str(&e.to_string()))
+        }
+
+        /// Delete a node and everything inside it. The root is refused with a
+        /// sentence. Returns the edited document.
+        #[wasm_bindgen(js_name = deleteNode)]
+        pub fn delete_node(&self, id: String) -> Result<String, JsValue> {
+            design::delete_node(&self.armed, &id).map_err(|e| JsValue::from_str(&e))
+        }
+
         /// Render one frame and return raw RGBA8.
         ///
         /// Raw bytes, not a data URL: `toDataURL` may apply a colour profile,

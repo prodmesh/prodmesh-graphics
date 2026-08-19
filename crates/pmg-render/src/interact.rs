@@ -692,6 +692,81 @@ pub fn apply_position(doc: &mut SceneDoc, id: &str, absolute: bool) -> Result<()
     Ok(())
 }
 
+fn id_taken(n: &Node, id: &str) -> bool {
+    n.id == id || n.children.iter().any(|c| id_taken(c, id))
+}
+
+/// The first free id of the form `box-N`. Ids are how everything addresses a
+/// node — timelines, `visible_if`, this very editor — so a collision is not a
+/// cosmetic problem, and the counter walks until it finds air.
+fn fresh_id(doc: &SceneDoc) -> String {
+    (1..)
+        .map(|n| format!("box-{n}"))
+        .find(|id| !id_taken(&doc.root, id))
+        .expect("the integers do not run out")
+}
+
+/// Add a box under `parent` (the root when `None`) and return its id.
+///
+/// It arrives visible and grabbable — filled white, fixed 240×120 — and
+/// RELATIVE: a template is a responsive layout first, and a new box takes its
+/// place in the parent's flow like everything else. Free placement is one pin
+/// away in the inspector, which is a decision the designer makes, not one the
+/// editor smuggles in.
+pub fn apply_add_box(doc: &mut SceneDoc, parent: Option<&str>) -> Result<String, String> {
+    let id = fresh_id(doc);
+    let parent_id = parent.unwrap_or(&doc.root.id).to_string();
+    let p =
+        find_node_mut(&mut doc.root, &parent_id).ok_or_else(|| format!("no node {parent_id}"))?;
+    p.children.push(Node {
+        id: id.clone(),
+        display_name: None,
+        kind: pmg_scene::doc::NodeKind::Box,
+        layout: pmg_scene::doc::Layout {
+            width: Dimension::Px(240.0),
+            height: Dimension::Px(120.0),
+            ..Default::default()
+        },
+        transform: Default::default(),
+        style: pmg_scene::doc::Style {
+            fill: Some(pmg_scene::doc::Rgba {
+                rgba: [1.0, 1.0, 1.0, 1.0],
+            }),
+            ..Default::default()
+        },
+        clip: false,
+        visible_if: None,
+        content: None,
+        children: vec![],
+        unknown: Default::default(),
+    });
+    Ok(id)
+}
+
+fn remove_from(n: &mut Node, id: &str) -> bool {
+    if let Some(at) = n.children.iter().position(|c| c.id == id) {
+        n.children.remove(at);
+        return true;
+    }
+    n.children.iter_mut().any(|c| remove_from(c, id))
+}
+
+/// Delete a node — and everything inside it, which is what deleting a
+/// container means and the interface must say before the press.
+///
+/// The root is refused: it IS the canvas, and a template with no root is not
+/// an empty template, it is not a template.
+pub fn apply_delete(doc: &mut SceneDoc, id: &str) -> Result<(), String> {
+    if doc.root.id == id {
+        return Err("the root is the canvas itself and cannot be deleted".into());
+    }
+    if remove_from(&mut doc.root, id) {
+        Ok(())
+    } else {
+        Err(format!("no node {id}"))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -890,5 +965,53 @@ mod tests {
         assert_eq!(node_facts(&doc, "chip").unwrap().fill, None);
 
         assert!(node_facts(&doc, "ghost").is_err());
+    }
+
+    #[test]
+    fn add_and_delete_reshape_the_tree_and_the_root_survives() {
+        let mut doc: SceneDoc = serde_json::from_value(serde_json::json!({
+            "format": "pmg.scene",
+            "format_version": {"major": 1, "minor": 0},
+            "min_reader": 1,
+            "id": "t", "name": "t",
+            "canvas": {"width": 400, "height": 300},
+            "fields": [], "fonts": [], "assets": [],
+            "root": {
+                "id": "root", "kind": "box",
+                "layout": {}, "transform": {}, "style": {},
+                "children": [
+                    // An existing node already holding the first generated
+                    // name, so the counter has to walk past it.
+                    {"id": "box-1", "kind": "box", "layout": {}, "transform": {},
+                     "style": {}, "children": []}
+                ]
+            },
+            "timelines": []
+        }))
+        .expect("fixture doc parses");
+
+        // Fresh ids never collide with what is already there.
+        let a = apply_add_box(&mut doc, None).unwrap();
+        assert_eq!(a, "box-2");
+        let b = apply_add_box(&mut doc, Some(&a)).unwrap();
+        assert_eq!(b, "box-3");
+        // b landed INSIDE a, not beside it.
+        assert_eq!(doc.root.children.len(), 2);
+        let a_node = doc.root.children.iter().find(|c| c.id == a).unwrap();
+        assert_eq!(a_node.children.len(), 1);
+
+        // A new box arrives visible and grabbable: filled, fixed size.
+        assert!(a_node.style.fill.is_some());
+        assert_eq!(a_node.layout.width, Dimension::Px(240.0));
+
+        // Deleting a container takes its contents with it.
+        apply_delete(&mut doc, &a).unwrap();
+        assert_eq!(doc.root.children.len(), 1);
+        assert!(node_facts(&doc, &b).is_err());
+
+        // The root is the canvas; deleting it is refused with a sentence.
+        let err = apply_delete(&mut doc, "root").unwrap_err();
+        assert!(err.contains("root"));
+        assert!(apply_delete(&mut doc, "ghost").is_err());
     }
 }

@@ -59,6 +59,7 @@ export function CanvasStage({
   selected,
   onSelect,
   onEdit,
+  onDelete,
 }: {
   canvasRef: React.RefObject<HTMLCanvasElement | null>
   session: React.RefObject<DesignSession | null>
@@ -75,6 +76,9 @@ export function CanvasStage({
   onSelect: (id: string | null) => void
   /** A finished edit: the new document, parsed. Re-arms upstream. */
   onEdit: (doc: Record<string, unknown>) => void
+  /** Delete the selection. The owner decides what is deletable (never the
+   *  root), so this fires unconditionally on the key. */
+  onDelete?: () => void
 }) {
   const wrapRef = useRef<HTMLDivElement | null>(null)
   const svgRef = useRef<SVGSVGElement | null>(null)
@@ -112,6 +116,10 @@ export function CanvasStage({
   // document, a re-arm, a different selection. A node that no longer exists
   // (deleted, or collapsed by visible_if) clears the selection rather than
   // drawing chrome around nothing.
+  // A handles miss remembered as (generation, id), so a missing node is only
+  // deselected once a NEWER session has confirmed it is really gone.
+  const missed = useRef<{ gen: number; id: string } | null>(null)
+
   useEffect(() => {
     const s = session.current
     if (!ready || !s || !selected) {
@@ -120,9 +128,22 @@ export function CanvasStage({
     }
     try {
       setHandles(JSON.parse(s.handles(selected)) as Handles)
+      missed.current = null
     } catch {
+      // The session does not know this node — which happens for one commit
+      // whenever the selection is a node that was JUST added: the effect runs
+      // against the old session before the re-arm lands. Clearing the
+      // selection here threw away every freshly-added node's selection, so a
+      // first miss only clears the chrome. A second miss from a NEWER session
+      // means the node is genuinely gone (deleted, or collapsed by
+      // visible_if), and then the selection goes too.
       setHandles(null)
-      onSelect(null)
+      if (missed.current && missed.current.id === selected && missed.current.gen < generation) {
+        missed.current = null
+        onSelect(null)
+      } else {
+        missed.current = { gen: generation, id: selected }
+      }
     }
   }, [ready, generation, selected, session, onSelect])
 
@@ -214,6 +235,11 @@ export function CanvasStage({
         return
       }
       if (!selected) return
+      if (e.key === 'Delete' || e.key === 'Backspace') {
+        e.preventDefault()
+        onDelete?.()
+        return
+      }
       const step = e.shiftKey ? 10 : 1
       const d: Record<string, [number, number]> = {
         ArrowLeft: [-step, 0],
@@ -230,7 +256,7 @@ export function CanvasStage({
         // The node may be gone; the selection effect will clear it.
       }
     },
-    [selected, dragging, session, onSelect, onEdit],
+    [selected, dragging, session, onSelect, onEdit, onDelete],
   )
 
   const d = ready ? dims() : null

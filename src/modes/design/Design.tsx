@@ -32,7 +32,7 @@
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { AlertTriangle, FileUp, Upload } from 'lucide-react'
+import { AlertTriangle, FileUp, Plus, Upload } from 'lucide-react'
 import { useQuery, invalidate } from '../../lib/useQuery'
 import { keys } from '../../lib/keys'
 import { ApiError, get, post } from '../../lib/api'
@@ -98,6 +98,7 @@ function SelectedNode({
   generation,
   selected,
   onEdit,
+  onDelete,
 }: {
   session: React.RefObject<DesignSession | null>
   ready: boolean
@@ -105,6 +106,8 @@ function SelectedNode({
   generation: number
   selected: string
   onEdit: (doc: Record<string, unknown>) => void
+  /** Absent for the root: the root is the canvas, not a thing to delete. */
+  onDelete?: () => void
 }) {
   const [bbox, setBbox] = useState<[number, number, number, number] | null>(null)
   const [facts, setFacts] = useState<NodeFacts | null>(null)
@@ -300,6 +303,15 @@ function SelectedNode({
             place, so its neighbours move with it — that is the layout being responsive,
             not the editor being wrong.
           </p>
+
+          {onDelete ? (
+            <>
+              <Button variant="secondary" block onClick={onDelete}>
+                Delete this box — and everything inside it
+              </Button>
+              <p className="design-console__dim">Also on the keyboard: Delete, with the canvas focused.</p>
+            </>
+          ) : null}
         </>
       ) : null}
     </div>
@@ -443,6 +455,38 @@ export function Design() {
   const docId = doc ? String(doc.id ?? '') : null
   const usedBy = docId ? (items?.items ?? []).filter((i) => i.template_id === docId).length : 0
   const published = docId ? list.some((t) => t.id === docId && t.head_rev) : false
+  const rootId = doc ? ((doc.root as { id?: string } | undefined)?.id ?? null) : null
+
+  /** Add a box — into the selection when there is one, else the canvas root —
+   *  and select what was just made, so the next act is styling it. */
+  const addBox = useCallback(() => {
+    const s = session.current
+    if (!s) return
+    try {
+      const r = JSON.parse(s.addBox(selNode ?? undefined)) as {
+        id: string
+        doc: Record<string, unknown>
+      }
+      setDoc(r.doc)
+      setSelNode(r.id)
+    } catch (e) {
+      // A failed edit is the designer's to know about, in words.
+      setPublishState(`Could not add a box: ${e instanceof Error ? e.message : String(e)}`)
+    }
+  }, [session, selNode])
+
+  /** Delete the selection and everything inside it. The root is the canvas
+   *  and is never offered for deletion. */
+  const deleteSelected = useCallback(() => {
+    const s = session.current
+    if (!s || !selNode || selNode === rootId) return
+    try {
+      setDoc(JSON.parse(s.deleteNode(selNode)) as Record<string, unknown>)
+      setSelNode(null)
+    } catch {
+      // The node may already be gone; the selection effect clears it.
+    }
+  }, [session, selNode, rootId])
 
   return (
     <div className="design-console">
@@ -450,6 +494,9 @@ export function Design() {
         <div className="console__toolbar-group">
           <Button disabled={!doc} onClick={() => void publish()}>
             <Upload size={14} aria-hidden /> Publish
+          </Button>
+          <Button variant="secondary" disabled={status !== 'ready'} onClick={addBox}>
+            <Plus size={14} aria-hidden /> Add a box
           </Button>
           <span className="console__toolbar-note">
             Publishing is what makes a Template usable by Items. Nodes stage it by its address.
@@ -507,6 +554,7 @@ export function Design() {
               selected={selNode}
               onSelect={setSelNode}
               onEdit={(d) => setDoc(d)}
+              onDelete={deleteSelected}
             />
 
             {status === 'idle' ? (
@@ -602,6 +650,7 @@ export function Design() {
                     generation={generation}
                     selected={selNode}
                     onEdit={(d) => setDoc(d)}
+                    onDelete={selNode === rootId ? undefined : deleteSelected}
                   />
                 ) : (
                   <p className="design-console__dim">
