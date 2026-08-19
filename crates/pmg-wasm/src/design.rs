@@ -304,6 +304,64 @@ pub fn delete_node(armed: &Armed, id: &str) -> Result<String, String> {
     edited_json(doc)
 }
 
+// -- Timeline edits ---------------------------------------------------------
+
+pub fn add_timeline(armed: &Armed, name: &str, duration_ms: f32) -> Result<String, String> {
+    let mut doc = armed.doc.clone();
+    interact::apply_add_timeline(&mut doc, name, duration_ms)?;
+    edited_json(doc)
+}
+
+pub fn delete_timeline(armed: &Armed, name: &str) -> Result<String, String> {
+    let mut doc = armed.doc.clone();
+    interact::apply_delete_timeline(&mut doc, name)?;
+    edited_json(doc)
+}
+
+pub fn set_timeline_duration(armed: &Armed, name: &str, ms: f32) -> Result<String, String> {
+    let mut doc = armed.doc.clone();
+    interact::apply_set_timeline_duration(&mut doc, name, ms)?;
+    edited_json(doc)
+}
+
+/// Set a key. `ease_json` is a serde-encoded `pmg_anim::Ease` — "linear",
+/// `{"cubic":[x1,y1,x2,y2]}` or `{"steps":n}` — so the wire speaks the same
+/// names the document does.
+pub fn set_key(
+    armed: &Armed,
+    timeline: &str,
+    node_id: &str,
+    prop: &str,
+    t: f32,
+    v: f32,
+    ease_json: &str,
+) -> Result<String, String> {
+    let ease: pmg_anim::Ease =
+        serde_json::from_str(ease_json).map_err(|e| format!("not an easing: {e}"))?;
+    let mut doc = armed.doc.clone();
+    interact::apply_set_key(&mut doc, timeline, node_id, prop, t, v, ease)?;
+    edited_json(doc)
+}
+
+pub fn delete_key(
+    armed: &Armed,
+    timeline: &str,
+    node_id: &str,
+    prop: &str,
+    t: f32,
+) -> Result<String, String> {
+    let mut doc = armed.doc.clone();
+    interact::apply_delete_key(&mut doc, timeline, node_id, prop, t)?;
+    edited_json(doc)
+}
+
+/// Every track's evaluated value at `t_ms`, as JSON `{ "node/prop": value }`.
+/// This is THE evaluation — `pmg_anim` through `timeline::evaluate` — so the
+/// editor's "value here" and the renderer's pixels cannot disagree.
+pub fn values_at_json(armed: &Armed, timeline: Option<&str>, t_ms: f32) -> Result<String, String> {
+    serde_json::to_string(&values_at(armed, timeline, t_ms)).map_err(|e| e.to_string())
+}
+
 /// The timeline values at a moment, for the scrubber.
 ///
 /// `None` for the timeline name means the resting state — no timeline applied,

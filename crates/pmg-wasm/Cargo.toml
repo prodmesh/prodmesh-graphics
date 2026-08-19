@@ -14,6 +14,7 @@ pmg-render = { path = "../pmg-render" }
 pmg-scene = { path = "../pmg-scene" }
 pmg-layout = { path = "../pmg-layout" }
 pmg-text = { path = "../pmg-text" }
+pmg-anim = { path = "../pmg-anim" }
 serde = { workspace = true }
 serde_json = { workspace = true }
 wgpu = { workspace = true }

@@ -692,6 +692,139 @@ pub fn apply_position(doc: &mut SceneDoc, id: &str, absolute: bool) -> Result<()
     Ok(())
 }
 
+// ---------------------------------------------------------------------------
+// Timeline edits
+// ---------------------------------------------------------------------------
+
+/// The properties a track may animate — exactly the set `apply_tracks`
+/// honours. A key on anything else would author silence: the renderer drops
+/// unknown targets, so the whitelist is enforced at the point of the edit
+/// rather than discovered as a key that never moves anything. `layout.*` is
+/// deliberately absent (§3.2: animating layout relayouts every frame).
+pub const ANIMATABLE: &[&str] = &[
+    "transform.translate.x",
+    "transform.translate.y",
+    "transform.rotate",
+    "transform.scale.x",
+    "transform.scale.y",
+    "style.opacity",
+];
+
+fn timeline_mut<'a>(
+    doc: &'a mut SceneDoc,
+    name: &str,
+) -> Result<&'a mut pmg_scene::doc::Timeline, String> {
+    doc.timelines
+        .iter_mut()
+        .find(|t| t.name == name)
+        .ok_or_else(|| format!("no timeline named {name}"))
+}
+
+pub fn apply_add_timeline(doc: &mut SceneDoc, name: &str, duration_ms: f32) -> Result<(), String> {
+    let name = name.trim();
+    if name.is_empty() {
+        return Err("a timeline needs a name".into());
+    }
+    if doc.timelines.iter().any(|t| t.name == name) {
+        return Err(format!("there is already a timeline named {name}"));
+    }
+    doc.timelines.push(pmg_scene::doc::Timeline {
+        name: name.into(),
+        duration_ms: duration_ms.max(1.0),
+        on_complete: Default::default(),
+        looping: false,
+        tracks: vec![],
+    });
+    Ok(())
+}
+
+pub fn apply_delete_timeline(doc: &mut SceneDoc, name: &str) -> Result<(), String> {
+    let before = doc.timelines.len();
+    doc.timelines.retain(|t| t.name != name);
+    if doc.timelines.len() == before {
+        return Err(format!("no timeline named {name}"));
+    }
+    Ok(())
+}
+
+pub fn apply_set_timeline_duration(
+    doc: &mut SceneDoc,
+    name: &str,
+    duration_ms: f32,
+) -> Result<(), String> {
+    timeline_mut(doc, name)?.duration_ms = duration_ms.max(1.0);
+    Ok(())
+}
+
+/// Two keys closer than this are the same key: editing a key's value must
+/// replace it, not stack a twin the evaluator then steps through.
+const KEY_EPSILON_MS: f32 = 0.5;
+
+/// Set (insert or replace) a key. Keys stay sorted by time — `pmg_anim::eval`
+/// requires it, and an editor that let them drift out of order would author
+/// timelines that evaluate wrong with nothing on screen saying why.
+pub fn apply_set_key(
+    doc: &mut SceneDoc,
+    timeline: &str,
+    node_id: &str,
+    prop: &str,
+    t: f32,
+    v: f32,
+    ease: pmg_anim::Ease,
+) -> Result<(), String> {
+    if !ANIMATABLE.contains(&prop) {
+        return Err(format!(
+            "{prop} cannot be animated. Animate transforms and opacity; layout is solved once, at arm"
+        ));
+    }
+    if find_node(&doc.root, node_id).is_none() {
+        return Err(format!("no node {node_id}"));
+    }
+    let t = t.max(0.0);
+    let target = format!("{node_id}/{prop}");
+    let tl = timeline_mut(doc, timeline)?;
+    let track = match tl.tracks.iter_mut().find(|tr| tr.target == target) {
+        Some(tr) => tr,
+        None => {
+            tl.tracks.push(pmg_scene::doc::Track {
+                target,
+                blend: Default::default(),
+                keys: vec![],
+            });
+            tl.tracks.last_mut().expect("just pushed")
+        }
+    };
+    track.keys.retain(|k| (k.t - t).abs() > KEY_EPSILON_MS);
+    let at = track.keys.partition_point(|k| k.t < t);
+    track.keys.insert(at, pmg_anim::Key { t, v, ease });
+    Ok(())
+}
+
+/// Delete the key at `t`. An emptied track goes with it — a track with no
+/// keys is not a quieter track, it is clutter the evaluator skips.
+pub fn apply_delete_key(
+    doc: &mut SceneDoc,
+    timeline: &str,
+    node_id: &str,
+    prop: &str,
+    t: f32,
+) -> Result<(), String> {
+    let target = format!("{node_id}/{prop}");
+    let tl = timeline_mut(doc, timeline)?;
+    let track = tl
+        .tracks
+        .iter_mut()
+        .find(|tr| tr.target == target)
+        .ok_or_else(|| format!("no track for {target}"))?;
+    let before = track.keys.len();
+    track.keys.retain(|k| (k.t - t).abs() > KEY_EPSILON_MS);
+    if track.keys.len() == before {
+        return Err(format!("no key at {t} ms on {target}"));
+    }
+    tl.tracks.retain(|tr| !tr.keys.is_empty());
+    Ok(())
+}
+
 fn id_taken(n: &Node, id: &str) -> bool {
     n.id == id || n.children.iter().any(|c| id_taken(c, id))
 }
@@ -1013,5 +1146,99 @@ mod tests {
         let err = apply_delete(&mut doc, "root").unwrap_err();
         assert!(err.contains("root"));
         assert!(apply_delete(&mut doc, "ghost").is_err());
+    }
+
+    #[test]
+    fn timeline_edits_keep_keys_sorted_and_honest() {
+        let mut doc: SceneDoc = serde_json::from_value(serde_json::json!({
+            "format": "pmg.scene",
+            "format_version": {"major": 1, "minor": 0},
+            "min_reader": 1,
+            "id": "t", "name": "t",
+            "canvas": {"width": 400, "height": 300},
+            "fields": [], "fonts": [], "assets": [],
+            "root": {
+                "id": "root", "kind": "box", "layout": {}, "transform": {}, "style": {},
+                "children": [{"id": "band", "kind": "box",
+                    "layout": {"width": {"Px": 100.0}, "height": {"Px": 40.0}},
+                    "transform": {}, "style": {"fill": {"rgba": [1.0,1.0,1.0,1.0]}}, "children": []}]
+            },
+            "timelines": []
+        }))
+        .expect("fixture doc parses");
+
+        apply_add_timeline(&mut doc, "In", 700.0).unwrap();
+        assert!(
+            apply_add_timeline(&mut doc, "In", 500.0).is_err(),
+            "names are unique"
+        );
+        assert!(
+            apply_add_timeline(&mut doc, "  ", 500.0).is_err(),
+            "a name is required"
+        );
+
+        // Keys inserted out of order come out sorted, because eval requires it.
+        let ease = pmg_anim::Ease::Cubic([0.16, 1.0, 0.3, 1.0]);
+        apply_set_key(
+            &mut doc,
+            "In",
+            "band",
+            "transform.translate.x",
+            700.0,
+            0.0,
+            ease,
+        )
+        .unwrap();
+        apply_set_key(
+            &mut doc,
+            "In",
+            "band",
+            "transform.translate.x",
+            0.0,
+            -900.0,
+            ease,
+        )
+        .unwrap();
+        let tl = doc.timelines.iter().find(|t| t.name == "In").unwrap();
+        let track = &tl.tracks[0];
+        assert_eq!(track.target, "band/transform.translate.x");
+        assert_eq!(
+            track.keys.iter().map(|k| k.t).collect::<Vec<_>>(),
+            vec![0.0, 700.0]
+        );
+
+        // Setting a key AT an existing time replaces it — editing a value must
+        // not stack a twin the evaluator then steps through.
+        apply_set_key(
+            &mut doc,
+            "In",
+            "band",
+            "transform.translate.x",
+            0.0,
+            -500.0,
+            ease,
+        )
+        .unwrap();
+        let tl = doc.timelines.iter().find(|t| t.name == "In").unwrap();
+        assert_eq!(tl.tracks[0].keys.len(), 2);
+        assert_eq!(tl.tracks[0].keys[0].v, -500.0);
+
+        // The whitelist: layout cannot be animated, and the sentence says why.
+        let err =
+            apply_set_key(&mut doc, "In", "band", "layout.width", 0.0, 1.0, ease).unwrap_err();
+        assert!(err.contains("layout"));
+        assert!(apply_set_key(&mut doc, "In", "ghost", "style.opacity", 0.0, 1.0, ease).is_err());
+
+        // Deleting the last key removes the track; deleting a missing key says so.
+        apply_delete_key(&mut doc, "In", "band", "transform.translate.x", 0.0).unwrap();
+        apply_delete_key(&mut doc, "In", "band", "transform.translate.x", 700.0).unwrap();
+        let tl = doc.timelines.iter().find(|t| t.name == "In").unwrap();
+        assert!(tl.tracks.is_empty());
+        assert!(apply_delete_key(&mut doc, "In", "band", "transform.translate.x", 0.0).is_err());
+
+        apply_set_timeline_duration(&mut doc, "In", 1200.0).unwrap();
+        assert_eq!(doc.timelines[0].duration_ms, 1200.0);
+        apply_delete_timeline(&mut doc, "In").unwrap();
+        assert!(apply_delete_timeline(&mut doc, "In").is_err());
     }
 }

@@ -500,6 +500,59 @@ mod design_api {
             design::delete_node(&self.armed, &id).map_err(|e| JsValue::from_str(&e))
         }
 
+        // -- Timeline edits, each returning the edited document --------------
+
+        #[wasm_bindgen(js_name = addTimeline)]
+        pub fn add_timeline(&self, name: String, duration_ms: f32) -> Result<String, JsValue> {
+            design::add_timeline(&self.armed, &name, duration_ms).map_err(|e| JsValue::from_str(&e))
+        }
+
+        #[wasm_bindgen(js_name = deleteTimeline)]
+        pub fn delete_timeline(&self, name: String) -> Result<String, JsValue> {
+            design::delete_timeline(&self.armed, &name).map_err(|e| JsValue::from_str(&e))
+        }
+
+        #[wasm_bindgen(js_name = setTimelineDuration)]
+        pub fn set_timeline_duration(&self, name: String, ms: f32) -> Result<String, JsValue> {
+            design::set_timeline_duration(&self.armed, &name, ms).map_err(|e| JsValue::from_str(&e))
+        }
+
+        /// Set a key. `ease` is serde-encoded `pmg_anim::Ease`: `"linear"`,
+        /// `{"cubic":[x1,y1,x2,y2]}` or `{"steps":n}`.
+        #[wasm_bindgen(js_name = setKey)]
+        pub fn set_key(
+            &self,
+            timeline: String,
+            node_id: String,
+            prop: String,
+            t: f32,
+            v: f32,
+            ease: String,
+        ) -> Result<String, JsValue> {
+            design::set_key(&self.armed, &timeline, &node_id, &prop, t, v, &ease)
+                .map_err(|e| JsValue::from_str(&e))
+        }
+
+        #[wasm_bindgen(js_name = deleteKey)]
+        pub fn delete_key(
+            &self,
+            timeline: String,
+            node_id: String,
+            prop: String,
+            t: f32,
+        ) -> Result<String, JsValue> {
+            design::delete_key(&self.armed, &timeline, &node_id, &prop, t)
+                .map_err(|e| JsValue::from_str(&e))
+        }
+
+        /// Every track's evaluated value at a moment, as JSON
+        /// `{ "node/prop": value }` — the same evaluation the pixels use.
+        #[wasm_bindgen(js_name = valuesAt)]
+        pub fn values_at(&self, timeline: Option<String>, t_ms: f32) -> Result<String, JsValue> {
+            design::values_at_json(&self.armed, timeline.as_deref(), t_ms)
+                .map_err(|e| JsValue::from_str(&e))
+        }
+
         /// Render one frame and return raw RGBA8.
         ///
         /// Raw bytes, not a data URL: `toDataURL` may apply a colour profile,

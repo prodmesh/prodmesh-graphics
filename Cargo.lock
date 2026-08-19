@@ -1196,6 +1196,7 @@ version = "0.1.0"
 dependencies = [
  "console_error_panic_hook",
  "js-sys",
+ "pmg-anim",
  "pmg-layout",
  "pmg-render",
  "pmg-scene",

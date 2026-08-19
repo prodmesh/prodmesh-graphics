@@ -31,7 +31,7 @@
  * the tests can actually cover.
  */
 
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { AlertTriangle, FileUp, Plus, Redo2, Undo2, Upload } from 'lucide-react'
 import { useQuery, invalidate } from '../../lib/useQuery'
 import { keys } from '../../lib/keys'
@@ -56,6 +56,7 @@ import {
   type NodeFacts,
 } from './useDesign'
 import { useDocHistory } from './useHistory'
+import { TimelinePanel } from './TimelinePanel'
 import { CanvasStage } from './CanvasStage'
 import type { Item } from '../show/types'
 
@@ -395,10 +396,15 @@ export function Design() {
     }
   }, [load])
 
-  const timelines = useMemo(
-    () => ((doc?.timelines as { name: string }[] | undefined) ?? []).map((t) => t.name),
-    [doc],
-  )
+  // After every re-arm, repaint the moment the designer is LOOKING AT — a key
+  // edit while scrubbed to 300 ms must update that frame, not snap the canvas
+  // back to rest. (The hook paints rest after arming; paint() queues the
+  // latest request behind an in-flight one, so this wins.)
+  useEffect(() => {
+    if (status === 'ready' && (timeline !== undefined || tMs !== 0)) void paint(timeline, tMs)
+    // Deliberately keyed on re-arms alone.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [generation])
 
   // Cmd/Ctrl+Z and Shift+Cmd/Ctrl+Z (plus Ctrl+Y), anywhere in Design except
   // inside a text control — a field keeps its own native undo, because taking
@@ -612,40 +618,25 @@ export function Design() {
             ) : null}
           </div>
 
-          {timelines.length > 0 ? (
-            <div className="design-console__timeline">
-              <GroupHeader label="Timeline" trailing={`${tMs} ms`} />
-              <div className="design-console__scrub">
-                <select
-                  value={timeline ?? ''}
-                  onChange={(e) => {
-                    const v = e.target.value || undefined
-                    setTimeline(v)
-                    void paint(v, tMs)
-                  }}
-                  aria-label="Timeline"
-                >
-                  <option value="">At rest</option>
-                  {timelines.map((t) => (
-                    <option key={t} value={t}>{t}</option>
-                  ))}
-                </select>
-                <input
-                  type="range"
-                  min={0}
-                  max={2000}
-                  step={1}
-                  value={tMs}
-                  aria-label="Time"
-                  onChange={(e) => {
-                    const v = Number(e.target.value)
-                    setTMs(v)
-                    void paint(timeline, v)
-                  }}
-                />
-              </div>
-            </div>
-          ) : null}
+          <div className="design-console__timeline">
+            <TimelinePanel
+              session={session}
+              ready={status === 'ready'}
+              doc={doc}
+              selected={selNode}
+              timeline={timeline}
+              tMs={tMs}
+              onPickTimeline={(v) => {
+                setTimeline(v)
+                void paint(v, tMs)
+              }}
+              onScrub={(t) => {
+                setTMs(t)
+                void paint(timeline, t)
+              }}
+              onEdit={edit}
+            />
+          </div>
         </div>
 
         <Panel width="var(--pm-inspector-width)" label="Template and publish">

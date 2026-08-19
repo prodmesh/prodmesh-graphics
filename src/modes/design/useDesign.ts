@@ -54,6 +54,13 @@ export type Handles = {
 
 export type Guide = { axis: 0 | 1; at: number }
 
+/** serde-encoded `pmg_anim::Ease` — the wire speaks the document's names. */
+export type Ease = 'linear' | { cubic: [number, number, number, number] } | { steps: number }
+
+export type DocKey = { t: number; v: number; ease?: Ease }
+export type DocTrack = { target: string; keys: DocKey[] }
+export type DocTimeline = { name: string; duration_ms: number; tracks: DocTrack[] }
+
 /** The AUTHORED facts for one node — what the inspector edits, as distinct
  *  from the solved geometry `Handles` reports. Straight from the document. */
 export type NodeFacts = {
@@ -120,14 +127,21 @@ export function useDesignCanvas(
    */
   const [generation, setGeneration] = useState(0)
 
+  // The view a paint request carries while another is in flight. Latest wins:
+  // a scrub fires far faster than a GPU round trip, and rendering every
+  // intermediate position would trail the pointer — but dropping the LAST
+  // request entirely would leave the canvas showing a stale frame after the
+  // flood ends, which is worse.
+  const queued = useRef<[string | undefined, number] | null>(null)
+
   const paint = useCallback(async (timeline: string | undefined, tMs: number) => {
     const s = session.current
     const canvas = canvasRef.current
     if (!s || !canvas) return
-    // Drop a frame rather than queue one. A scrub fires far faster than a GPU
-    // round trip, and a queue would render every intermediate position long
-    // after the pointer has moved on.
-    if (painting.current) return
+    if (painting.current) {
+      queued.current = [timeline, tMs]
+      return
+    }
     painting.current = true
     try {
       const rgba = await s.renderFrame(timeline, tMs)
@@ -141,6 +155,11 @@ export function useDesignCanvas(
       setProblem(String(e))
     } finally {
       painting.current = false
+      const next = queued.current
+      if (next) {
+        queued.current = null
+        void paint(next[0], next[1])
+      }
     }
   }, [canvasRef])
 
@@ -168,6 +187,15 @@ export function useDesignCanvas(
 
         let s = session.current
         if (s && sessionFonts.current === fonts) {
+          // A paint holds a shared borrow of the session across its GPU
+          // readback await, and rearm needs the exclusive one — wasm-bindgen
+          // enforces Rust's aliasing rules straight across the FFI boundary,
+          // and calling in anyway is the "recursive use of an object" panic.
+          // So the re-arm politely queues behind the frame in flight.
+          for (let i = 0; i < 200 && painting.current; i++) {
+            await new Promise((r) => setTimeout(r, 10))
+          }
+          if (cancelled) return
           // Re-arm in place. Rust arms the edited document FIRST and swaps
           // only on success, so a document that no longer solves leaves the
           // old pixels up with the error as a sentence — never a blank
