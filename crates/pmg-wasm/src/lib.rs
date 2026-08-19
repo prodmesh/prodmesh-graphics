@@ -588,6 +588,63 @@ mod design_api {
             design::set_text_align(&self.armed, &id, &align).map_err(|e| JsValue::from_str(&e))
         }
 
+        /// Move a key to a new time, carrying its value and easing.
+        #[wasm_bindgen(js_name = retimeKey)]
+        pub fn retime_key(
+            &self,
+            timeline: String,
+            node_id: String,
+            prop: String,
+            from: f32,
+            to: f32,
+        ) -> Result<String, JsValue> {
+            design::retime_key(&self.armed, &timeline, &node_id, &prop, from, to)
+                .map_err(|e| JsValue::from_str(&e))
+        }
+
+        /// Clip a node's contents to its bounds — the overflow mask.
+        #[wasm_bindgen(js_name = setClip)]
+        pub fn set_clip(&self, id: String, clip: bool) -> Result<String, JsValue> {
+            design::set_clip(&self.armed, &id, clip).map_err(|e| JsValue::from_str(&e))
+        }
+
+        /// One axis, fixed px or content-hugging (pass null for px).
+        #[wasm_bindgen(js_name = setDimension)]
+        pub fn set_dimension(
+            &self,
+            id: String,
+            axis: String,
+            px: Option<f32>,
+        ) -> Result<String, JsValue> {
+            design::set_dimension(&self.armed, &id, &axis, px).map_err(|e| JsValue::from_str(&e))
+        }
+
+        /// Declare a field. Label and sample start as the key.
+        #[wasm_bindgen(js_name = addField)]
+        pub fn add_field(&self, key: String) -> Result<String, JsValue> {
+            design::add_field(&self.armed, &key).map_err(|e| JsValue::from_str(&e))
+        }
+
+        /// Edit a field's label, sample, and required flag — never its key.
+        #[wasm_bindgen(js_name = updateField)]
+        pub fn update_field(
+            &self,
+            key: String,
+            label: String,
+            sample: Option<String>,
+            required: bool,
+        ) -> Result<String, JsValue> {
+            design::update_field(&self.armed, &key, &label, sample.as_deref(), required)
+                .map_err(|e| JsValue::from_str(&e))
+        }
+
+        /// Remove a field — refused with the using nodes named while anything
+        /// still references it.
+        #[wasm_bindgen(js_name = deleteField)]
+        pub fn delete_field(&self, key: String) -> Result<String, JsValue> {
+            design::delete_field(&self.armed, &key).map_err(|e| JsValue::from_str(&e))
+        }
+
         /// Add an image node under `parent` (the root when null), showing the
         /// asset `hash` names. Returns `{ id, doc }` like `addBox`.
         #[wasm_bindgen(js_name = addImage)]

@@ -636,6 +636,12 @@ pub struct NodeFacts {
     /// flex flow.
     pub absolute: bool,
     pub kind: String,
+    /// Contents masked to this node's bounds.
+    pub clip: bool,
+    /// How each axis is authored: "px" (fixed) or "content" (hugs what is
+    /// inside). The SOLVED size is the handles' answer; this is the setting.
+    pub width_mode: String,
+    pub height_mode: String,
     /// Present exactly when the node is text.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub text: Option<TextFacts>,
@@ -701,6 +707,10 @@ pub fn node_facts(doc: &SceneDoc, id: &str) -> Result<NodeFacts, String> {
         }),
         _ => None,
     };
+    let mode = |d: &Dimension| match d {
+        Dimension::Px(_) => "px".to_string(),
+        _ => "content".to_string(),
+    };
     Ok(NodeFacts {
         id: n.id.clone(),
         fill: n.style.fill.map(|c| c.rgba),
@@ -708,6 +718,9 @@ pub fn node_facts(doc: &SceneDoc, id: &str) -> Result<NodeFacts, String> {
         opacity: n.style.opacity,
         absolute: n.layout.position == Position::Absolute,
         kind: format!("{:?}", n.kind).to_lowercase(),
+        clip: n.clip,
+        width_mode: mode(&n.layout.width),
+        height_mode: mode(&n.layout.height),
         text,
         image,
     })
@@ -1000,6 +1013,169 @@ pub fn apply_add_text(doc: &mut SceneDoc, parent: Option<&str>) -> Result<String
         unknown: Default::default(),
     });
     Ok(id)
+}
+
+/// Move a key to a new time, in ONE document operation.
+///
+/// Not delete-then-set composed by the caller: session editors each clone the
+/// armed document, so two calls in one gesture would both edit the same base
+/// and the second would silently discard the first — the retime would
+/// DUPLICATE the key instead of moving it. One operation, one truth.
+pub fn apply_retime_key(
+    doc: &mut SceneDoc,
+    timeline: &str,
+    node_id: &str,
+    prop: &str,
+    from: f32,
+    to: f32,
+) -> Result<(), String> {
+    // Read the key's value and ease first, so the move carries them.
+    let target = format!("{node_id}/{prop}");
+    let (v, ease) = {
+        let tl = doc
+            .timelines
+            .iter()
+            .find(|t| t.name == timeline)
+            .ok_or_else(|| format!("no timeline {timeline}"))?;
+        let track = tl
+            .tracks
+            .iter()
+            .find(|tr| tr.target == target)
+            .ok_or_else(|| format!("no {prop} keys on {node_id} in {timeline}"))?;
+        let key = track
+            .keys
+            .iter()
+            .find(|k| (k.t - from).abs() <= KEY_EPSILON_MS)
+            .ok_or_else(|| format!("no key at {from} ms"))?;
+        (key.v, key.ease)
+    };
+    apply_delete_key(doc, timeline, node_id, prop, from)?;
+    apply_set_key(doc, timeline, node_id, prop, to, v, ease)
+}
+
+/// Clip a node's contents to its bounds — the mask that makes text "pop out"
+/// of a band by NOT being visible until it enters. The scissor is axis-aligned
+/// (the renderer's documented limit): a rotated container clips to its
+/// axis-aligned bounds, not its rotated silhouette.
+pub fn apply_set_clip(doc: &mut SceneDoc, id: &str, clip: bool) -> Result<(), String> {
+    let n = find_node_mut(&mut doc.root, id).ok_or_else(|| format!("no node {id}"))?;
+    n.clip = clip;
+    Ok(())
+}
+
+/// Set one axis to a fixed size or to content sizing.
+///
+/// `None` means **fit content**: the axis hugs what is inside — a band that
+/// grows with its name field is `width: Content` plus padding, which is the
+/// responsive premise (ADR 0005) doing its job. Per axis, so a lower third can
+/// hug its text horizontally while holding the height the design fixed.
+pub fn apply_set_dimension(
+    doc: &mut SceneDoc,
+    id: &str,
+    axis: &str,
+    px: Option<f32>,
+) -> Result<(), String> {
+    let n = find_node_mut(&mut doc.root, id).ok_or_else(|| format!("no node {id}"))?;
+    let dim = match px {
+        Some(v) => Dimension::Px(v.max(1.0)),
+        None => Dimension::Content,
+    };
+    match axis {
+        "width" => n.layout.width = dim,
+        "height" => n.layout.height = dim,
+        other => return Err(format!("no axis named {other}")),
+    }
+    Ok(())
+}
+
+/// Every node whose content or visibility references `key`, by id — the
+/// answer a refusal needs in its sentence.
+fn field_users(n: &Node, key: &str, out: &mut Vec<String>) {
+    let uses = match &n.content {
+        Some(pmg_scene::doc::Content::Text { binding, .. }) => {
+            pmg_scene::bind::referenced_fields(&binding.expr)
+                .iter()
+                .any(|k| k.as_str() == key)
+        }
+        _ => false,
+    } || n.visible_if.as_ref().is_some_and(|v| v.field == key);
+    if uses {
+        out.push(n.id.clone());
+    }
+    for c in &n.children {
+        field_users(c, key, out);
+    }
+}
+
+/// Declare a field. The KEY is the contract — Items bind by it, bindings
+/// reference it — so it must be new; label and sample start as the key and are
+/// the editable half.
+pub fn apply_add_field(doc: &mut SceneDoc, key: &str) -> Result<(), String> {
+    use pmg_scene::doc::{Field, FieldType};
+    let key = key.trim();
+    if key.is_empty() {
+        return Err("a field needs a key".into());
+    }
+    if doc.fields.iter().any(|f| f.key == key) {
+        return Err(format!("there is already a field named {key}"));
+    }
+    doc.fields.push(Field {
+        key: key.to_string(),
+        ty: FieldType::Text,
+        label: key.to_string(),
+        required: false,
+        max_len: None,
+        sample: Some(key.to_string()),
+    });
+    Ok(())
+}
+
+/// Edit a field's presentation: label, sample, required. Never the key — the
+/// key is what Items and bindings address, and renaming it would orphan both
+/// silently. A different key is a different field.
+pub fn apply_update_field(
+    doc: &mut SceneDoc,
+    key: &str,
+    label: &str,
+    sample: Option<&str>,
+    required: bool,
+) -> Result<(), String> {
+    let f = doc
+        .fields
+        .iter_mut()
+        .find(|f| f.key == key)
+        .ok_or_else(|| format!("no field {key}"))?;
+    let label = label.trim();
+    f.label = if label.is_empty() {
+        key.to_string()
+    } else {
+        label.to_string()
+    };
+    f.sample = sample
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(String::from);
+    f.required = required;
+    Ok(())
+}
+
+/// Remove a field — refused, with the node ids in the sentence, while anything
+/// still references it. Compile would fail on the dangling reference anyway;
+/// this refusal happens while the designer is looking at the reason.
+pub fn apply_delete_field(doc: &mut SceneDoc, key: &str) -> Result<(), String> {
+    if !doc.fields.iter().any(|f| f.key == key) {
+        return Err(format!("no field {key}"));
+    }
+    let mut users = Vec::new();
+    field_users(&doc.root, key, &mut users);
+    if !users.is_empty() {
+        return Err(format!(
+            "{key} is still used by {} — remove those references first",
+            users.join(", ")
+        ));
+    }
+    doc.fields.retain(|f| f.key != key);
+    Ok(())
 }
 
 /// The asset key for `hash` in this document, declaring an [`AssetRef`] when
@@ -1670,6 +1846,37 @@ mod tests {
         assert!(tl.tracks.is_empty());
         assert!(apply_delete_key(&mut doc, "In", "band", "transform.translate.x", 0.0).is_err());
 
+        // Retiming MOVES: one key before, one key after, value and ease
+        // carried. (The duplicated-key version of this was a live bug — the
+        // panel composed delete+set as two session edits over one base.)
+        apply_set_key(
+            &mut doc,
+            "In",
+            "band",
+            "transform.translate.x",
+            100.0,
+            -250.0,
+            ease,
+        )
+        .unwrap();
+        apply_retime_key(
+            &mut doc,
+            "In",
+            "band",
+            "transform.translate.x",
+            100.0,
+            400.0,
+        )
+        .unwrap();
+        let tl = doc.timelines.iter().find(|t| t.name == "In").unwrap();
+        assert_eq!(tl.tracks[0].keys.len(), 1);
+        assert_eq!(tl.tracks[0].keys[0].t, 400.0);
+        assert_eq!(tl.tracks[0].keys[0].v, -250.0);
+        assert!(
+            apply_retime_key(&mut doc, "In", "band", "transform.translate.x", 9.0, 10.0).is_err()
+        );
+        apply_delete_key(&mut doc, "In", "band", "transform.translate.x", 400.0).unwrap();
+
         apply_set_timeline_duration(&mut doc, "In", 1200.0).unwrap();
         assert_eq!(doc.timelines[0].duration_ms, 1200.0);
         apply_delete_timeline(&mut doc, "In").unwrap();
@@ -1888,5 +2095,71 @@ mod tests {
 
         // The compile round-trip holds with the declared asset.
         assert!(pmg_scene::validate::compile(&doc).is_ok());
+    }
+
+    #[test]
+    fn clip_sizing_and_fields_edit_honestly() {
+        let mut doc: SceneDoc = serde_json::from_value(serde_json::json!({
+            "format": "pmg.scene",
+            "format_version": {"major": 1, "minor": 0},
+            "min_reader": 1,
+            "id": "t", "name": "t",
+            "canvas": {"width": 400, "height": 300},
+            "fields": [], "fonts": [], "assets": [],
+            "root": {
+                "id": "root", "kind": "box", "layout": {}, "transform": {}, "style": {},
+                "children": [
+                    {"id": "band", "kind": "box",
+                     "layout": {"width": {"Px": 200.0}, "height": {"Px": 60.0}},
+                     "transform": {}, "style": {}, "children": []}
+                ]
+            },
+            "timelines": []
+        }))
+        .expect("fixture doc parses");
+
+        // Clip round-trips through the facts.
+        apply_set_clip(&mut doc, "band", true).unwrap();
+        assert!(node_facts(&doc, "band").unwrap().clip);
+        assert!(apply_set_clip(&mut doc, "ghost", true).is_err());
+
+        // Per-axis sizing: width hugs content, height stays fixed.
+        apply_set_dimension(&mut doc, "band", "width", None).unwrap();
+        let facts = node_facts(&doc, "band").unwrap();
+        assert_eq!(facts.width_mode, "content");
+        assert_eq!(facts.height_mode, "px");
+        apply_set_dimension(&mut doc, "band", "width", Some(0.0)).unwrap(); // clamps
+        assert_eq!(node_facts(&doc, "band").unwrap().width_mode, "px");
+        assert!(apply_set_dimension(&mut doc, "band", "depth", None).is_err());
+
+        // Fields: declared once, edited by presentation, deleted only when
+        // nothing references them — and the refusal names the node.
+        apply_add_field(&mut doc, "speaker").unwrap();
+        assert!(
+            apply_add_field(&mut doc, "speaker").is_err(),
+            "keys are unique"
+        );
+        assert!(apply_add_field(&mut doc, "  ").is_err());
+        apply_update_field(
+            &mut doc,
+            "speaker",
+            "Speaker name",
+            Some("Pastor Dan"),
+            true,
+        )
+        .unwrap();
+        let f = &doc.fields[0];
+        assert_eq!(f.label, "Speaker name");
+        assert_eq!(f.sample.as_deref(), Some("Pastor Dan"));
+        assert!(f.required);
+
+        let text_id = apply_add_text(&mut doc, None).unwrap();
+        apply_set_text_expr(&mut doc, &text_id, "${speaker}").unwrap();
+        let err = apply_delete_field(&mut doc, "speaker").unwrap_err();
+        assert!(err.contains(&text_id), "the refusal names the user");
+        apply_set_text_expr(&mut doc, &text_id, "static").unwrap();
+        apply_delete_field(&mut doc, "speaker").unwrap();
+        assert!(doc.fields.is_empty());
+        assert!(apply_delete_field(&mut doc, "speaker").is_err());
     }
 }

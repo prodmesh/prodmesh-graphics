@@ -308,13 +308,11 @@ export function TimelinePanel({
               onBlur={(e) => {
                 const nt = Number(e.target.value)
                 if (!Number.isFinite(nt) || nt < 0 || nt === selKey.t) return
-                // Retiming is delete-then-set, both through the document, so
-                // undo sees one edit per step and the keys stay sorted.
+                // ONE session operation. Composing delete+set here read the
+                // same armed document twice and the set discarded the delete —
+                // the key was duplicated, not moved.
                 const { key, prop } = selKey
-                edit((s) => {
-                  s.deleteKey(timeline, selected, prop, key.t)
-                  return s.setKey(timeline, selected, prop, nt, key.v, JSON.stringify(key.ease ?? 'linear'))
-                })
+                edit((s) => s.retimeKey(timeline, selected, prop, key.t, nt))
                 setKeySel({ prop, t: nt })
               }}
             />

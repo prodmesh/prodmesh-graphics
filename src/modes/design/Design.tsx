@@ -32,10 +32,11 @@
  */
 
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { AlertTriangle, FileUp, FolderOpen, Image as ImageIcon, Plus, Redo2, Type, Undo2, Upload } from 'lucide-react'
+import { AlertTriangle, FileUp, FolderOpen, Image as ImageIcon, Plus, Redo2, Trash2, Type, Undo2, Upload } from 'lucide-react'
 import { useQuery, invalidate } from '../../lib/useQuery'
 import { keys } from '../../lib/keys'
 import { ApiError, get, post } from '../../lib/api'
+import { confirmLeave, setDirty } from '../../lib/dirty'
 import {
   Button,
   FormGroup,
@@ -170,11 +171,17 @@ function SelectedNode({
   }
 
   const commitSize = () => {
+    if (!facts || !bbox) return
     const wv = Number(w)
     const hv = Number(h)
-    if (!Number.isFinite(wv) || !Number.isFinite(hv) || wv < 1 || hv < 1) return
-    if (bbox && Math.round(bbox[2]) === wv && Math.round(bbox[3]) === hv) return
-    edit((s) => s.setSize(selected, wv, hv))
+    const wChanged = facts.width_mode === 'px' && Number.isFinite(wv) && wv >= 1 && Math.round(bbox[2]) !== wv
+    const hChanged = facts.height_mode === 'px' && Number.isFinite(hv) && hv >= 1 && Math.round(bbox[3]) !== hv
+    // ONE session edit per commit: session editors read the armed document,
+    // which only advances after a re-arm — two calls in one handler would
+    // both edit the same base and the second would discard the first.
+    if (wChanged && hChanged) edit((s) => s.setSize(selected, wv, hv))
+    else if (wChanged) edit((s) => s.setDimension(selected, 'width', wv))
+    else if (hChanged) edit((s) => s.setDimension(selected, 'height', hv))
   }
 
   const commitRadius = () => {
@@ -388,30 +395,85 @@ function SelectedNode({
             </>
           ) : null}
 
+          {/* Per-axis sizing: a fixed number, or hugging what is inside —
+              which is how a band grows with its name field while its height
+              holds. The number shows the SOLVED size either way; it is only
+              editable when the axis is fixed. */}
           <div className="design-console__size">
             <FormGroup label="Width">
-              <input
-                type="number"
-                min={1}
-                value={w}
-                onChange={(e) => setW(e.target.value)}
-                onBlur={commitSize}
-                onKeyDown={enterCommits(commitSize)}
-                aria-label="Selected width"
-              />
+              <div className="design-console__axis">
+                <input
+                  type="number"
+                  min={1}
+                  value={w}
+                  disabled={facts.width_mode !== 'px'}
+                  onChange={(e) => setW(e.target.value)}
+                  onBlur={commitSize}
+                  onKeyDown={enterCommits(commitSize)}
+                  aria-label="Selected width"
+                />
+                <select
+                  value={facts.width_mode}
+                  aria-label="Width sizing"
+                  onChange={(e) =>
+                    edit((s) =>
+                      s.setDimension(
+                        selected,
+                        'width',
+                        e.target.value === 'px' ? Math.max(1, Math.round(bbox?.[2] ?? 1)) : undefined,
+                      ),
+                    )
+                  }
+                >
+                  <option value="px">Fixed</option>
+                  <option value="content">Fit contents</option>
+                </select>
+              </div>
             </FormGroup>
             <FormGroup label="Height">
-              <input
-                type="number"
-                min={1}
-                value={h}
-                onChange={(e) => setH(e.target.value)}
-                onBlur={commitSize}
-                onKeyDown={enterCommits(commitSize)}
-                aria-label="Selected height"
-              />
+              <div className="design-console__axis">
+                <input
+                  type="number"
+                  min={1}
+                  value={h}
+                  disabled={facts.height_mode !== 'px'}
+                  onChange={(e) => setH(e.target.value)}
+                  onBlur={commitSize}
+                  onKeyDown={enterCommits(commitSize)}
+                  aria-label="Selected height"
+                />
+                <select
+                  value={facts.height_mode}
+                  aria-label="Height sizing"
+                  onChange={(e) =>
+                    edit((s) =>
+                      s.setDimension(
+                        selected,
+                        'height',
+                        e.target.value === 'px' ? Math.max(1, Math.round(bbox?.[3] ?? 1)) : undefined,
+                      ),
+                    )
+                  }
+                >
+                  <option value="px">Fixed</option>
+                  <option value="content">Fit contents</option>
+                </select>
+              </div>
             </FormGroup>
           </div>
+
+          {facts.kind === 'box' ? (
+            <FormGroup label="Overflow">
+              <select
+                value={facts.clip ? 'hide' : 'show'}
+                aria-label="Overflow"
+                onChange={(e) => edit((s) => s.setClip(selected, e.target.value === 'hide'))}
+              >
+                <option value="show">Show — contents may spill out</option>
+                <option value="hide">Hide — mask contents to this box</option>
+              </select>
+            </FormGroup>
+          ) : null}
 
           {facts.fill ? (
             <>
@@ -514,6 +576,121 @@ function SelectedNode({
 }
 
 /**
+ * The template's fields — the variables an Item author fills in Edit.
+ *
+ * The KEY is the contract: bindings say `${key}`, Items store values by it,
+ * and it is deliberately not editable here — renaming a key would orphan both
+ * sides silently, so a different key is a different field. Label, sample, and
+ * required are the presentation half, and the sample is live: the canvas
+ * renders with it, so editing it IS previewing it.
+ */
+function FieldsEditor({
+  session,
+  doc,
+  onEdit,
+}: {
+  session: React.RefObject<DesignSession | null>
+  doc: Record<string, unknown> | null
+  onEdit: (doc: Record<string, unknown>) => void
+}) {
+  const fields =
+    (doc?.fields as { key: string; label: string; sample?: string; required?: boolean }[] | undefined) ?? []
+  const [newKey, setNewKey] = useState('')
+  const [problem, setProblem] = useState<string | null>(null)
+
+  const run = (fn: (s: DesignSession) => string) => {
+    const s = session.current
+    if (!s) return
+    setProblem(null)
+    try {
+      onEdit(JSON.parse(fn(s)) as Record<string, unknown>)
+    } catch (e) {
+      setProblem(e instanceof Error ? e.message : String(e))
+    }
+  }
+
+  const addField = () => {
+    const key = newKey.trim()
+    if (!key) return
+    run((s) => s.addField(key))
+    setNewKey('')
+  }
+
+  return (
+    <div className="design-console__fieldsec">
+      <GroupHeader label="Fields" trailing={fields.length ? `${fields.length}` : undefined} />
+      {fields.length === 0 ? (
+        <p className="design-console__dim">
+          No fields yet. A field is what an Item fills in — add one here, or type{' '}
+          {'${key}'} into a text node and it declares itself.
+        </p>
+      ) : null}
+      {fields.map((f) => (
+        <div key={f.key} className="design-console__fieldrow">
+          <div className="design-console__fieldhead">
+            <span className="design-console__fieldkey">{'${' + f.key + '}'}</span>
+            <label className="design-console__fieldreq">
+              <input
+                type="checkbox"
+                checked={!!f.required}
+                aria-label={`Field ${f.key} required`}
+                onChange={(e) =>
+                  run((s) => s.updateField(f.key, f.label, f.sample ?? undefined, e.target.checked))
+                }
+              />
+              Required
+            </label>
+            <button
+              type="button"
+              className="edit-console__iconbtn"
+              aria-label={`Delete field ${f.key}`}
+              onClick={() => run((s) => s.deleteField(f.key))}
+            >
+              <Trash2 size={13} aria-hidden />
+            </button>
+          </div>
+          <div className="design-console__size">
+            <FormGroup label="Label">
+              <input
+                key={`l:${f.key}:${f.label}`}
+                defaultValue={f.label}
+                aria-label={`Field ${f.key} label`}
+                onBlur={(e) =>
+                  run((s) => s.updateField(f.key, e.target.value, f.sample ?? undefined, !!f.required))
+                }
+              />
+            </FormGroup>
+            <FormGroup label="Sample — shown on the canvas">
+              <input
+                key={`s:${f.key}:${f.sample ?? ''}`}
+                defaultValue={f.sample ?? ''}
+                aria-label={`Field ${f.key} sample`}
+                onBlur={(e) =>
+                  run((s) => s.updateField(f.key, f.label, e.target.value || undefined, !!f.required))
+                }
+              />
+            </FormGroup>
+          </div>
+        </div>
+      ))}
+      {problem ? <p className="tl__problem" role="alert">{problem}</p> : null}
+      <div className="design-console__fieldadd">
+        <input
+          placeholder="key, e.g. speaker"
+          aria-label="New field key"
+          value={newKey}
+          onChange={(e) => setNewKey(e.target.value)}
+          onKeyDown={(e) => { if (e.key === 'Enter') addField() }}
+        />
+        <button type="button" className="edit-console__addbtn" onClick={addField}>
+          <Plus size={12} aria-hidden /> Add a field
+        </button>
+      </div>
+    </div>
+  )
+}
+
+/**
  * A revision, shortened for the eye. The full value is an address whose
  * algorithm prefix is an internal fact (docs/UI_TEXT.md bans it on screen);
  * eight characters is plenty to tell two revisions apart in a list.
@@ -529,7 +706,31 @@ export function Design() {
   // The document, behind its undo history: `edit` for changes, `load` for
   // opening — a load starts a new timeline (ADR 0019: undo operates on the
   // SceneDoc, and lives where the document does).
-  const { doc, load, edit, undo, redo, canUndo, canRedo } = useDocHistory()
+  const { doc, load: loadDoc, edit: applyEdit, undo, redo, canUndo, canRedo } = useDocHistory()
+
+  // Every edit marks the document dirty until a publish or a deliberate
+  // discard — leaving with unpublished changes asks first (lib/dirty), here
+  // and at the mode tabs. Undo does NOT clear it: an undone-then-abandoned
+  // session still walked away from a document that differs from what was
+  // opened, and guessing otherwise loses exactly the work the guard exists
+  // to keep.
+  const DIRTY = 'This template has unpublished changes. Leave and lose them?'
+  const edit = useCallback(
+    (d: Record<string, unknown>) => {
+      applyEdit(d)
+      setDirty(DIRTY)
+    },
+    [applyEdit],
+  )
+  const load = useCallback(
+    (d: Record<string, unknown> | null) => {
+      loadDoc(d)
+      setDirty(null)
+    },
+    [loadDoc],
+  )
+  // Leaving the mode entirely unloads the document with it.
+  useEffect(() => () => setDirty(null), [])
   const [data, setData] = useState<Record<string, string>>({})
   const [fonts, setFonts] = useState<Uint8Array[]>([])
   const [timeline, setTimeline] = useState<string | undefined>(undefined)
@@ -606,6 +807,8 @@ export function Design() {
   // Load the selected template's published document, via its revision — which
   // IS its address in the CAS.
   const openTemplate = useCallback(async (id: string) => {
+    // Opening another template replaces the document — same guard as leaving.
+    if (!confirmLeave()) return
     setSelected(id)
     setSelNode(null)
     setPublishState(null)
@@ -626,9 +829,11 @@ export function Design() {
       }
       const mirror = await (await fetch(`/cas/${t.head.mirror_hash}`)).json()
       load(mirror as Record<string, unknown>)
-      setData(Object.fromEntries(
-        (t.head.manifest.fields ?? []).map((f) => [f.key, f.sample ?? '']),
-      ))
+      // Empty on purpose: arming falls back to each field's sample from the
+      // DOCUMENT, so editing a sample in the fields editor shows on the canvas
+      // immediately. A copy taken here would shadow those edits with the
+      // values from load time.
+      setData({})
     } catch (e) {
       setPublishState(e instanceof ApiError ? e.message : String(e))
     }
@@ -742,16 +947,15 @@ export function Design() {
   }, [togglePlay, mediaOpen])
 
   const onOpenFile = useCallback(async (file: File) => {
+    if (!confirmLeave()) return
     setPublishState(null)
     try {
       const json = JSON.parse(await file.text()) as Record<string, unknown>
       load(json)
       setSelected(null)
       setSelNode(null)
-      setData(Object.fromEntries(
-        ((json.fields as { key: string; sample?: string }[] | undefined) ?? [])
-          .map((f) => [f.key, f.sample ?? '']),
-      ))
+      // Empty on purpose — see openTemplate: samples come from the document.
+      setData({})
     } catch (e) {
       setPublishState(`That file is not a template: ${String(e)}`)
     }
@@ -794,6 +998,8 @@ export function Design() {
       // Named here, not discovered by a node at staging time on a Saturday.
       if (r.missing_assets.length) bits.push(`${r.missing_assets.length} asset(s) this server does not have`)
       setPublishState(bits.join(' · '))
+      // Published IS saved: the editable mirror travelled with it.
+      setDirty(null)
     } catch (e) {
       setPublishState(e instanceof ApiError ? e.message : String(e))
     }
@@ -1055,6 +1261,8 @@ export function Design() {
                 yet — no selection, no moving a box, no property editing.
               </p>
             )}
+
+            {doc ? <FieldsEditor session={session} doc={doc} onEdit={edit} /> : null}
 
             <div className="design-console__fonts">
               <GroupHeader

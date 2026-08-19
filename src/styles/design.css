@@ -370,6 +370,57 @@
   cursor: pointer;
 }
 
+/* An axis row: the number and its sizing mode side by side. */
+.design-console__axis { display: flex; gap: 6px; }
+.design-console__axis input { min-width: 0; flex: 1; }
+.design-console__axis select { flex-shrink: 0; width: 108px; }
+.design-console__axis input:disabled { opacity: 0.5; }
+
+/* ---- The fields editor ----------------------------------------------------
+   The key is shown as it is typed in a binding, because that is what it IS. */
+.design-console__fieldsec { display: flex; flex-direction: column; gap: 8px; }
+.design-console__fieldrow {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  border-radius: var(--pm-radius-6);
+  background: var(--pm-surface-raised);
+  box-shadow: var(--pm-hairline);
+  padding: 8px;
+}
+.design-console__fieldhead { display: flex; align-items: center; gap: 8px; }
+.design-console__fieldkey {
+  flex: 1;
+  font-family: var(--pm-font-mono);
+  font-size: 11px;
+  color: var(--pm-text-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.design-console__fieldreq {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 10px;
+  color: var(--pm-text-muted);
+  white-space: nowrap;
+}
+.design-console__fieldadd { display: flex; gap: 6px; }
+.design-console__fieldadd input {
+  min-width: 0;
+  flex: 1;
+  height: 24px;
+  border: 0;
+  outline: none;
+  border-radius: var(--pm-radius-4);
+  background: var(--pm-surface-field);
+  color: var(--pm-text-primary);
+  font-family: var(--pm-font-mono);
+  font-size: 11px;
+  padding: 0 8px;
+}
+.design-console__fieldadd button { flex-shrink: 0; }
+
 .design-console__fonts { display: flex; flex-direction: column; gap: 8px; margin-top: auto; }
 
 /* A file input styled as a row; the input itself is visually hidden but

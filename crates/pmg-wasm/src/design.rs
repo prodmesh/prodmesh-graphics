@@ -399,6 +399,64 @@ pub fn set_text_align(armed: &Armed, id: &str, align: &str) -> Result<String, St
     edited_json(doc)
 }
 
+/// Move a key to a new time — one document operation, so the move cannot
+/// duplicate the key the way caller-composed delete+set silently did.
+pub fn retime_key(
+    armed: &Armed,
+    timeline: &str,
+    node_id: &str,
+    prop: &str,
+    from: f32,
+    to: f32,
+) -> Result<String, String> {
+    let mut doc = armed.doc.clone();
+    interact::apply_retime_key(&mut doc, timeline, node_id, prop, from, to)?;
+    edited_json(doc)
+}
+
+/// Clip a node's contents to its bounds — the overflow mask.
+pub fn set_clip(armed: &Armed, id: &str, clip: bool) -> Result<String, String> {
+    let mut doc = armed.doc.clone();
+    interact::apply_set_clip(&mut doc, id, clip)?;
+    edited_json(doc)
+}
+
+/// One axis, fixed px or content-hugging (`None`).
+pub fn set_dimension(
+    armed: &Armed,
+    id: &str,
+    axis: &str,
+    px: Option<f32>,
+) -> Result<String, String> {
+    let mut doc = armed.doc.clone();
+    interact::apply_set_dimension(&mut doc, id, axis, px)?;
+    edited_json(doc)
+}
+
+pub fn add_field(armed: &Armed, key: &str) -> Result<String, String> {
+    let mut doc = armed.doc.clone();
+    interact::apply_add_field(&mut doc, key)?;
+    edited_json(doc)
+}
+
+pub fn update_field(
+    armed: &Armed,
+    key: &str,
+    label: &str,
+    sample: Option<&str>,
+    required: bool,
+) -> Result<String, String> {
+    let mut doc = armed.doc.clone();
+    interact::apply_update_field(&mut doc, key, label, sample, required)?;
+    edited_json(doc)
+}
+
+pub fn delete_field(armed: &Armed, key: &str) -> Result<String, String> {
+    let mut doc = armed.doc.clone();
+    interact::apply_delete_field(&mut doc, key)?;
+    edited_json(doc)
+}
+
 /// Add an image node under `parent` (the root when `None`) and return its id.
 /// The hash's asset is declared in the document on the way in.
 pub fn add_image(

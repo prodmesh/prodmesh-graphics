@@ -3,6 +3,7 @@ import { Microchip } from 'lucide-react'
 import { useQuery } from '../lib/useQuery'
 import { useTopic } from '../lib/stream'
 import { keys, topics } from '../lib/keys'
+import { confirmLeave } from '../lib/dirty'
 import { StatusIndicator, TelemetryChip } from '../components/console'
 import type { LayersSnapshot, NodeSummary } from '../modes/show/types'
 
@@ -57,6 +58,12 @@ export function AppShell() {
             <NavLink
               key={to}
               to={to}
+              // Unpublished work blocks the tab until the user says go —
+              // switching modes unmounts the editor, and losing an hour of
+              // design to a mis-click is not a lesson anyone needs twice.
+              onClick={(e) => {
+                if (!confirmLeave()) e.preventDefault()
+              }}
               className={({ isActive }) =>
                 isActive ? 'c-modetabs__tab c-modetabs__tab--active' : 'c-modetabs__tab'
               }

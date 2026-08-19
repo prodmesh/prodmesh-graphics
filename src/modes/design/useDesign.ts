@@ -72,6 +72,12 @@ export type NodeFacts = {
   opacity: number
   absolute: boolean
   kind: string
+  /** Contents masked to this node's bounds. */
+  clip: boolean
+  /** How each axis is authored: 'px' (fixed) or 'content' (hugs contents).
+   *  The solved size is the handles' answer; this is the setting. */
+  width_mode: string
+  height_mode: string
   /** Present exactly when the node is text. */
   text?: { expr: string; family: string; weight: number; size: number; align: string }
   /** Present exactly when the node draws a picture. */
