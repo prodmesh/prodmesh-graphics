@@ -253,6 +253,41 @@ pub fn set_size(armed: &Armed, id: &str, w: f32, h: f32) -> Result<String, Strin
     serde_json::to_string(&doc).map_err(|e| e.to_string())
 }
 
+/// The authored facts for one node, as JSON (`interact::NodeFacts`) — what
+/// the inspector shows, as distinct from the solved geometry it also shows.
+pub fn facts_json(armed: &Armed, id: &str) -> Result<String, String> {
+    let f = interact::node_facts(&armed.doc, id)?;
+    serde_json::to_string(&f).map_err(|e| e.to_string())
+}
+
+fn edited_json(doc: pmg_scene::doc::SceneDoc) -> Result<String, String> {
+    serde_json::to_string(&doc).map_err(|e| e.to_string())
+}
+
+pub fn set_fill(armed: &Armed, id: &str, fill: Option<[f32; 4]>) -> Result<String, String> {
+    let mut doc = armed.doc.clone();
+    interact::apply_fill(&mut doc, id, fill)?;
+    edited_json(doc)
+}
+
+pub fn set_radius(armed: &Armed, id: &str, radius: f32) -> Result<String, String> {
+    let mut doc = armed.doc.clone();
+    interact::apply_radius(&mut doc, id, radius)?;
+    edited_json(doc)
+}
+
+pub fn set_opacity(armed: &Armed, id: &str, opacity: f32) -> Result<String, String> {
+    let mut doc = armed.doc.clone();
+    interact::apply_opacity(&mut doc, id, opacity)?;
+    edited_json(doc)
+}
+
+pub fn set_position(armed: &Armed, id: &str, absolute: bool) -> Result<String, String> {
+    let mut doc = armed.doc.clone();
+    interact::apply_position(&mut doc, id, absolute)?;
+    edited_json(doc)
+}
+
 /// The timeline values at a moment, for the scrubber.
 ///
 /// `None` for the timeline name means the resting state — no timeline applied,

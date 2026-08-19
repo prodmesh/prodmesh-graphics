@@ -48,7 +48,13 @@ import {
   StatusPill,
   Tag,
 } from '../../components/console'
-import { compileTemplate, useDesignCanvas, type DesignSession, type Handles } from './useDesign'
+import {
+  compileTemplate,
+  useDesignCanvas,
+  type DesignSession,
+  type Handles,
+  type NodeFacts,
+} from './useDesign'
 import { CanvasStage } from './CanvasStage'
 import type { Item } from '../show/types'
 
@@ -61,13 +67,30 @@ type Asset = { hash: string; size: number; kind: string }
 
 const FONT_KINDS = new Set(['font'])
 
+/** Encoded 0..1 channel to a two-digit hex pair. */
+const hex2 = (v: number) =>
+  Math.round(Math.max(0, Math.min(1, v)) * 255)
+    .toString(16)
+    .padStart(2, '0')
+
+const rgbToHex = (c: [number, number, number, number]) => `#${hex2(c[0])}${hex2(c[1])}${hex2(c[2])}`
+
+const hexToRgb = (hex: string): [number, number, number] | null => {
+  const m = /^#([0-9a-f]{6})$/i.exec(hex)
+  if (!m) return null
+  const n = parseInt(m[1]!, 16)
+  return [((n >> 16) & 255) / 255, ((n >> 8) & 255) / 255, (n & 255) / 255]
+}
+
 /**
- * The selected node's facts and its size inputs.
+ * The selected node: solved geometry above, authored properties below.
  *
  * X/Y are read from the solved geometry — where the node actually is, which
- * with flexbox is an answer, not a setting. W/H write back as fixed pixels
- * through the same edit path a handle drag uses, so the inspector and the
- * canvas cannot disagree about what a resize means.
+ * with flexbox is an answer, not a setting. Everything editable writes back
+ * through the same session the handles use, so the inspector and the canvas
+ * cannot disagree about what an edit means. The colour input speaks the
+ * document's encoded values directly: what the designer picks is what an Item
+ * author later reads.
  */
 function SelectedNode({
   session,
@@ -84,8 +107,12 @@ function SelectedNode({
   onEdit: (doc: Record<string, unknown>) => void
 }) {
   const [bbox, setBbox] = useState<[number, number, number, number] | null>(null)
+  const [facts, setFacts] = useState<NodeFacts | null>(null)
   const [w, setW] = useState('')
   const [h, setH] = useState('')
+  const [radius, setRadius] = useState('')
+  const [opacity, setOpacity] = useState('')
+  const [alpha, setAlpha] = useState('')
 
   useEffect(() => {
     const s = session.current
@@ -95,30 +122,82 @@ function SelectedNode({
       setBbox(hd.bbox)
       setW(String(Math.round(hd.bbox[2])))
       setH(String(Math.round(hd.bbox[3])))
+      const f = JSON.parse(s.facts(selected)) as NodeFacts
+      setFacts(f)
+      setRadius(String(f.radius))
+      setOpacity(String(Math.round(f.opacity * 100)))
+      setAlpha(String(Math.round((f.fill?.[3] ?? 1) * 100)))
     } catch {
       setBbox(null)
+      setFacts(null)
     }
   }, [session, ready, generation, selected])
 
-  const commit = () => {
+  /** Run one session edit and hand the edited document up. */
+  const edit = (fn: (s: DesignSession) => string) => {
     const s = session.current
-    const wv = Number(w)
-    const hv = Number(h)
-    if (!s || !Number.isFinite(wv) || !Number.isFinite(hv) || wv < 1 || hv < 1) return
-    if (bbox && Math.round(bbox[2]) === wv && Math.round(bbox[3]) === hv) return
+    if (!s) return
     try {
-      onEdit(JSON.parse(s.setSize(selected, wv, hv)) as Record<string, unknown>)
+      onEdit(JSON.parse(fn(s)) as Record<string, unknown>)
     } catch {
       // The node may be gone; the selection clears upstream.
     }
   }
 
+  const commitSize = () => {
+    const wv = Number(w)
+    const hv = Number(h)
+    if (!Number.isFinite(wv) || !Number.isFinite(hv) || wv < 1 || hv < 1) return
+    if (bbox && Math.round(bbox[2]) === wv && Math.round(bbox[3]) === hv) return
+    edit((s) => s.setSize(selected, wv, hv))
+  }
+
+  const commitRadius = () => {
+    const r = Number(radius)
+    if (!Number.isFinite(r) || r < 0 || r === facts?.radius) return
+    edit((s) => s.setRadius(selected, r))
+  }
+
+  const commitOpacity = () => {
+    const o = Number(opacity)
+    if (!Number.isFinite(o)) return
+    const v = Math.max(0, Math.min(100, o)) / 100
+    if (facts && Math.round(facts.opacity * 100) === Math.round(v * 100)) return
+    edit((s) => s.setOpacity(selected, v))
+  }
+
+  const commitFill = (hexOverride?: string, alphaOverride?: string) => {
+    if (!facts?.fill) return
+    const rgb = hexToRgb(hexOverride ?? rgbToHex(facts.fill))
+    const a = Number(alphaOverride ?? alpha)
+    if (!rgb || !Number.isFinite(a)) return
+    edit((s) => s.setFill(selected, rgb[0], rgb[1], rgb[2], Math.max(0, Math.min(100, a)) / 100))
+  }
+
+  const enterCommits = (commit: () => void) => (e: React.KeyboardEvent) => {
+    if (e.key === 'Enter') commit()
+  }
+
   return (
     <div className="design-console__selected">
       <GroupHeader label="Selected" trailing={selected} />
-      {bbox ? (
+      {bbox && facts ? (
         <>
           <KeyValueRow label="Position" value={`${Math.round(bbox[0])}, ${Math.round(bbox[1])}`} tone="plain" />
+
+          {/* The pin. Its own explicit control, because it changes what a
+              drag DOES: pinned moves freely, in-flow moves shift neighbours. */}
+          <FormGroup label="Placement">
+            <select
+              value={facts.absolute ? 'absolute' : 'relative'}
+              aria-label="Placement"
+              onChange={(e) => edit((s) => s.setPosition(selected, e.target.value === 'absolute'))}
+            >
+              <option value="relative">In the flow — neighbours move with it</option>
+              <option value="absolute">Pinned — moves freely</option>
+            </select>
+          </FormGroup>
+
           <div className="design-console__size">
             <FormGroup label="Width">
               <input
@@ -126,8 +205,8 @@ function SelectedNode({
                 min={1}
                 value={w}
                 onChange={(e) => setW(e.target.value)}
-                onBlur={commit}
-                onKeyDown={(e) => { if (e.key === 'Enter') commit() }}
+                onBlur={commitSize}
+                onKeyDown={enterCommits(commitSize)}
                 aria-label="Selected width"
               />
             </FormGroup>
@@ -137,16 +216,89 @@ function SelectedNode({
                 min={1}
                 value={h}
                 onChange={(e) => setH(e.target.value)}
-                onBlur={commit}
-                onKeyDown={(e) => { if (e.key === 'Enter') commit() }}
+                onBlur={commitSize}
+                onKeyDown={enterCommits(commitSize)}
                 aria-label="Selected height"
               />
             </FormGroup>
           </div>
+
+          {facts.fill ? (
+            <>
+              <div className="design-console__size">
+                <FormGroup label="Fill">
+                  <input
+                    type="color"
+                    value={rgbToHex(facts.fill)}
+                    onChange={(e) => commitFill(e.target.value)}
+                    aria-label="Fill colour"
+                  />
+                </FormGroup>
+                <FormGroup label="Fill opacity %">
+                  <input
+                    type="number"
+                    min={0}
+                    max={100}
+                    value={alpha}
+                    onChange={(e) => setAlpha(e.target.value)}
+                    onBlur={() => commitFill()}
+                    onKeyDown={enterCommits(() => commitFill())}
+                    aria-label="Fill opacity"
+                  />
+                </FormGroup>
+              </div>
+              <button
+                type="button"
+                className="edit-console__addbtn"
+                onClick={() => edit((s) => s.clearFill(selected))}
+              >
+                Remove the fill
+              </button>
+              <p className="design-console__dim">
+                A box with no fill draws nothing and stops being clickable on the canvas —
+                select it again from here if you change your mind.
+              </p>
+            </>
+          ) : (
+            <button
+              type="button"
+              className="edit-console__addbtn"
+              onClick={() => edit((s) => s.setFill(selected, 1, 1, 1, 1))}
+            >
+              Add a fill
+            </button>
+          )}
+
+          <div className="design-console__size">
+            <FormGroup label="Corner radius">
+              <input
+                type="number"
+                min={0}
+                value={radius}
+                onChange={(e) => setRadius(e.target.value)}
+                onBlur={commitRadius}
+                onKeyDown={enterCommits(commitRadius)}
+                aria-label="Corner radius"
+              />
+            </FormGroup>
+            <FormGroup label="Opacity %">
+              <input
+                type="number"
+                min={0}
+                max={100}
+                value={opacity}
+                onChange={(e) => setOpacity(e.target.value)}
+                onBlur={commitOpacity}
+                onKeyDown={enterCommits(commitOpacity)}
+                aria-label="Node opacity"
+              />
+            </FormGroup>
+          </div>
+
           <p className="design-console__dim">
-            Moving edits margins: an absolute node moves freely; a relative one adjusts its
-            place in the flow, so its neighbours move with it — that is the layout being
-            responsive, not the editor being wrong.
+            Moving edits margins: a pinned node moves freely; one in the flow adjusts its
+            place, so its neighbours move with it — that is the layout being responsive,
+            not the editor being wrong.
           </p>
         </>
       ) : null}

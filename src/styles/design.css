@@ -133,8 +133,16 @@
 
 .design-console__selected { display: flex; flex-direction: column; gap: 8px; align-self: stretch; }
 .design-console__size { display: flex; gap: 8px; }
-.design-console__size > .c-formgroup { flex: 1; }
+.design-console__size > .c-formgroup { flex: 1; min-width: 0; }
 .design-console__size input[type='number'] { width: 100%; }
+.design-console__size input[type='color'] {
+  width: 100%;
+  height: 22px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  cursor: pointer;
+}
 
 .design-console__fonts { display: flex; flex-direction: column; gap: 8px; margin-top: auto; }
 

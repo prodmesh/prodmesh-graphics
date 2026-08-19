@@ -249,6 +249,9 @@ mod design_api {
         /// The drag in progress, if any. The GESTURE lives in React; where the
         /// geometry says the node now is lives here (ADR 0019).
         drag: Option<pmg_render::interact::Drag>,
+        /// Face bytes, kept so [`Self::rearm`] can rebuild without being handed
+        /// the fonts again — an edit changes the document, never the fonts.
+        faces: Vec<Vec<u8>>,
     }
 
     #[wasm_bindgen]
@@ -289,7 +292,41 @@ mod design_api {
                 renderer,
                 rest,
                 drag: None,
+                faces,
             })
+        }
+
+        /// Re-arm this session with an edited document, keeping the GPU device.
+        ///
+        /// Every inspector keystroke and every finished drag lands here, and
+        /// paying an adapter/device request per edit — the create path's cost —
+        /// made each one a visible stall. Arms FIRST and swaps only on
+        /// success: a document that no longer solves leaves the old one on
+        /// screen with the error as a sentence, never a blank canvas.
+        #[wasm_bindgen(js_name = rearm)]
+        pub fn rearm(&mut self, doc_json: String, data_json: String) -> Result<(), JsValue> {
+            let armed = design::arm(&doc_json, &data_json, &self.faces)
+                .map_err(|e| JsValue::from_str(&e))?;
+            if (armed.instance.canvas_w, armed.instance.canvas_h)
+                != (self.armed.instance.canvas_w, self.armed.instance.canvas_h)
+            {
+                self.canvas = design::Canvas::new(
+                    self.canvas.device().clone(),
+                    self.canvas.queue().clone(),
+                    armed.instance.canvas_w,
+                    armed.instance.canvas_h,
+                )
+                .map_err(|e| JsValue::from_str(&e))?;
+            }
+            self.renderer = pmg_render::SceneRenderer::new(
+                self.canvas.device(),
+                self.canvas.queue(),
+                &armed.instance,
+            );
+            self.rest = design::rest_frame(&armed);
+            self.armed = armed;
+            self.drag = None;
+            Ok(())
         }
 
         #[wasm_bindgen(getter)]
@@ -394,6 +431,53 @@ mod design_api {
         #[wasm_bindgen(js_name = setSize)]
         pub fn set_size(&self, id: String, w: f32, h: f32) -> Result<String, JsValue> {
             design::set_size(&self.armed, &id, w, h).map_err(|e| JsValue::from_str(&e))
+        }
+
+        /// The authored facts for one node — fill, radius, opacity, position —
+        /// as JSON. What the inspector edits, as distinct from the solved
+        /// geometry `handles` reports.
+        #[wasm_bindgen(js_name = facts)]
+        pub fn facts(&self, id: String) -> Result<String, JsValue> {
+            design::facts_json(&self.armed, &id).map_err(|e| JsValue::from_str(&e))
+        }
+
+        /// Set the fill, encoded straight RGBA in 0..1. Returns the edited
+        /// document.
+        #[wasm_bindgen(js_name = setFill)]
+        pub fn set_fill(
+            &self,
+            id: String,
+            r: f32,
+            g: f32,
+            b: f32,
+            a: f32,
+        ) -> Result<String, JsValue> {
+            design::set_fill(&self.armed, &id, Some([r, g, b, a]))
+                .map_err(|e| JsValue::from_str(&e))
+        }
+
+        /// Remove the fill: the box becomes structural — invisible, and
+        /// transparent to clicks.
+        #[wasm_bindgen(js_name = clearFill)]
+        pub fn clear_fill(&self, id: String) -> Result<String, JsValue> {
+            design::set_fill(&self.armed, &id, None).map_err(|e| JsValue::from_str(&e))
+        }
+
+        #[wasm_bindgen(js_name = setRadius)]
+        pub fn set_radius(&self, id: String, radius: f32) -> Result<String, JsValue> {
+            design::set_radius(&self.armed, &id, radius).map_err(|e| JsValue::from_str(&e))
+        }
+
+        #[wasm_bindgen(js_name = setOpacity)]
+        pub fn set_opacity(&self, id: String, opacity: f32) -> Result<String, JsValue> {
+            design::set_opacity(&self.armed, &id, opacity).map_err(|e| JsValue::from_str(&e))
+        }
+
+        /// Pin (absolute) or unpin (relative) a node. Returns the edited
+        /// document.
+        #[wasm_bindgen(js_name = setPosition)]
+        pub fn set_position(&self, id: String, absolute: bool) -> Result<String, JsValue> {
+            design::set_position(&self.armed, &id, absolute).map_err(|e| JsValue::from_str(&e))
         }
 
         /// Render one frame and return raw RGBA8.

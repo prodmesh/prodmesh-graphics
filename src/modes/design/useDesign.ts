@@ -54,6 +54,18 @@ export type Handles = {
 
 export type Guide = { axis: 0 | 1; at: number }
 
+/** The AUTHORED facts for one node — what the inspector edits, as distinct
+ *  from the solved geometry `Handles` reports. Straight from the document. */
+export type NodeFacts = {
+  id: string
+  /** Encoded straight RGBA in 0..1, or null for an unfilled (structural) box. */
+  fill: [number, number, number, number] | null
+  radius: number
+  opacity: number
+  absolute: boolean
+  kind: string
+}
+
 export type DragResult = {
   /** The ghost to draw. Nothing has been edited yet. */
   rect: [number, number, number, number]
@@ -132,6 +144,11 @@ export function useDesignCanvas(
     }
   }, [canvasRef])
 
+  // The fonts the LIVE session was built with. An edit changes the document,
+  // never the fonts — so a doc/data change re-arms in place (keeping the GPU
+  // device), and only a font change pays for a fresh session.
+  const sessionFonts = useRef<Uint8Array[] | null>(null)
+
   useEffect(() => {
     let cancelled = false
     // No font gate here: whether fonts are required is the DOCUMENT's fact,
@@ -142,19 +159,37 @@ export function useDesignCanvas(
       setStatus('idle')
       return
     }
-    setStatus('loading')
     setProblem(null)
 
     ;(async () => {
       try {
         const wasm = await loadWasm()
-        const s = await wasm.DesignSession.create(JSON.stringify(doc), JSON.stringify(data), fonts)
-        if (cancelled) {
-          s.free()
-          return
+        if (cancelled) return
+
+        let s = session.current
+        if (s && sessionFonts.current === fonts) {
+          // Re-arm in place. Rust arms the edited document FIRST and swaps
+          // only on success, so a document that no longer solves leaves the
+          // old pixels up with the error as a sentence — never a blank
+          // canvas mid-edit.
+          s.rearm(JSON.stringify(doc), JSON.stringify(data))
+        } else {
+          setStatus('loading')
+          const fresh = await wasm.DesignSession.create(
+            JSON.stringify(doc),
+            JSON.stringify(data),
+            fonts,
+          )
+          if (cancelled) {
+            fresh.free()
+            return
+          }
+          session.current?.free()
+          session.current = fresh
+          sessionFonts.current = fonts
+          s = fresh
         }
-        session.current?.free()
-        session.current = s
+
         setGeneration((g) => g + 1)
         setInfo({ degraded: s.degraded, omitted: [...s.omitted] })
 

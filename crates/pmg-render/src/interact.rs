@@ -34,7 +34,7 @@
 //!   decision the designer just made by dragging, not a silent loss.
 
 use crate::scene::{FrameNode, RenderContent, SceneInstance};
-use pmg_scene::doc::{Dimension, Node, SceneDoc};
+use pmg_scene::doc::{Dimension, Node, Position, SceneDoc};
 use serde::Serialize;
 
 /// A 2×3 affine: column-major 2×2 plus a translation, matching `mat2x2` in
@@ -621,6 +621,77 @@ pub fn apply_resize(doc: &mut SceneDoc, id: &str, w: f32, h: f32) -> Result<(), 
     Ok(())
 }
 
+/// What the inspector shows for one node: the AUTHORED values, straight from
+/// the document — not the solved geometry, which is [`handles_for`]'s answer.
+/// The two are different facts and the inspector shows both.
+#[derive(Debug, Clone, Serialize)]
+pub struct NodeFacts {
+    pub id: String,
+    /// As authored: encoded straight RGBA, `None` for an unfilled box.
+    pub fill: Option<[f32; 4]>,
+    pub radius: f32,
+    pub opacity: f32,
+    /// The pin: an absolute node moves freely; a relative one lives in the
+    /// flex flow.
+    pub absolute: bool,
+    pub kind: String,
+}
+
+fn find_node<'a>(n: &'a Node, id: &str) -> Option<&'a Node> {
+    if n.id == id {
+        return Some(n);
+    }
+    n.children.iter().find_map(|c| find_node(c, id))
+}
+
+pub fn node_facts(doc: &SceneDoc, id: &str) -> Result<NodeFacts, String> {
+    let n = find_node(&doc.root, id).ok_or_else(|| format!("no node {id}"))?;
+    Ok(NodeFacts {
+        id: n.id.clone(),
+        fill: n.style.fill.map(|c| c.rgba),
+        radius: n.style.radius,
+        opacity: n.style.opacity,
+        absolute: n.layout.position == Position::Absolute,
+        kind: format!("{:?}", n.kind).to_lowercase(),
+    })
+}
+
+/// Set or clear the fill. Clearing makes a box structural — invisible and
+/// transparent to clicks — which is what "no fill" honestly means here, and
+/// the inspector says so before the designer loses the selection.
+pub fn apply_fill(doc: &mut SceneDoc, id: &str, fill: Option<[f32; 4]>) -> Result<(), String> {
+    let n = find_node_mut(&mut doc.root, id).ok_or_else(|| format!("no node {id}"))?;
+    n.style.fill = fill.map(|rgba| pmg_scene::doc::Rgba { rgba });
+    Ok(())
+}
+
+pub fn apply_radius(doc: &mut SceneDoc, id: &str, radius: f32) -> Result<(), String> {
+    let n = find_node_mut(&mut doc.root, id).ok_or_else(|| format!("no node {id}"))?;
+    // Non-negative; the renderer clamps to the half-extent at draw, so an
+    // over-large radius is a capsule rather than an error.
+    n.style.radius = radius.max(0.0);
+    Ok(())
+}
+
+pub fn apply_opacity(doc: &mut SceneDoc, id: &str, opacity: f32) -> Result<(), String> {
+    let n = find_node_mut(&mut doc.root, id).ok_or_else(|| format!("no node {id}"))?;
+    n.style.opacity = opacity.clamp(0.0, 1.0);
+    Ok(())
+}
+
+/// Pin or unpin: absolute takes the node out of flow (margins become free
+/// placement); relative returns it to the flexbox, where its siblings take
+/// their positions from it again.
+pub fn apply_position(doc: &mut SceneDoc, id: &str, absolute: bool) -> Result<(), String> {
+    let n = find_node_mut(&mut doc.root, id).ok_or_else(|| format!("no node {id}"))?;
+    n.layout.position = if absolute {
+        Position::Absolute
+    } else {
+        Position::Relative
+    };
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -770,5 +841,54 @@ mod tests {
         assert_eq!(chip.layout.height, Dimension::Px(50.0));
 
         assert!(apply_move(&mut doc, "nope", 1.0, 1.0).is_err());
+    }
+
+    #[test]
+    fn style_edits_land_and_facts_read_them_back() {
+        let mut doc: SceneDoc = serde_json::from_value(serde_json::json!({
+            "format": "pmg.scene",
+            "format_version": {"major": 1, "minor": 0},
+            "min_reader": 1,
+            "id": "t", "name": "t",
+            "canvas": {"width": 400, "height": 300},
+            "fields": [], "fonts": [], "assets": [],
+            "root": {
+                "id": "root", "kind": "box",
+                "layout": {}, "transform": {}, "style": {},
+                "children": [
+                    {"id": "chip", "kind": "box",
+                     "layout": {"width": {"Px": 40.0}, "height": {"Px": 30.0}},
+                     "transform": {},
+                     "style": {"fill": {"rgba": [1.0, 0.0, 0.0, 1.0]}, "radius": 4.0},
+                     "children": []}
+                ]
+            },
+            "timelines": []
+        }))
+        .expect("fixture doc parses");
+
+        let before = node_facts(&doc, "chip").unwrap();
+        assert_eq!(before.fill, Some([1.0, 0.0, 0.0, 1.0]));
+        assert_eq!(before.radius, 4.0);
+        assert_eq!(before.opacity, 1.0);
+        assert!(!before.absolute);
+
+        apply_fill(&mut doc, "chip", Some([0.0, 1.0, 0.0, 0.5])).unwrap();
+        apply_radius(&mut doc, "chip", -3.0).unwrap(); // clamped, not an error
+        apply_opacity(&mut doc, "chip", 1.7).unwrap(); // clamped, not an error
+        apply_position(&mut doc, "chip", true).unwrap();
+
+        let after = node_facts(&doc, "chip").unwrap();
+        assert_eq!(after.fill, Some([0.0, 1.0, 0.0, 0.5]));
+        assert_eq!(after.radius, 0.0);
+        assert_eq!(after.opacity, 1.0);
+        assert!(after.absolute);
+
+        // Clearing the fill makes the box structural — the round trip must
+        // say None, not black.
+        apply_fill(&mut doc, "chip", None).unwrap();
+        assert_eq!(node_facts(&doc, "chip").unwrap().fill, None);
+
+        assert!(node_facts(&doc, "ghost").is_err());
     }
 }
