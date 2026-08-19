@@ -500,6 +500,48 @@ mod design_api {
             design::delete_node(&self.armed, &id).map_err(|e| JsValue::from_str(&e))
         }
 
+        /// Add a text node under `parent` (the root when null). Returns
+        /// `{ id, doc }` like `addBox`, so the caller selects what it made.
+        #[wasm_bindgen(js_name = addText)]
+        pub fn add_text(&self, parent: Option<String>) -> Result<String, JsValue> {
+            let (id, doc) = design::add_text(&self.armed, parent.as_deref())
+                .map_err(|e| JsValue::from_str(&e))?;
+            let doc: serde_json::Value =
+                serde_json::from_str(&doc).map_err(|e| JsValue::from_str(&e.to_string()))?;
+            serde_json::to_string(&serde_json::json!({ "id": id, "doc": doc }))
+                .map_err(|e| JsValue::from_str(&e.to_string()))
+        }
+
+        /// Set what a text node says — a literal, `${field}` references, or
+        /// both. Fields the expression references are declared as they appear.
+        #[wasm_bindgen(js_name = setTextExpr)]
+        pub fn set_text_expr(&self, id: String, expr: String) -> Result<String, JsValue> {
+            design::set_text_expr(&self.armed, &id, &expr).map_err(|e| JsValue::from_str(&e))
+        }
+
+        #[wasm_bindgen(js_name = setFontSize)]
+        pub fn set_font_size(&self, id: String, size: f32) -> Result<String, JsValue> {
+            design::set_font_size(&self.armed, &id, size).map_err(|e| JsValue::from_str(&e))
+        }
+
+        /// Set family and weight, declaring the family when it is new.
+        #[wasm_bindgen(js_name = setFontFamily)]
+        pub fn set_font_family(
+            &self,
+            id: String,
+            family: String,
+            weight: u16,
+        ) -> Result<String, JsValue> {
+            design::set_font_family(&self.armed, &id, &family, weight)
+                .map_err(|e| JsValue::from_str(&e))
+        }
+
+        /// Text alignment within its box: "start", "center", or "end".
+        #[wasm_bindgen(js_name = setTextAlign)]
+        pub fn set_text_align(&self, id: String, align: String) -> Result<String, JsValue> {
+            design::set_text_align(&self.armed, &id, &align).map_err(|e| JsValue::from_str(&e))
+        }
+
         /// Move a node to `(newParent, index)` — the layer tree's drop:
         /// reorder, reparent, and un-parent are all this one edit. Returns the
         /// edited document; cycles and the root are refused with sentences.

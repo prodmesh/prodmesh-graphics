@@ -65,12 +65,15 @@ export type DocTimeline = { name: string; duration_ms: number; tracks: DocTrack[
  *  from the solved geometry `Handles` reports. Straight from the document. */
 export type NodeFacts = {
   id: string
-  /** Encoded straight RGBA in 0..1, or null for an unfilled (structural) box. */
+  /** Encoded straight RGBA in 0..1, or null for an unfilled (structural) box.
+   *  For a text node this is the text colour. */
   fill: [number, number, number, number] | null
   radius: number
   opacity: number
   absolute: boolean
   kind: string
+  /** Present exactly when the node is text. */
+  text?: { expr: string; family: string; weight: number; size: number; align: string }
 }
 
 export type DragResult = {

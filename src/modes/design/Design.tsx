@@ -32,7 +32,7 @@
  */
 
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { AlertTriangle, FileUp, Plus, Redo2, Undo2, Upload } from 'lucide-react'
+import { AlertTriangle, FileUp, Plus, Redo2, Type, Undo2, Upload } from 'lucide-react'
 import { useQuery, invalidate } from '../../lib/useQuery'
 import { keys } from '../../lib/keys'
 import { ApiError, get, post } from '../../lib/api'
@@ -100,6 +100,7 @@ function SelectedNode({
   ready,
   generation,
   selected,
+  families,
   onEdit,
   onDelete,
 }: {
@@ -108,6 +109,8 @@ function SelectedNode({
   /** The session's replacement counter — geometry is only new when it is. */
   generation: number
   selected: string
+  /** Families the document declares — what the font picker offers. */
+  families: string[]
   onEdit: (doc: Record<string, unknown>) => void
   /** Absent for the root: the root is the canvas, not a thing to delete. */
   onDelete?: () => void
@@ -119,6 +122,10 @@ function SelectedNode({
   const [radius, setRadius] = useState('')
   const [opacity, setOpacity] = useState('')
   const [alpha, setAlpha] = useState('')
+  const [expr, setExpr] = useState('')
+  const [fontSize, setFontSize] = useState('')
+  const [family, setFamily] = useState('')
+  const [weight, setWeight] = useState('')
 
   useEffect(() => {
     const s = session.current
@@ -133,6 +140,10 @@ function SelectedNode({
       setRadius(String(f.radius))
       setOpacity(String(Math.round(f.opacity * 100)))
       setAlpha(String(Math.round((f.fill?.[3] ?? 1) * 100)))
+      setExpr(f.text?.expr ?? '')
+      setFontSize(f.text ? String(f.text.size) : '')
+      setFamily(f.text?.family ?? '')
+      setWeight(f.text ? String(f.text.weight) : '')
     } catch {
       setBbox(null)
       setFacts(null)
@@ -184,6 +195,25 @@ function SelectedNode({
     if (e.key === 'Enter') commit()
   }
 
+  const commitExpr = () => {
+    if (!facts?.text || expr === facts.text.expr) return
+    edit((s) => s.setTextExpr(selected, expr))
+  }
+
+  const commitFontSize = () => {
+    const v = Number(fontSize)
+    if (!Number.isFinite(v) || v < 1 || v === facts?.text?.size) return
+    edit((s) => s.setFontSize(selected, v))
+  }
+
+  const commitFont = (familyOverride?: string) => {
+    const fam = (familyOverride ?? family).trim()
+    const wt = Number(weight)
+    if (!facts?.text || !fam || !Number.isFinite(wt)) return
+    if (fam === facts.text.family && wt === facts.text.weight) return
+    edit((s) => s.setFontFamily(selected, fam, Math.max(1, Math.min(1000, Math.round(wt)))))
+  }
+
   return (
     <div className="design-console__selected">
       <GroupHeader label="Selected" trailing={selected} />
@@ -203,6 +233,77 @@ function SelectedNode({
               <option value="absolute">Pinned — moves freely</option>
             </select>
           </FormGroup>
+
+          {facts.text ? (
+            <>
+              {/* What it says. ${field} references bind Item data; typing one
+                  declares the field, so publish never trips over bookkeeping
+                  the designer was never shown. */}
+              <FormGroup label="Text — ${field} binds Item data">
+                <input
+                  value={expr}
+                  onChange={(e) => setExpr(e.target.value)}
+                  onBlur={commitExpr}
+                  onKeyDown={enterCommits(commitExpr)}
+                  aria-label="Text content"
+                />
+              </FormGroup>
+              <div className="design-console__size">
+                <FormGroup label="Font family">
+                  <input
+                    list="design-families"
+                    value={family}
+                    onChange={(e) => setFamily(e.target.value)}
+                    onBlur={() => commitFont()}
+                    onKeyDown={enterCommits(() => commitFont())}
+                    aria-label="Font family"
+                  />
+                  <datalist id="design-families">
+                    {families.map((f) => (
+                      <option key={f} value={f} />
+                    ))}
+                  </datalist>
+                </FormGroup>
+                <FormGroup label="Weight">
+                  <input
+                    type="number"
+                    min={1}
+                    max={1000}
+                    step={100}
+                    value={weight}
+                    onChange={(e) => setWeight(e.target.value)}
+                    onBlur={() => commitFont()}
+                    onKeyDown={enterCommits(() => commitFont())}
+                    aria-label="Font weight"
+                  />
+                </FormGroup>
+              </div>
+              <div className="design-console__size">
+                <FormGroup label="Size">
+                  <input
+                    type="number"
+                    min={1}
+                    value={fontSize}
+                    onChange={(e) => setFontSize(e.target.value)}
+                    onBlur={commitFontSize}
+                    onKeyDown={enterCommits(commitFontSize)}
+                    aria-label="Font size"
+                  />
+                </FormGroup>
+                <FormGroup label="Alignment">
+                  <select
+                    value={facts.text.align}
+                    aria-label="Text alignment"
+                    onChange={(e) => edit((s) => s.setTextAlign(selected, e.target.value))}
+                  >
+                    <option value="start">Left</option>
+                    <option value="center">Centred</option>
+                    <option value="end">Right</option>
+                  </select>
+                </FormGroup>
+              </div>
+            </>
+          ) : null}
 
           <div className="design-console__size">
             <FormGroup label="Width">
@@ -253,17 +354,21 @@ function SelectedNode({
                   />
                 </FormGroup>
               </div>
-              <button
-                type="button"
-                className="edit-console__addbtn"
-                onClick={() => edit((s) => s.clearFill(selected))}
-              >
-                Remove the fill
-              </button>
-              <p className="design-console__dim">
-                A box with no fill draws nothing and stops being clickable on the canvas —
-                select it again from here if you change your mind.
-              </p>
+              {facts.text ? null : (
+                <>
+                  <button
+                    type="button"
+                    className="edit-console__addbtn"
+                    onClick={() => edit((s) => s.clearFill(selected))}
+                  >
+                    Remove the fill
+                  </button>
+                  <p className="design-console__dim">
+                    A box with no fill draws nothing and stops being clickable on the canvas —
+                    select it again from here if you change your mind.
+                  </p>
+                </>
+              )}
             </>
           ) : (
             <button
@@ -310,7 +415,9 @@ function SelectedNode({
           {onDelete ? (
             <>
               <Button variant="secondary" block onClick={onDelete}>
-                Delete this box — and everything inside it
+                {facts.text
+                  ? 'Delete this text'
+                  : 'Delete this box — and everything inside it'}
               </Button>
               <p className="design-console__dim">Also on the keyboard: Delete, with the canvas focused.</p>
             </>
@@ -487,24 +594,31 @@ export function Design() {
   const usedBy = docId ? (items?.items ?? []).filter((i) => i.template_id === docId).length : 0
   const published = docId ? list.some((t) => t.id === docId && t.head_rev) : false
   const rootId = doc ? ((doc.root as { id?: string } | undefined)?.id ?? null) : null
+  // The families this document declares, deduplicated — what the font picker
+  // offers. Declaring a NEW one happens by typing it; the editor adds the
+  // FontRef.
+  const families = [
+    ...new Set(((doc?.fonts as { family: string }[] | undefined) ?? []).map((f) => f.family)),
+  ]
 
-  /** Add a box — into the selection when there is one, else the canvas root —
+  /** Add a node — into the selection when there is one, else the canvas root —
    *  and select what was just made, so the next act is styling it. */
-  const addBox = useCallback(() => {
-    const s = session.current
-    if (!s) return
-    try {
-      const r = JSON.parse(s.addBox(selNode ?? undefined)) as {
-        id: string
-        doc: Record<string, unknown>
+  const addNode = useCallback(
+    (what: 'box' | 'text') => {
+      const s = session.current
+      if (!s) return
+      try {
+        const raw = what === 'box' ? s.addBox(selNode ?? undefined) : s.addText(selNode ?? undefined)
+        const r = JSON.parse(raw) as { id: string; doc: Record<string, unknown> }
+        edit(r.doc)
+        setSelNode(r.id)
+      } catch (e) {
+        // A failed edit is the designer's to know about, in words.
+        setPublishState(`Could not add a ${what}: ${e instanceof Error ? e.message : String(e)}`)
       }
-      edit(r.doc)
-      setSelNode(r.id)
-    } catch (e) {
-      // A failed edit is the designer's to know about, in words.
-      setPublishState(`Could not add a box: ${e instanceof Error ? e.message : String(e)}`)
-    }
-  }, [session, selNode])
+    },
+    [session, selNode],
+  )
 
   /** Delete the selection and everything inside it. The root is the canvas
    *  and is never offered for deletion. */
@@ -526,8 +640,11 @@ export function Design() {
           <Button disabled={!doc} onClick={() => void publish()}>
             <Upload size={14} aria-hidden /> Publish
           </Button>
-          <Button variant="secondary" disabled={status !== 'ready'} onClick={addBox}>
+          <Button variant="secondary" disabled={status !== 'ready'} onClick={() => addNode('box')}>
             <Plus size={14} aria-hidden /> Add a box
+          </Button>
+          <Button variant="secondary" disabled={status !== 'ready'} onClick={() => addNode('text')}>
+            <Type size={14} aria-hidden /> Add text
           </Button>
           <Button variant="secondary" disabled={!canUndo} onClick={undo} title="Undo (Cmd+Z)">
             <Undo2 size={14} aria-hidden /> Undo
@@ -684,6 +801,7 @@ export function Design() {
                     ready={status === 'ready'}
                     generation={generation}
                     selected={selNode}
+                    families={families}
                     onEdit={edit}
                     onDelete={selNode === rootId ? undefined : deleteSelected}
                   />

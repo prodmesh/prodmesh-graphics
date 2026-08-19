@@ -304,6 +304,47 @@ pub fn delete_node(armed: &Armed, id: &str) -> Result<String, String> {
     edited_json(doc)
 }
 
+/// Add a text node under `parent` (the root when `None`) and return its id.
+/// Arrives saying "Text" in the document's first family — or a `Default`
+/// family declared on the spot, which arming then asks a font for.
+pub fn add_text(armed: &Armed, parent: Option<&str>) -> Result<(String, String), String> {
+    let mut doc = armed.doc.clone();
+    let id = interact::apply_add_text(&mut doc, parent)?;
+    Ok((id, edited_json(doc)?))
+}
+
+/// Set what a text node says. Fields the expression references are declared
+/// as they appear — the editor that introduces a reference carries its
+/// declaration, so publish cannot trip over bookkeeping.
+pub fn set_text_expr(armed: &Armed, id: &str, expr: &str) -> Result<String, String> {
+    let mut doc = armed.doc.clone();
+    interact::apply_set_text_expr(&mut doc, id, expr)?;
+    edited_json(doc)
+}
+
+pub fn set_font_size(armed: &Armed, id: &str, size: f32) -> Result<String, String> {
+    let mut doc = armed.doc.clone();
+    interact::apply_set_font_size(&mut doc, id, size)?;
+    edited_json(doc)
+}
+
+pub fn set_font_family(
+    armed: &Armed,
+    id: &str,
+    family: &str,
+    weight: u16,
+) -> Result<String, String> {
+    let mut doc = armed.doc.clone();
+    interact::apply_set_font_family(&mut doc, id, family, weight)?;
+    edited_json(doc)
+}
+
+pub fn set_text_align(armed: &Armed, id: &str, align: &str) -> Result<String, String> {
+    let mut doc = armed.doc.clone();
+    interact::apply_set_text_align(&mut doc, id, align)?;
+    edited_json(doc)
+}
+
 /// Move a node to `(new_parent, index)` — the layer tree's drop, covering
 /// reorder, reparent, and un-parent in one operation. Cycles and the root are
 /// refused with sentences.

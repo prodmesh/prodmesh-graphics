@@ -628,6 +628,7 @@ pub fn apply_resize(doc: &mut SceneDoc, id: &str, w: f32, h: f32) -> Result<(), 
 pub struct NodeFacts {
     pub id: String,
     /// As authored: encoded straight RGBA, `None` for an unfilled box.
+    /// For a text node this IS the text colour.
     pub fill: Option<[f32; 4]>,
     pub radius: f32,
     pub opacity: f32,
@@ -635,6 +636,20 @@ pub struct NodeFacts {
     /// flex flow.
     pub absolute: bool,
     pub kind: String,
+    /// Present exactly when the node is text.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub text: Option<TextFacts>,
+}
+
+/// What the inspector shows for a text node, beyond what every node has.
+#[derive(Debug, Clone, Serialize)]
+pub struct TextFacts {
+    /// The binding expression — a literal, or `${field}` references, or both.
+    pub expr: String,
+    pub family: String,
+    pub weight: u16,
+    pub size: f32,
+    pub align: String,
 }
 
 fn find_node<'a>(n: &'a Node, id: &str) -> Option<&'a Node> {
@@ -646,6 +661,21 @@ fn find_node<'a>(n: &'a Node, id: &str) -> Option<&'a Node> {
 
 pub fn node_facts(doc: &SceneDoc, id: &str) -> Result<NodeFacts, String> {
     let n = find_node(&doc.root, id).ok_or_else(|| format!("no node {id}"))?;
+    let text = match &n.content {
+        Some(pmg_scene::doc::Content::Text {
+            binding,
+            font,
+            align,
+            ..
+        }) => Some(TextFacts {
+            expr: binding.expr.clone(),
+            family: font.family.clone(),
+            weight: font.weight,
+            size: font.size,
+            align: format!("{align:?}").to_lowercase(),
+        }),
+        _ => None,
+    };
     Ok(NodeFacts {
         id: n.id.clone(),
         fill: n.style.fill.map(|c| c.rgba),
@@ -653,6 +683,7 @@ pub fn node_facts(doc: &SceneDoc, id: &str) -> Result<NodeFacts, String> {
         opacity: n.style.opacity,
         absolute: n.layout.position == Position::Absolute,
         kind: format!("{:?}", n.kind).to_lowercase(),
+        text,
     })
 }
 
@@ -829,12 +860,13 @@ fn id_taken(n: &Node, id: &str) -> bool {
     n.id == id || n.children.iter().any(|c| id_taken(c, id))
 }
 
-/// The first free id of the form `box-N`. Ids are how everything addresses a
-/// node — timelines, `visible_if`, this very editor — so a collision is not a
-/// cosmetic problem, and the counter walks until it finds air.
-fn fresh_id(doc: &SceneDoc) -> String {
+/// The first free id of the form `<prefix>-N`. Ids are how everything
+/// addresses a node — timelines, `visible_if`, this very editor — so a
+/// collision is not a cosmetic problem, and the counter walks until it finds
+/// air.
+fn fresh_id(doc: &SceneDoc, prefix: &str) -> String {
     (1..)
-        .map(|n| format!("box-{n}"))
+        .map(|n| format!("{prefix}-{n}"))
         .find(|id| !id_taken(&doc.root, id))
         .expect("the integers do not run out")
 }
@@ -847,7 +879,7 @@ fn fresh_id(doc: &SceneDoc) -> String {
 /// away in the inspector, which is a decision the designer makes, not one the
 /// editor smuggles in.
 pub fn apply_add_box(doc: &mut SceneDoc, parent: Option<&str>) -> Result<String, String> {
-    let id = fresh_id(doc);
+    let id = fresh_id(doc, "box");
     let parent_id = parent.unwrap_or(&doc.root.id).to_string();
     let p =
         find_node_mut(&mut doc.root, &parent_id).ok_or_else(|| format!("no node {parent_id}"))?;
@@ -874,6 +906,184 @@ pub fn apply_add_box(doc: &mut SceneDoc, parent: Option<&str>) -> Result<String,
         unknown: Default::default(),
     });
     Ok(id)
+}
+
+/// Add a text node under `parent` (the root when `None`) and return its id.
+///
+/// It arrives saying "Text" in white at 48 px, Content-sized — text measures
+/// itself, that is the responsive premise — and in the family the document
+/// already declares. A document with no fonts yet gets a `Default` family
+/// declared here: arming will then say, in a sentence, that a font must be
+/// added — which is the honest failure, found now and not on a booth Mac.
+pub fn apply_add_text(doc: &mut SceneDoc, parent: Option<&str>) -> Result<String, String> {
+    use pmg_scene::doc::{Align, Binding, Content, FontRef, FontSpec, NodeKind};
+
+    let (family, weight) = match doc.fonts.first() {
+        Some(f) => (f.family.clone(), f.weight),
+        None => {
+            doc.fonts.push(FontRef {
+                family: "Default".into(),
+                weight: 400,
+                style: None,
+                asset: None,
+                system_fallback: false,
+            });
+            ("Default".into(), 400)
+        }
+    };
+
+    let id = fresh_id(doc, "text");
+    let parent_id = parent.unwrap_or(&doc.root.id).to_string();
+    let p =
+        find_node_mut(&mut doc.root, &parent_id).ok_or_else(|| format!("no node {parent_id}"))?;
+    p.children.push(Node {
+        id: id.clone(),
+        display_name: None,
+        kind: NodeKind::Text,
+        layout: pmg_scene::doc::Layout {
+            width: Dimension::Content,
+            height: Dimension::Content,
+            ..Default::default()
+        },
+        transform: Default::default(),
+        style: pmg_scene::doc::Style {
+            fill: Some(pmg_scene::doc::Rgba {
+                rgba: [1.0, 1.0, 1.0, 1.0],
+            }),
+            ..Default::default()
+        },
+        clip: false,
+        visible_if: None,
+        content: Some(Content::Text {
+            binding: Binding {
+                expr: "Text".into(),
+                transform: vec![],
+            },
+            font: FontSpec {
+                family,
+                weight,
+                size: 48.0,
+                features: vec!["kern".into(), "liga".into()],
+                tracking: 0.0,
+                line_height: 1.2,
+            },
+            align: Align::Start,
+            max_lines: None,
+        }),
+        children: vec![],
+        unknown: Default::default(),
+    });
+    Ok(id)
+}
+
+/// The mutable text content of a node, or a sentence about why not.
+fn text_content_mut<'a>(
+    doc: &'a mut SceneDoc,
+    id: &str,
+) -> Result<
+    (
+        &'a mut pmg_scene::doc::Binding,
+        &'a mut pmg_scene::doc::FontSpec,
+        &'a mut pmg_scene::doc::Align,
+    ),
+    String,
+> {
+    let n = find_node_mut(&mut doc.root, id).ok_or_else(|| format!("no node {id}"))?;
+    match n.content.as_mut() {
+        Some(pmg_scene::doc::Content::Text {
+            binding,
+            font,
+            align,
+            ..
+        }) => Ok((binding, font, align)),
+        _ => Err(format!("{id} is not a text node")),
+    }
+}
+
+/// Set what a text node says: a literal, `${field}` references, or both.
+///
+/// Every field the expression references is DECLARED if it is not already —
+/// with the key as its label and sample, ready to rename in a fields editor
+/// later. Compile refuses an undeclared reference (it is almost always a
+/// typo), so the editor that introduces the reference carries the declaration;
+/// a designer typing `${speaker}` should get a speaker field, not an error
+/// about bookkeeping they were never shown.
+pub fn apply_set_text_expr(doc: &mut SceneDoc, id: &str, expr: &str) -> Result<(), String> {
+    use pmg_scene::doc::{Field, FieldType};
+
+    let referenced = pmg_scene::bind::referenced_fields(expr);
+    let (binding, _, _) = text_content_mut(doc, id)?;
+    binding.expr = expr.to_string();
+    for key in referenced {
+        if !doc.fields.iter().any(|f| f.key == key) {
+            doc.fields.push(Field {
+                key: key.clone(),
+                ty: FieldType::Text,
+                label: key.clone(),
+                required: false,
+                max_len: None,
+                sample: Some(key),
+            });
+        }
+    }
+    Ok(())
+}
+
+/// Set a text node's size in points. Clamped to something visible, the same
+/// contract as radius and opacity: a designer typing 0 gets the floor, not an
+/// error dialog.
+pub fn apply_set_font_size(doc: &mut SceneDoc, id: &str, size: f32) -> Result<(), String> {
+    let (_, font, _) = text_content_mut(doc, id)?;
+    font.size = size.max(1.0);
+    Ok(())
+}
+
+/// Set a text node's family and weight, declaring the family in `doc.fonts`
+/// when it is new — a family named by content but not declared would fail
+/// compile, and the declaration is where a font asset gets attached later.
+pub fn apply_set_font_family(
+    doc: &mut SceneDoc,
+    id: &str,
+    family: &str,
+    weight: u16,
+) -> Result<(), String> {
+    let family = family.trim();
+    if family.is_empty() {
+        return Err("a font family needs a name".into());
+    }
+    {
+        let (_, font, _) = text_content_mut(doc, id)?;
+        font.family = family.to_string();
+        font.weight = weight;
+    }
+    if !doc
+        .fonts
+        .iter()
+        .any(|f| f.family == family && f.weight == weight)
+    {
+        doc.fonts.push(pmg_scene::doc::FontRef {
+            family: family.to_string(),
+            weight,
+            style: None,
+            asset: None,
+            system_fallback: false,
+        });
+    }
+    Ok(())
+}
+
+/// Set a text node's alignment within its box: start, center, or end.
+pub fn apply_set_text_align(doc: &mut SceneDoc, id: &str, align: &str) -> Result<(), String> {
+    use pmg_scene::doc::Align;
+    let parsed = match align {
+        "start" => Align::Start,
+        "center" => Align::Center,
+        "end" => Align::End,
+        other => return Err(format!("no alignment named {other}")),
+    };
+    let (_, _, a) = text_content_mut(doc, id)?;
+    *a = parsed;
+    Ok(())
 }
 
 fn extract_from(n: &mut Node, id: &str) -> Option<Node> {
@@ -1372,5 +1582,73 @@ mod tests {
         apply_set_name(&mut doc, "a", Some("   ")).unwrap();
         assert_eq!(doc.root.children[1].display_name, None);
         assert!(apply_set_name(&mut doc, "ghost", Some("x")).is_err());
+    }
+
+    #[test]
+    fn text_editors_declare_what_they_reference() {
+        use pmg_scene::doc::{Align, Content};
+
+        let mut doc: SceneDoc = serde_json::from_value(serde_json::json!({
+            "format": "pmg.scene",
+            "format_version": {"major": 1, "minor": 0},
+            "min_reader": 1,
+            "id": "t", "name": "t",
+            "canvas": {"width": 400, "height": 300},
+            "fields": [], "fonts": [], "assets": [],
+            "root": {
+                "id": "root", "kind": "box", "layout": {}, "transform": {}, "style": {},
+                "children": []
+            },
+            "timelines": []
+        }))
+        .expect("fixture doc parses");
+
+        // A fontless document gets Default declared, so arming can say what
+        // is missing instead of rendering nothing.
+        let id = apply_add_text(&mut doc, None).unwrap();
+        assert_eq!(id, "text-1");
+        assert_eq!(doc.fonts.len(), 1);
+        assert_eq!(doc.fonts[0].family, "Default");
+        let facts = node_facts(&doc, &id).unwrap();
+        let text = facts.text.expect("a text node has text facts");
+        assert_eq!(text.expr, "Text");
+        assert_eq!(text.family, "Default");
+        assert_eq!(text.size, 48.0);
+
+        // Typing ${speaker} declares the speaker field — compile refuses
+        // undeclared references, so the editor that introduces one carries
+        // the declaration.
+        apply_set_text_expr(&mut doc, &id, "${speaker} live").unwrap();
+        assert_eq!(doc.fields.len(), 1);
+        assert_eq!(doc.fields[0].key, "speaker");
+        assert_eq!(doc.fields[0].sample.as_deref(), Some("speaker"));
+        // Referencing it again does not declare a twin.
+        apply_set_text_expr(&mut doc, &id, "${speaker}").unwrap();
+        assert_eq!(doc.fields.len(), 1);
+
+        // Size clamps; a new family is declared beside the first.
+        apply_set_font_size(&mut doc, &id, 0.0).unwrap();
+        apply_set_font_family(&mut doc, &id, "IBM Plex Sans", 600).unwrap();
+        apply_set_text_align(&mut doc, &id, "center").unwrap();
+        let node = find_node(&doc.root, &id).unwrap();
+        let Some(Content::Text { font, align, .. }) = &node.content else {
+            panic!("still text")
+        };
+        assert_eq!(font.size, 1.0);
+        assert_eq!(font.family, "IBM Plex Sans");
+        assert_eq!(font.weight, 600);
+        assert_eq!(*align, Align::Center);
+        assert_eq!(doc.fonts.len(), 2);
+
+        // The whole compile round-trip holds: declared fields, declared
+        // fonts, a valid document.
+        assert!(pmg_scene::validate::compile(&doc).is_ok());
+
+        // Editors refuse a non-text node with a sentence.
+        let box_id = apply_add_box(&mut doc, None).unwrap();
+        assert!(apply_set_text_expr(&mut doc, &box_id, "x")
+            .unwrap_err()
+            .contains("not a text node"));
+        assert!(apply_set_text_align(&mut doc, &id, "diagonal").is_err());
     }
 }
