@@ -152,17 +152,17 @@ function RundownConsole({
       </div>
 
       <div className="show-console__panels">
-        {/* Focusable so the arrow keys reach it, and the handler is a function
-            of the mode. A rundown mixes playlists of both kinds — that is the
-            normal Sunday — so what the keyboard does changes as the cursor
-            crosses a boundary, and the toolbar indicator is how an operator
-            knows without looking for it. */}
+        {/* The transport keys live on the WINDOW (useRundown), so they work
+            regardless of what holds focus — an operator who clicked the layer
+            rack still takes on space. What the keyboard does is a function of
+            the mode; a rundown mixes playlists of both kinds — that is the
+            normal Sunday — and the toolbar indicator is how an operator knows
+            without looking for it. */}
         <Panel width="var(--pm-rail-width)">
           <section
             aria-label="Rundown"
             tabIndex={0}
             className="show-console__rail"
-            onKeyDown={r.onKeyDown}
           >
             <PanelHeader
               title="Live Rundown"

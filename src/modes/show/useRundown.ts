@@ -15,7 +15,7 @@
  * reconcile — it never silently re-fires."*
  */
 
-import { useCallback, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import { useQuery, invalidate } from '../../lib/useQuery'
 import { useTopic } from '../../lib/stream'
 import { keys, topics } from '../../lib/keys'
@@ -228,10 +228,24 @@ export function useRundown({
    * In `cue` the arrows move the cursor and taking is a separate act. In
    * `follow` they move AND take — an operator following the band has no spare
    * action, and a beat late in a chorus is the whole problem.
+   *
+   * A WINDOW listener, deliberately. This used to live on the rundown rail and
+   * only worked while the rail happened to hold focus — an operator who
+   * clicked the layer rack, then hit space on the downbeat, scrolled the page
+   * instead of taking. The whole mode owns the transport keys; a text control
+   * keeps its typing and a focused button keeps its native space-click.
    */
-  const onKeyDown = useCallback(
-    (e: React.KeyboardEvent) => {
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
       if (!known || !reachable) return
+      if (e.metaKey || e.ctrlKey || e.altKey) return
+      const t = e.target as HTMLElement | null
+      if (
+        t &&
+        (['INPUT', 'TEXTAREA', 'SELECT', 'BUTTON'].includes(t.tagName) || t.isContentEditable)
+      ) {
+        return
+      }
       const delta =
         e.key === 'ArrowDown' || e.key === 'ArrowRight' ? 1
         : e.key === 'ArrowUp' || e.key === 'ArrowLeft' ? -1
@@ -253,9 +267,10 @@ export function useRundown({
       const next = delta > 0 ? cursor?.next : cursor?.previous
       fireAt(next ?? null)
       void move(delta)
-    },
-    [known, reachable, follow, move, fireAt, cursor, takeNext],
-  )
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [known, reachable, follow, move, fireAt, cursor, takeNext])
 
   // What counts as a divergence worth a sentence.
   //
@@ -295,6 +310,5 @@ export function useRundown({
     fireAt,
     jumpSection,
     jumpItem,
-    onKeyDown,
   }
 }

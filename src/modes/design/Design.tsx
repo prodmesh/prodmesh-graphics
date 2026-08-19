@@ -53,6 +53,7 @@ import {
   fontFacts,
   useDesignCanvas,
   type DesignSession,
+  type DocTimeline,
   type FaceInfo,
   type Handles,
   type NodeFacts,
@@ -661,6 +662,85 @@ export function Design() {
     return () => window.removeEventListener('keydown', onKey)
   }, [undo, redo])
 
+  // ---- Playback -------------------------------------------------------------
+  // Real time from the current playhead to the end, painted by rAF. This is a
+  // preview of the motion, not the node's clock — the node schedules frames
+  // against its output; this schedules them against the browser, which is
+  // exactly right for judging an ease and nothing more.
+  const [playing, setPlaying] = useState(false)
+  const tMsRef = useRef(0)
+  tMsRef.current = tMs
+
+  useEffect(() => {
+    if (!playing) return
+    const tl = ((doc?.timelines as DocTimeline[] | undefined) ?? []).find(
+      (t) => t.name === timeline,
+    )
+    const duration = tl?.duration_ms ?? 0
+    if (!timeline || duration <= 0 || status !== 'ready') {
+      setPlaying(false)
+      return
+    }
+    // Space at the end means "again", not a one-frame no-op.
+    const from = tMsRef.current >= duration - 1 ? 0 : tMsRef.current
+    const t0 = performance.now()
+    let raf = 0
+    const step = () => {
+      const t = Math.min(duration, from + (performance.now() - t0))
+      setTMs(t)
+      // paint() keeps only the LATEST queued request, so rAF outpacing the
+      // GPU drops intermediate frames rather than piling them up.
+      void paint(timeline, t)
+      if (t >= duration) {
+        setPlaying(false)
+        return
+      }
+      raf = requestAnimationFrame(step)
+    }
+    raf = requestAnimationFrame(step)
+    return () => cancelAnimationFrame(raf)
+    // tMs deliberately absent: the loop OWNS the playhead while it runs, and
+    // keying on it would restart the clock every frame.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [playing, timeline, status, doc, paint])
+
+  /** Space: play the selected timeline, or the first one when none is picked —
+   *  the habit every editor teaches, honoured before it is unlearned. */
+  const togglePlay = useCallback(() => {
+    if (timeline) {
+      setPlaying((p) => !p)
+      return
+    }
+    const names = ((doc?.timelines as DocTimeline[] | undefined) ?? []).map((t) => t.name)
+    if (names.length === 0) return
+    const pick = names.includes('In') ? 'In' : names[0]!
+    setTimeline(pick)
+    setTMs(0)
+    setPlaying(true)
+  }, [timeline, doc])
+
+  useEffect(() => {
+    // Not while a dialog is up: space playing an animation BEHIND the Media
+    // Browser is motion nobody asked for.
+    if (mediaOpen) return
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== ' ' || e.metaKey || e.ctrlKey || e.altKey) return
+      const t = e.target as HTMLElement | null
+      // A focused button keeps its native space-click, and a text control
+      // keeps its space. Everything else: space is transport, never scroll.
+      if (
+        t &&
+        (['INPUT', 'TEXTAREA', 'SELECT', 'BUTTON'].includes(t.tagName) || t.isContentEditable)
+      ) {
+        return
+      }
+      e.preventDefault()
+      togglePlay()
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [togglePlay, mediaOpen])
+
   const onOpenFile = useCallback(async (file: File) => {
     setPublishState(null)
     try {
@@ -898,11 +978,16 @@ export function Design() {
               selected={selNode}
               timeline={timeline}
               tMs={tMs}
+              playing={playing}
+              onTogglePlay={togglePlay}
               onPickTimeline={(v) => {
+                setPlaying(false)
                 setTimeline(v)
                 void paint(v, tMs)
               }}
               onScrub={(t) => {
+                // Scrubbing takes the transport back: predictable beats clever.
+                setPlaying(false)
                 setTMs(t)
                 void paint(timeline, t)
               }}

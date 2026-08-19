@@ -22,7 +22,7 @@
  */
 
 import { useCallback, useEffect, useState } from 'react'
-import { Plus, Trash2 } from 'lucide-react'
+import { Pause, Play, Plus, Trash2 } from 'lucide-react'
 import { Button, FormGroup, GroupHeader, Tag } from '../../components/console'
 import type { DesignSession, DocTimeline, Ease } from './useDesign'
 
@@ -63,6 +63,8 @@ export function TimelinePanel({
   selected,
   timeline,
   tMs,
+  playing,
+  onTogglePlay,
   onPickTimeline,
   onScrub,
   onEdit,
@@ -73,6 +75,9 @@ export function TimelinePanel({
   selected: string | null
   timeline: string | undefined
   tMs: number
+  playing: boolean
+  /** Space does the same thing, everywhere in Design outside a text control. */
+  onTogglePlay: () => void
   onPickTimeline: (name: string | undefined) => void
   onScrub: (t: number) => void
   onEdit: (doc: Record<string, unknown>) => void
@@ -164,6 +169,15 @@ export function TimelinePanel({
 
         {active ? (
           <>
+            <button
+              type="button"
+              className="edit-console__iconbtn"
+              aria-label={playing ? 'Pause' : 'Play'}
+              title={playing ? 'Pause (Space)' : 'Play (Space)'}
+              onClick={onTogglePlay}
+            >
+              {playing ? <Pause size={13} aria-hidden /> : <Play size={13} aria-hidden />}
+            </button>
             <label className="tl__field">
               <span>Duration ms</span>
               <input
