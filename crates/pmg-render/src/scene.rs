@@ -203,7 +203,8 @@ pub fn fit_uv(
     match fit {
         // Stretch samples the whole source and lets the quad distort it.
         Fit::Stretch => [0.0, 0.0, 1.0, 1.0],
-        // Cover crops the overflowing axis, centred.
+        // Cover crops the overflowing axis, centred: the sampled window is a
+        // SUB-rect of the source (scale < 1).
         Fit::Cover => {
             if img_aspect > box_aspect {
                 let w = box_aspect / img_aspect;
@@ -213,10 +214,21 @@ pub fn fit_uv(
                 [0.0, (1.0 - h) * 0.5, 1.0, h]
             }
         }
-        // Contain samples the whole source; the LETTERBOX is produced by the
-        // quad being smaller than the box, which the caller handles. Sampling
-        // outside 0..1 to fake it would smear the edge pixels instead.
-        Fit::Contain => [0.0, 0.0, 1.0, 1.0],
+        // Contain is Cover's mirror: the mapped window is LARGER than the
+        // source (scale > 1, offset < 0), so the letterbox is exactly where uv
+        // leaves [0,1] — and the fragment shader fades coverage to zero there
+        // analytically, the same way the rounded corner does. The sampler
+        // never actually reads outside the source: zero coverage multiplies
+        // whatever the clamped edge texel would have smeared.
+        Fit::Contain => {
+            if img_aspect > box_aspect {
+                let h = img_aspect / box_aspect;
+                [0.0, (1.0 - h) * 0.5, 1.0, h]
+            } else {
+                let w = box_aspect / img_aspect;
+                [(1.0 - w) * 0.5, 0.0, w, 1.0]
+            }
+        }
     }
 }
 
@@ -582,6 +594,38 @@ pub struct FrameNode {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn fit_uv_cover_crops_and_contain_letterboxes() {
+        use pmg_scene::doc::Fit;
+        // A 2:1 image in a 1:1 box.
+        // Cover fills the box and crops the sides: a centred half-width window.
+        assert_eq!(
+            fit_uv(Fit::Cover, 200, 100, 100.0, 100.0),
+            [0.25, 0.0, 0.5, 1.0]
+        );
+        // Contain is the exact mirror: the mapped window is DOUBLE height, so
+        // uv leaves [0,1] over the top and bottom quarters — the letterbox the
+        // shader fades out.
+        assert_eq!(
+            fit_uv(Fit::Contain, 200, 100, 100.0, 100.0),
+            [0.0, -0.5, 1.0, 2.0]
+        );
+        // Stretch samples everything and lets the quad distort it.
+        assert_eq!(
+            fit_uv(Fit::Stretch, 200, 100, 100.0, 100.0),
+            [0.0, 0.0, 1.0, 1.0]
+        );
+        // Matching aspects: all three agree, and nothing is cropped or faded.
+        assert_eq!(
+            fit_uv(Fit::Cover, 200, 100, 400.0, 200.0),
+            [0.0, 0.0, 1.0, 1.0]
+        );
+        assert_eq!(
+            fit_uv(Fit::Contain, 200, 100, 400.0, 200.0),
+            [0.0, 0.0, 1.0, 1.0]
+        );
+    }
 
     #[test]
     fn tracks_apply_to_a_copy_not_to_the_base() {

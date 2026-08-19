@@ -53,7 +53,7 @@ fn arming_needs_a_font_and_says_so() {
     // font would render one way on a designer's laptop and another on a booth
     // Mac, silently. With no face at all, arming fails rather than quietly
     // rendering nothing.
-    let Err(err) = design::arm(&fixture(), "{}", &[]) else {
+    let Err(err) = design::arm(&fixture(), "{}", &[], &Default::default()) else {
         panic!("arming with no font must fail");
     };
     assert!(!err.is_empty(), "a failure must explain itself");

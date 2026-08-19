@@ -252,6 +252,19 @@ mod design_api {
         /// Face bytes, kept so [`Self::rearm`] can rebuild without being handed
         /// the fonts again — an edit changes the document, never the fonts.
         faces: Vec<Vec<u8>>,
+        /// Image bytes by content hash. Unlike fonts these DO change mid-session
+        /// — assigning a picture is an edit — so rearm takes the current set.
+        blobs: std::collections::BTreeMap<String, Vec<u8>>,
+    }
+
+    fn blob_map(
+        hashes: Vec<String>,
+        blobs: js_sys::Array,
+    ) -> std::collections::BTreeMap<String, Vec<u8>> {
+        hashes
+            .into_iter()
+            .zip(blobs.iter().map(|v| js_sys::Uint8Array::new(&v).to_vec()))
+            .collect()
     }
 
     #[wasm_bindgen]
@@ -267,14 +280,17 @@ mod design_api {
             doc_json: String,
             data_json: String,
             fonts: js_sys::Array,
+            image_hashes: Vec<String>,
+            image_blobs: js_sys::Array,
         ) -> Result<DesignSession, JsValue> {
             let faces: Vec<Vec<u8>> = fonts
                 .iter()
                 .map(|v| js_sys::Uint8Array::new(&v).to_vec())
                 .collect();
+            let blobs = blob_map(image_hashes, image_blobs);
 
-            let armed =
-                design::arm(&doc_json, &data_json, &faces).map_err(|e| JsValue::from_str(&e))?;
+            let armed = design::arm(&doc_json, &data_json, &faces, &blobs)
+                .map_err(|e| JsValue::from_str(&e))?;
             let (device, queue) = super::browser::device().await?;
             let canvas = design::Canvas::new(
                 device,
@@ -293,6 +309,7 @@ mod design_api {
                 rest,
                 drag: None,
                 faces,
+                blobs,
             })
         }
 
@@ -304,8 +321,17 @@ mod design_api {
         /// success: a document that no longer solves leaves the old one on
         /// screen with the error as a sentence, never a blank canvas.
         #[wasm_bindgen(js_name = rearm)]
-        pub fn rearm(&mut self, doc_json: String, data_json: String) -> Result<(), JsValue> {
-            let armed = design::arm(&doc_json, &data_json, &self.faces)
+        pub fn rearm(
+            &mut self,
+            doc_json: String,
+            data_json: String,
+            image_hashes: Vec<String>,
+            image_blobs: js_sys::Array,
+        ) -> Result<(), JsValue> {
+            // Fonts never change mid-session; images do — assigning a picture
+            // is an edit, and the bytes ride in with it.
+            let blobs = blob_map(image_hashes, image_blobs);
+            let armed = design::arm(&doc_json, &data_json, &self.faces, &blobs)
                 .map_err(|e| JsValue::from_str(&e))?;
             if (armed.instance.canvas_w, armed.instance.canvas_h)
                 != (self.armed.instance.canvas_w, self.armed.instance.canvas_h)
@@ -325,6 +351,7 @@ mod design_api {
             );
             self.rest = design::rest_frame(&armed);
             self.armed = armed;
+            self.blobs = blobs;
             self.drag = None;
             Ok(())
         }
@@ -540,6 +567,38 @@ mod design_api {
         #[wasm_bindgen(js_name = setTextAlign)]
         pub fn set_text_align(&self, id: String, align: String) -> Result<String, JsValue> {
             design::set_text_align(&self.armed, &id, &align).map_err(|e| JsValue::from_str(&e))
+        }
+
+        /// Add an image node under `parent` (the root when null), showing the
+        /// asset `hash` names. Returns `{ id, doc }` like `addBox`.
+        #[wasm_bindgen(js_name = addImage)]
+        pub fn add_image(&self, parent: Option<String>, hash: String) -> Result<String, JsValue> {
+            let (id, doc) = design::add_image(&self.armed, parent.as_deref(), &hash)
+                .map_err(|e| JsValue::from_str(&e))?;
+            let doc: serde_json::Value =
+                serde_json::from_str(&doc).map_err(|e| JsValue::from_str(&e.to_string()))?;
+            serde_json::to_string(&serde_json::json!({ "id": id, "doc": doc }))
+                .map_err(|e| JsValue::from_str(&e.to_string()))
+        }
+
+        /// Give a node an image or swap the one it has — a box gains a
+        /// background picture, an image node changes what it shows.
+        #[wasm_bindgen(js_name = setImage)]
+        pub fn set_image(&self, id: String, hash: String) -> Result<String, JsValue> {
+            design::set_image(&self.armed, &id, &hash).map_err(|e| JsValue::from_str(&e))
+        }
+
+        /// Take a box's background image away, returning it to its fill.
+        #[wasm_bindgen(js_name = clearImage)]
+        pub fn clear_image(&self, id: String) -> Result<String, JsValue> {
+            design::clear_image(&self.armed, &id).map_err(|e| JsValue::from_str(&e))
+        }
+
+        /// How a picture meets a box it disagrees with: "cover", "contain",
+        /// or "stretch".
+        #[wasm_bindgen(js_name = setFit)]
+        pub fn set_fit(&self, id: String, fit: String) -> Result<String, JsValue> {
+            design::set_fit(&self.armed, &id, &fit).map_err(|e| JsValue::from_str(&e))
         }
 
         /// Move a node to `(newParent, index)` — the layer tree's drop:

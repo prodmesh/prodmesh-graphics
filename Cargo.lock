@@ -1198,6 +1198,7 @@ dependencies = [
  "js-sys",
  "pmg-anim",
  "pmg-layout",
+ "pmg-media",
  "pmg-render",
  "pmg-scene",
  "pmg-text",

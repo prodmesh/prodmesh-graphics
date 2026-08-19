@@ -226,8 +226,19 @@ fn fs_image(in : VsOut) -> @location(0) vec4<f32> {
     // picture, not a rectangle with rounded paint over it.
     let half = u.rect.zw * 0.5;
     let r = min(u.radius, min(half.x, half.y));
-    let d = sd_rounded_box(in.local, half, r);
-    let coverage = clamp(0.5 - d, 0.0, 1.0);
+    let d_corner = sd_rounded_box(in.local, half, r);
+
+    // The fit window. Scale-to-fit maps the source onto a window SMALLER than
+    // the rect (uv leaves [0,1] over the letterbox), and coverage must fade
+    // there as analytically as it does at the corners — fwidth stays banned.
+    // Convert the uv overshoot back to design units through the mapping's own
+    // scale; for cover and stretch uv stays inside [0,1] across the rect, the
+    // distance below never exceeds the plain box SDF, and the max() with the
+    // corner distance changes nothing — measured as identical, not hoped.
+    let unit = u.rect.zw / u.uv.zw; // design units per uv unit, per axis
+    let over = max(-uv, uv - vec2<f32>(1.0, 1.0)) * unit;
+    let d_fit = max(over.x, over.y);
+    let coverage = clamp(0.5 - max(d_corner, d_fit), 0.0, 1.0);
 
     // Already premultiplied, so opacity scales all four channels together.
     return texel * coverage * u.opacity;

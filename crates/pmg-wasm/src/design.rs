@@ -107,7 +107,12 @@ pub struct Armed {
     pub degraded: bool,
 }
 
-pub fn arm(doc_json: &str, data_json: &str, faces: &[Vec<u8>]) -> Result<Armed, String> {
+pub fn arm(
+    doc_json: &str,
+    data_json: &str,
+    faces: &[Vec<u8>],
+    blobs: &std::collections::BTreeMap<String, Vec<u8>>,
+) -> Result<Armed, String> {
     let doc: SceneDoc =
         serde_json::from_str(doc_json).map_err(|e| format!("not a template: {e}"))?;
     let supplied: std::collections::BTreeMap<String, String> =
@@ -125,10 +130,42 @@ pub fn arm(doc_json: &str, data_json: &str, faces: &[Vec<u8>]) -> Result<Armed, 
         data.insert(k, v);
     }
 
+    // Image bytes arrive keyed by HASH — the CAS's name for them — and the
+    // document's asset table maps its local keys to hashes, exactly the walk a
+    // node makes at arm. Decoding here (pmg-media) keeps the still path
+    // identical between the browser and the booth. A key whose bytes have not
+    // arrived yet reads as missing: the instance marks itself degraded and the
+    // designer sees the magenta placeholder resolve when the fetch lands.
+    struct Blobs<'a> {
+        doc_assets: Vec<(String, String)>,
+        blobs: &'a std::collections::BTreeMap<String, Vec<u8>>,
+    }
+    impl pmg_render::scene::ImageSource for Blobs<'_> {
+        fn image(&mut self, key: &str) -> Option<(u32, u32, std::sync::Arc<Vec<u8>>)> {
+            let hash = &self.doc_assets.iter().find(|(k, _)| k == key)?.1;
+            let bytes = self.blobs.get(hash)?;
+            let d = pmg_media::decode_image(bytes).ok()?;
+            Some((d.width, d.height, std::sync::Arc::new(d.rgba)))
+        }
+    }
+    let mut images = Blobs {
+        doc_assets: doc
+            .assets
+            .iter()
+            .map(|a| (a.key.clone(), a.hash.clone()))
+            .collect(),
+        blobs,
+    };
+
     let measurer = Measurer::new(TextEngine::new(font_db(&doc, faces)?));
     let solved = pmg_layout::solve(&doc, &data, &measurer).map_err(|e| e.to_string())?;
     let mut engine = measurer.into_engine();
-    let instance = SceneInstance::build(&doc, &solved, &mut TextEngineGlyphs::new(&mut engine));
+    let instance = SceneInstance::build_with(
+        &doc,
+        &solved,
+        &mut TextEngineGlyphs::new(&mut engine),
+        &mut images,
+    );
 
     Ok(Armed {
         omitted: solved.omitted.clone(),
@@ -342,6 +379,41 @@ pub fn set_font_family(
 pub fn set_text_align(armed: &Armed, id: &str, align: &str) -> Result<String, String> {
     let mut doc = armed.doc.clone();
     interact::apply_set_text_align(&mut doc, id, align)?;
+    edited_json(doc)
+}
+
+/// Add an image node under `parent` (the root when `None`) and return its id.
+/// The hash's asset is declared in the document on the way in.
+pub fn add_image(
+    armed: &Armed,
+    parent: Option<&str>,
+    hash: &str,
+) -> Result<(String, String), String> {
+    let mut doc = armed.doc.clone();
+    let id = interact::apply_add_image(&mut doc, parent, hash)?;
+    Ok((id, edited_json(doc)?))
+}
+
+/// Give a node an image, or swap the one it has — a box gains a background
+/// picture, an image node changes what it shows.
+pub fn set_image(armed: &Armed, id: &str, hash: &str) -> Result<String, String> {
+    let mut doc = armed.doc.clone();
+    interact::apply_set_image(&mut doc, id, hash)?;
+    edited_json(doc)
+}
+
+/// Take a box's background image away. An image node refuses — it IS its
+/// picture.
+pub fn clear_image(armed: &Armed, id: &str) -> Result<String, String> {
+    let mut doc = armed.doc.clone();
+    interact::apply_clear_image(&mut doc, id)?;
+    edited_json(doc)
+}
+
+/// How a picture meets a box it disagrees with: cover, contain, or stretch.
+pub fn set_fit(armed: &Armed, id: &str, fit: &str) -> Result<String, String> {
+    let mut doc = armed.doc.clone();
+    interact::apply_set_fit(&mut doc, id, fit)?;
     edited_json(doc)
 }
 
@@ -577,7 +649,7 @@ mod interaction_tests {
 
     #[test]
     fn the_whole_loop_arm_hit_drag_rearm() {
-        let armed = arm(&doc_json(), "{}", &[]).expect("arms without fonts");
+        let armed = arm(&doc_json(), "{}", &[], &Default::default()).expect("arms without fonts");
         let frame = rest_frame(&armed);
 
         // The chip lays out at the origin and is hit; empty canvas is not —
@@ -593,7 +665,7 @@ mod interaction_tests {
 
         // Re-arm the returned document: the chip now lives where it was
         // dropped, by the same solver that will render it on air.
-        let armed2 = arm(&doc2, "{}", &[]).expect("edited doc still arms");
+        let armed2 = arm(&doc2, "{}", &[], &Default::default()).expect("edited doc still arms");
         let frame2 = rest_frame(&armed2);
         assert_eq!(hit(&armed2, &frame2, 60.0, 20.0), None);
         assert_eq!(hit(&armed2, &frame2, 160.0, 80.0), Some("chip".into()));
@@ -607,13 +679,13 @@ mod interaction_tests {
 
     #[test]
     fn resize_fixes_the_size_in_pixels() {
-        let armed = arm(&doc_json(), "{}", &[]).expect("arms");
+        let armed = arm(&doc_json(), "{}", &[], &Default::default()).expect("arms");
         let frame = rest_frame(&armed);
         let drag = begin_drag(&armed, &frame, "chip", "se", 120.0, 40.0).unwrap();
         let doc2 = end_drag(&armed, &frame, &drag, 180.0, 90.0, false)
             .unwrap()
             .expect("a resize edits the document");
-        let armed2 = arm(&doc2, "{}", &[]).expect("arms");
+        let armed2 = arm(&doc2, "{}", &[], &Default::default()).expect("arms");
         let chip = armed2
             .instance
             .nodes
@@ -625,13 +697,13 @@ mod interaction_tests {
 
     #[test]
     fn handles_and_nudge_speak_the_inspector_language() {
-        let armed = arm(&doc_json(), "{}", &[]).expect("arms");
+        let armed = arm(&doc_json(), "{}", &[], &Default::default()).expect("arms");
         let frame = rest_frame(&armed);
         let h = handles_json(&armed, &frame, "chip").unwrap();
         assert!(h.contains("\"bbox\":[0.0,0.0,120.0,40.0]"));
 
         let doc2 = nudge(&armed, "chip", 1.0, 0.0).unwrap();
-        let armed2 = arm(&doc2, "{}", &[]).expect("arms");
+        let armed2 = arm(&doc2, "{}", &[], &Default::default()).expect("arms");
         let h2 = handles_json(&armed2, &rest_frame(&armed2), "chip").unwrap();
         assert!(h2.contains("\"bbox\":[1.0,0.0,120.0,40.0]"));
 
@@ -640,16 +712,16 @@ mod interaction_tests {
 
     #[test]
     fn reparent_and_rename_round_trip_the_document() {
-        let armed = arm(&doc_json(), "{}", &[]).expect("arms");
+        let armed = arm(&doc_json(), "{}", &[], &Default::default()).expect("arms");
 
         // The chip named for the eye, then moved into a fresh sibling — and
         // the edited documents still arm, which is the editor's real contract.
         let (box_id, doc2) = add_box(&armed, None).unwrap();
-        let armed2 = arm(&doc2, "{}", &[]).expect("arms");
+        let armed2 = arm(&doc2, "{}", &[], &Default::default()).expect("arms");
         let doc3 = set_name(&armed2, "chip", Some("Title chip")).unwrap();
-        let armed3 = arm(&doc3, "{}", &[]).expect("arms");
+        let armed3 = arm(&doc3, "{}", &[], &Default::default()).expect("arms");
         let doc4 = reparent(&armed3, "chip", &box_id, 0).unwrap();
-        let armed4 = arm(&doc4, "{}", &[]).expect("arms");
+        let armed4 = arm(&doc4, "{}", &[], &Default::default()).expect("arms");
 
         let parent = &armed4.doc.root.children[0];
         assert_eq!(parent.id, box_id);

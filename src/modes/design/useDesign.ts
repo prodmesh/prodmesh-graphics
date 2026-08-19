@@ -74,6 +74,8 @@ export type NodeFacts = {
   kind: string
   /** Present exactly when the node is text. */
   text?: { expr: string; family: string; weight: number; size: number; align: string }
+  /** Present exactly when the node draws a picture. */
+  image?: { asset_key: string; hash: string | null; fit: string }
 }
 
 export type DragResult = {
@@ -113,6 +115,10 @@ export function useDesignCanvas(
   doc: unknown,
   data: Record<string, string>,
   fonts: Uint8Array[],
+  /** Image bytes by content hash — the assets the document references,
+   *  fetched from the CAS. Arrive late without harm: the canvas shows the
+   *  degraded placeholder until the fetch lands and re-arms. */
+  images: Record<string, Uint8Array>,
 ) {
   const [status, setStatus] = useState<Status>('idle')
   const [problem, setProblem] = useState<string | null>(null)
@@ -188,6 +194,9 @@ export function useDesignCanvas(
         const wasm = await loadWasm()
         if (cancelled) return
 
+        const hashes = Object.keys(images)
+        const blobs = hashes.map((h) => images[h]!)
+
         let s = session.current
         if (s && sessionFonts.current === fonts) {
           // A paint holds a shared borrow of the session across its GPU
@@ -203,13 +212,15 @@ export function useDesignCanvas(
           // only on success, so a document that no longer solves leaves the
           // old pixels up with the error as a sentence — never a blank
           // canvas mid-edit.
-          s.rearm(JSON.stringify(doc), JSON.stringify(data))
+          s.rearm(JSON.stringify(doc), JSON.stringify(data), hashes, blobs)
         } else {
           setStatus('loading')
           const fresh = await wasm.DesignSession.create(
             JSON.stringify(doc),
             JSON.stringify(data),
             fonts,
+            hashes,
+            blobs,
           )
           if (cancelled) {
             fresh.free()
@@ -243,7 +254,7 @@ export function useDesignCanvas(
     })()
 
     return () => { cancelled = true }
-  }, [doc, data, fonts, canvasRef, paint])
+  }, [doc, data, fonts, images, canvasRef, paint])
 
   useEffect(() => () => { session.current?.free(); session.current = null }, [])
 

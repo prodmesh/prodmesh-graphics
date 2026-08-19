@@ -639,6 +639,19 @@ pub struct NodeFacts {
     /// Present exactly when the node is text.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub text: Option<TextFacts>,
+    /// Present exactly when the node draws a picture.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub image: Option<ImageFacts>,
+}
+
+/// What the inspector shows for a node drawing a picture.
+#[derive(Debug, Clone, Serialize)]
+pub struct ImageFacts {
+    pub asset_key: String,
+    /// The content hash behind the key, when the document declares it — what
+    /// an asset picker actually selects by.
+    pub hash: Option<String>,
+    pub fit: String,
 }
 
 /// What the inspector shows for a text node, beyond what every node has.
@@ -676,6 +689,18 @@ pub fn node_facts(doc: &SceneDoc, id: &str) -> Result<NodeFacts, String> {
         }),
         _ => None,
     };
+    let image = match &n.content {
+        Some(pmg_scene::doc::Content::Image { asset_key, fit }) => Some(ImageFacts {
+            asset_key: asset_key.clone(),
+            hash: doc
+                .assets
+                .iter()
+                .find(|a| &a.key == asset_key)
+                .map(|a| a.hash.clone()),
+            fit: format!("{fit:?}").to_lowercase(),
+        }),
+        _ => None,
+    };
     Ok(NodeFacts {
         id: n.id.clone(),
         fill: n.style.fill.map(|c| c.rgba),
@@ -684,6 +709,7 @@ pub fn node_facts(doc: &SceneDoc, id: &str) -> Result<NodeFacts, String> {
         absolute: n.layout.position == Position::Absolute,
         kind: format!("{:?}", n.kind).to_lowercase(),
         text,
+        image,
     })
 }
 
@@ -974,6 +1000,135 @@ pub fn apply_add_text(doc: &mut SceneDoc, parent: Option<&str>) -> Result<String
         unknown: Default::default(),
     });
     Ok(id)
+}
+
+/// The asset key for `hash` in this document, declaring an [`AssetRef`] when
+/// the hash is new. One hash, one key: assigning the same picture twice reuses
+/// the declaration rather than stacking twins.
+fn image_asset_key(doc: &mut SceneDoc, hash: &str) -> String {
+    if let Some(a) = doc.assets.iter().find(|a| a.hash == hash) {
+        return a.key.clone();
+    }
+    let key = (1..)
+        .map(|n| format!("image-{n}"))
+        .find(|k| !doc.assets.iter().any(|a| &a.key == k))
+        .expect("the integers do not run out");
+    doc.assets.push(pmg_scene::doc::AssetRef {
+        key: key.clone(),
+        hash: hash.to_string(),
+        kind: "image".into(),
+    });
+    key
+}
+
+/// Add an image node under `parent` (the root when `None`) and return its id.
+///
+/// It arrives 320×180, scale-to-fill, showing the asset `hash` names — which
+/// is declared in `doc.assets` on the way in. The size is fixed rather than
+/// content-sized on purpose: an image has no one honest size, and a designer
+/// who wants the native aspect gets it by picking a fit that preserves it.
+pub fn apply_add_image(
+    doc: &mut SceneDoc,
+    parent: Option<&str>,
+    hash: &str,
+) -> Result<String, String> {
+    use pmg_scene::doc::{Content, Fit, NodeKind};
+
+    let key = image_asset_key(doc, hash);
+    let id = fresh_id(doc, "image");
+    let parent_id = parent.unwrap_or(&doc.root.id).to_string();
+    let p =
+        find_node_mut(&mut doc.root, &parent_id).ok_or_else(|| format!("no node {parent_id}"))?;
+    p.children.push(Node {
+        id: id.clone(),
+        display_name: None,
+        kind: NodeKind::Image,
+        layout: pmg_scene::doc::Layout {
+            width: Dimension::Px(320.0),
+            height: Dimension::Px(180.0),
+            ..Default::default()
+        },
+        transform: Default::default(),
+        style: Default::default(),
+        clip: false,
+        visible_if: None,
+        content: Some(Content::Image {
+            asset_key: key,
+            fit: Fit::Cover,
+        }),
+        children: vec![],
+        unknown: Default::default(),
+    });
+    Ok(id)
+}
+
+/// Give a node an image, or swap the one it has.
+///
+/// On a box this is the background-picture move: the image draws in the box's
+/// rect — rounded by its radius, fitted by its fit — and the box's children
+/// draw over it. On an image node it swaps the picture. Text keeps its words:
+/// a node cannot serve two contents, and the refusal says so.
+pub fn apply_set_image(doc: &mut SceneDoc, id: &str, hash: &str) -> Result<(), String> {
+    use pmg_scene::doc::{Content, Fit};
+
+    let key = image_asset_key(doc, hash);
+    let n = find_node_mut(&mut doc.root, id).ok_or_else(|| format!("no node {id}"))?;
+    match &mut n.content {
+        Some(Content::Image { asset_key, .. }) => {
+            *asset_key = key;
+            Ok(())
+        }
+        None => {
+            n.content = Some(Content::Image {
+                asset_key: key,
+                fit: Fit::Cover,
+            });
+            Ok(())
+        }
+        Some(_) => Err(format!(
+            "{id} already has content that is not an image — a node draws one thing"
+        )),
+    }
+}
+
+/// Take a box's background image away, returning it to its fill. Refused on
+/// an image node: that node IS its picture — delete the node instead.
+pub fn apply_clear_image(doc: &mut SceneDoc, id: &str) -> Result<(), String> {
+    use pmg_scene::doc::{Content, NodeKind};
+
+    let n = find_node_mut(&mut doc.root, id).ok_or_else(|| format!("no node {id}"))?;
+    if !matches!(n.content, Some(Content::Image { .. })) {
+        return Err(format!("{id} has no image to remove"));
+    }
+    if n.kind == NodeKind::Image {
+        return Err(format!(
+            "{id} is an image node — deleting the node is how it goes away"
+        ));
+    }
+    n.content = None;
+    Ok(())
+}
+
+/// Set how a picture meets a box it disagrees with: scale to fill (crops),
+/// scale to fit (letterboxes), or stretch (distorts). Applies to stills and
+/// clips alike — a clip is an image whose texture changes.
+pub fn apply_set_fit(doc: &mut SceneDoc, id: &str, fit: &str) -> Result<(), String> {
+    use pmg_scene::doc::{Content, Fit};
+
+    let parsed = match fit {
+        "cover" => Fit::Cover,
+        "contain" => Fit::Contain,
+        "stretch" => Fit::Stretch,
+        other => return Err(format!("no fit named {other}")),
+    };
+    let n = find_node_mut(&mut doc.root, id).ok_or_else(|| format!("no node {id}"))?;
+    match &mut n.content {
+        Some(Content::Image { fit, .. }) | Some(Content::Video { fit, .. }) => {
+            *fit = parsed;
+            Ok(())
+        }
+        _ => Err(format!("{id} has no picture to fit")),
+    }
 }
 
 /// The mutable text content of a node, or a sentence about why not.
@@ -1650,5 +1805,72 @@ mod tests {
             .unwrap_err()
             .contains("not a text node"));
         assert!(apply_set_text_align(&mut doc, &id, "diagonal").is_err());
+    }
+
+    #[test]
+    fn image_editors_declare_assets_once_and_refuse_nonsense() {
+        use pmg_scene::doc::{Content, Fit, NodeKind};
+
+        let mut doc: SceneDoc = serde_json::from_value(serde_json::json!({
+            "format": "pmg.scene",
+            "format_version": {"major": 1, "minor": 0},
+            "min_reader": 1,
+            "id": "t", "name": "t",
+            "canvas": {"width": 400, "height": 300},
+            "fields": [], "fonts": [], "assets": [],
+            "root": {
+                "id": "root", "kind": "box", "layout": {}, "transform": {}, "style": {},
+                "children": []
+            },
+            "timelines": []
+        }))
+        .expect("fixture doc parses");
+
+        // An image node arrives fitted, and its asset is declared.
+        let hash = "blake3:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+        let id = apply_add_image(&mut doc, None, hash).unwrap();
+        assert_eq!(id, "image-1");
+        assert_eq!(doc.assets.len(), 1);
+        assert_eq!(doc.assets[0].kind, "image");
+        let facts = node_facts(&doc, &id).unwrap();
+        let img = facts.image.expect("an image node has image facts");
+        assert_eq!(img.hash.as_deref(), Some(hash));
+        assert_eq!(img.fit, "cover");
+
+        // The same picture on a box reuses the declaration — one hash, one key.
+        let box_id = apply_add_box(&mut doc, None).unwrap();
+        apply_set_image(&mut doc, &box_id, hash).unwrap();
+        assert_eq!(doc.assets.len(), 1);
+        // The box keeps its kind and its fill; the image is content.
+        let b = find_node(&doc.root, &box_id).unwrap();
+        assert_eq!(b.kind, NodeKind::Box);
+        assert!(b.style.fill.is_some());
+
+        // Fit modes land where the content is, stills or clips alike.
+        apply_set_fit(&mut doc, &box_id, "contain").unwrap();
+        let b = find_node(&doc.root, &box_id).unwrap();
+        assert!(matches!(
+            b.content,
+            Some(Content::Image {
+                fit: Fit::Contain,
+                ..
+            })
+        ));
+        assert!(apply_set_fit(&mut doc, &box_id, "diagonal").is_err());
+
+        // Clearing returns a box to its fill; an image node refuses — it IS
+        // its picture — and text keeps its words.
+        apply_clear_image(&mut doc, &box_id).unwrap();
+        assert!(find_node(&doc.root, &box_id).unwrap().content.is_none());
+        assert!(apply_clear_image(&mut doc, &id)
+            .unwrap_err()
+            .contains("image node"));
+        let text_id = apply_add_text(&mut doc, None).unwrap();
+        assert!(apply_set_image(&mut doc, &text_id, hash)
+            .unwrap_err()
+            .contains("one thing"));
+
+        // The compile round-trip holds with the declared asset.
+        assert!(pmg_scene::validate::compile(&doc).is_ok());
     }
 }

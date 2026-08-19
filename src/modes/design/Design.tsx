@@ -32,7 +32,7 @@
  */
 
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { AlertTriangle, FileUp, Plus, Redo2, Type, Undo2, Upload } from 'lucide-react'
+import { AlertTriangle, FileUp, Image as ImageIcon, Plus, Redo2, Type, Undo2, Upload } from 'lucide-react'
 import { useQuery, invalidate } from '../../lib/useQuery'
 import { keys } from '../../lib/keys'
 import { ApiError, get, post } from '../../lib/api'
@@ -101,6 +101,7 @@ function SelectedNode({
   generation,
   selected,
   families,
+  imageAssets,
   onEdit,
   onDelete,
 }: {
@@ -111,6 +112,8 @@ function SelectedNode({
   selected: string
   /** Families the document declares — what the font picker offers. */
   families: string[]
+  /** Image assets this server holds — what the picture picker offers. */
+  imageAssets: { hash: string; size: number }[]
   onEdit: (doc: Record<string, unknown>) => void
   /** Absent for the root: the root is the canvas, not a thing to delete. */
   onDelete?: () => void
@@ -233,6 +236,59 @@ function SelectedNode({
               <option value="absolute">Pinned — moves freely</option>
             </select>
           </FormGroup>
+
+          {facts.image ? (
+            <>
+              <div className="design-console__size">
+                <FormGroup label="Picture">
+                  <select
+                    value={facts.image.hash ?? ''}
+                    aria-label="Picture asset"
+                    onChange={(e) => { if (e.target.value) edit((s) => s.setImage(selected, e.target.value)) }}
+                  >
+                    {facts.image.hash && !imageAssets.some((a) => a.hash === facts.image!.hash) ? (
+                      <option value={facts.image.hash}>
+                        {shortRev(facts.image.hash)} — not on this server
+                      </option>
+                    ) : null}
+                    {imageAssets.map((a) => (
+                      <option key={a.hash} value={a.hash}>
+                        {shortRev(a.hash)} · {Math.max(1, Math.round(a.size / 1024))} KB
+                      </option>
+                    ))}
+                  </select>
+                </FormGroup>
+                <FormGroup label="Fit">
+                  <select
+                    value={facts.image.fit}
+                    aria-label="Picture fit"
+                    onChange={(e) => edit((s) => s.setFit(selected, e.target.value))}
+                  >
+                    <option value="cover">Scale to fill — crops</option>
+                    <option value="contain">Scale to fit — letterboxes</option>
+                    <option value="stretch">Stretch — distorts</option>
+                  </select>
+                </FormGroup>
+              </div>
+              {facts.kind === 'box' ? (
+                <button
+                  type="button"
+                  className="edit-console__addbtn"
+                  onClick={() => edit((s) => s.clearImage(selected))}
+                >
+                  Remove the image
+                </button>
+              ) : null}
+            </>
+          ) : facts.kind === 'box' && imageAssets.length > 0 ? (
+            <button
+              type="button"
+              className="edit-console__addbtn"
+              onClick={() => edit((s) => s.setImage(selected, imageAssets[0]!.hash))}
+            >
+              Add a background image
+            </button>
+          ) : null}
 
           {facts.text ? (
             <>
@@ -417,7 +473,9 @@ function SelectedNode({
               <Button variant="secondary" block onClick={onDelete}>
                 {facts.text
                   ? 'Delete this text'
-                  : 'Delete this box — and everything inside it'}
+                  : facts.kind === 'image'
+                    ? 'Delete this image'
+                    : 'Delete this box — and everything inside it'}
               </Button>
               <p className="design-console__dim">Also on the keyboard: Delete, with the canvas focused.</p>
             </>
@@ -451,14 +509,49 @@ export function Design() {
   const [tMs, setTMs] = useState(0)
   const [publishState, setPublishState] = useState<string | null>(null)
 
+  // Image bytes by hash, for the assets THIS document references. The cache
+  // outlives the state so an undo that re-references a picture never
+  // refetches it; the state only changes when the referenced set does, so an
+  // unrelated edit never re-arms over identical bytes.
+  const imageCache = useRef<Record<string, Uint8Array>>({})
+  const imageKeys = useRef('')
+  const [images, setImages] = useState<Record<string, Uint8Array>>({})
+  useEffect(() => {
+    const wanted = [
+      ...new Set(
+        ((doc?.assets as { hash: string; kind: string }[] | undefined) ?? [])
+          .filter((a) => a.kind === 'image')
+          .map((a) => a.hash),
+      ),
+    ].sort()
+    let cancelled = false
+    ;(async () => {
+      await Promise.all(
+        wanted
+          .filter((h) => !imageCache.current[h])
+          .map(async (h) => {
+            const r = await fetch(`/cas/${h}`)
+            if (r.ok) imageCache.current[h] = new Uint8Array(await r.arrayBuffer())
+          }),
+      )
+      if (cancelled) return
+      const key = wanted.filter((h) => imageCache.current[h]).join(',')
+      if (key === imageKeys.current) return
+      imageKeys.current = key
+      setImages(Object.fromEntries(wanted.filter((h) => imageCache.current[h]).map((h) => [h, imageCache.current[h]!])))
+    })().catch(() => {})
+    return () => { cancelled = true }
+  }, [doc])
+
   const canvasRef = useRef<HTMLCanvasElement | null>(null)
-  const { status, problem, info, paint, session, generation } = useDesignCanvas(canvasRef, doc, data, fonts)
+  const { status, problem, info, paint, session, generation } = useDesignCanvas(canvasRef, doc, data, fonts, images)
   // The selected NODE on the canvas — a different thing from the selected
   // template in the browser rail, which predates it.
   const [selNode, setSelNode] = useState<string | null>(null)
 
   const list = templates?.templates ?? []
   const fontAssets = (assets?.assets ?? []).filter((a) => FONT_KINDS.has(a.kind))
+  const imageAssets = (assets?.assets ?? []).filter((a) => a.kind === 'image')
 
   // Load the fonts this server holds. One fetch per hash, and they are
   // immutable, so this never needs invalidating.
@@ -548,9 +641,9 @@ export function Design() {
     }
   }, [load])
 
-  const onUploadFont = useCallback(async (file: File) => {
+  const onUploadAsset = useCallback(async (file: File, kind: 'font' | 'image') => {
     const bytes = new Uint8Array(await file.arrayBuffer())
-    const res = await fetch('/api/assets?kind=font', {
+    const res = await fetch(`/api/assets?kind=${kind}`, {
       method: 'POST',
       headers: { 'content-type': 'application/octet-stream' },
       body: bytes,
@@ -604,11 +697,16 @@ export function Design() {
   /** Add a node — into the selection when there is one, else the canvas root —
    *  and select what was just made, so the next act is styling it. */
   const addNode = useCallback(
-    (what: 'box' | 'text') => {
+    (what: 'box' | 'text' | 'image') => {
       const s = session.current
       if (!s) return
       try {
-        const raw = what === 'box' ? s.addBox(selNode ?? undefined) : s.addText(selNode ?? undefined)
+        const raw =
+          what === 'box'
+            ? s.addBox(selNode ?? undefined)
+            : what === 'text'
+              ? s.addText(selNode ?? undefined)
+              : s.addImage(selNode ?? undefined, imageAssets[0]!.hash)
         const r = JSON.parse(raw) as { id: string; doc: Record<string, unknown> }
         edit(r.doc)
         setSelNode(r.id)
@@ -617,7 +715,7 @@ export function Design() {
         setPublishState(`Could not add a ${what}: ${e instanceof Error ? e.message : String(e)}`)
       }
     },
-    [session, selNode],
+    [session, selNode, imageAssets],
   )
 
   /** Delete the selection and everything inside it. The root is the canvas
@@ -645,6 +743,14 @@ export function Design() {
           </Button>
           <Button variant="secondary" disabled={status !== 'ready'} onClick={() => addNode('text')}>
             <Type size={14} aria-hidden /> Add text
+          </Button>
+          <Button
+            variant="secondary"
+            disabled={status !== 'ready' || imageAssets.length === 0}
+            title={imageAssets.length === 0 ? 'Add an image asset first — right rail' : undefined}
+            onClick={() => addNode('image')}
+          >
+            <ImageIcon size={14} aria-hidden /> Add an image
           </Button>
           <Button variant="secondary" disabled={!canUndo} onClick={undo} title="Undo (Cmd+Z)">
             <Undo2 size={14} aria-hidden /> Undo
@@ -802,6 +908,7 @@ export function Design() {
                     generation={generation}
                     selected={selNode}
                     families={families}
+                    imageAssets={imageAssets}
                     onEdit={edit}
                     onDelete={selNode === rootId ? undefined : deleteSelected}
                   />
@@ -840,13 +947,32 @@ export function Design() {
                 <input
                   type="file"
                   accept=".ttf,.otf,.ttc"
-                  onChange={(e) => { const f = e.target.files?.[0]; if (f) void onUploadFont(f) }}
+                  onChange={(e) => { const f = e.target.files?.[0]; if (f) void onUploadAsset(f, 'font') }}
                 />
               </label>
               <p className="design-console__dim">
                 {fontAssets.length === 0
                   ? 'No fonts yet. A template can only render with a font this server holds — that is what makes it look the same on every machine.'
                   : 'Fonts are carried by content hash and staged to nodes like any other asset.'}
+              </p>
+
+              <GroupHeader
+                label="Images"
+                trailing={imageAssets.length ? `${imageAssets.length}` : undefined}
+              />
+              <label className="design-console__file">
+                <FileUp size={14} aria-hidden />
+                <span>Add an image…</span>
+                <input
+                  type="file"
+                  accept=".png,.jpg,.jpeg"
+                  onChange={(e) => { const f = e.target.files?.[0]; if (f) void onUploadAsset(f, 'image') }}
+                />
+              </label>
+              <p className="design-console__dim">
+                {imageAssets.length === 0
+                  ? 'No images yet. Add one to place it on the canvas or behind a box.'
+                  : 'Pictures are carried by content hash, so a template shows the same pixels everywhere.'}
               </p>
             </div>
 
