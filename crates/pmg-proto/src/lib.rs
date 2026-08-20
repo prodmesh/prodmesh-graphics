@@ -712,6 +712,11 @@ pub struct OutputState {
     #[serde(deserialize_with = "lenient::f32")]
     pub fps: f32,
     pub late_frames: u64,
+    /// Where THIS output's preview channel listens. 0 when it has none. The
+    /// node is the only honest source for this — the server advertising one
+    /// global port is how a monitor ends up showing the wrong output.
+    #[serde(default)]
+    pub preview_port: u16,
 }
 
 /// What the card says about its reference input.

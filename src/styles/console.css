@@ -539,6 +539,28 @@
 }
 .c-program__frame { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: contain; }
 
+/* The monitor's output picker: which feed the well is showing. Watching is
+   not operating — the tabs never change what a take does. */
+.c-program__picker {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  z-index: 2;
+  display: flex;
+  gap: 2px;
+}
+.c-program__pick {
+  border: 0;
+  border-radius: var(--pm-radius-4);
+  background: rgb(0 0 0 / 55%);
+  color: var(--pm-text-muted);
+  font-family: var(--pm-font-mono);
+  font-size: 10px;
+  padding: 2px 7px;
+  cursor: pointer;
+}
+.c-program__pick--on { color: var(--pm-text-primary); background: rgb(0 0 0 / 80%); box-shadow: var(--pm-hairline); }
+
 /* ---- Audio meters, overlaying the program monitor's edges -----------------
    Channels 1/2 ride the left edge, 3/4 the right. The zone colours are the
    meter convention every console uses — green body, amber above −18 dBFS, red

@@ -167,6 +167,10 @@ pub struct Output {
     pub fps_den: u32,
     pub frame: u64,
     pub late_frames: u64,
+    /// This output's preview port, filled in by the render thread that owns
+    /// the output — the engine learns outputs from assignments, which do not
+    /// know about preview transport.
+    pub preview_port: u16,
 }
 
 impl Output {
@@ -324,6 +328,7 @@ impl LayerEngine {
                     fps_den: fps.1,
                     frame: 0,
                     late_frames: 0,
+                    preview_port: 0,
                 }),
             }
         }
@@ -927,6 +932,7 @@ impl LayerEngine {
                     sync: o.sync.clone(),
                     fps: o.fps() as f32,
                     late_frames: o.late_frames,
+                    preview_port: o.preview_port,
                     layers: o
                         .layers
                         .iter()

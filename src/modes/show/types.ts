@@ -81,6 +81,8 @@ export type OutputState = {
   sync?: SyncState | null
   fps?: number
   late_frames?: number
+  /** Where this output's preview channel listens; 0 or absent means none. */
+  preview_port?: number
   layers: { name: string; occupant: Occupant | null }[]
 }
 

@@ -1338,6 +1338,15 @@ fn render_group(
                 if let Ok(mut e) = engine.lock() {
                     if let Some(o) = e.outputs.iter_mut().find(|o| o.id == out.spec.id) {
                         o.sync = sync;
+                        // Idempotent, and repeated on purpose: the engine
+                        // recreates outputs on every assignment, and this poll
+                        // is the place that already reconciles per-output
+                        // facts the assignment cannot know.
+                        o.preview_port = if out.preview.is_some() || out.preview_h264.is_some() {
+                            out.spec.preview_port
+                        } else {
+                            0
+                        };
                     }
                 }
             }

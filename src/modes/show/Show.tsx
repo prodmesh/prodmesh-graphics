@@ -726,17 +726,61 @@ function ProgramWell({
   layers: LayersSnapshot | undefined
 }) {
   const anyOnAir = (layers?.layers ?? []).some((l) => l.occupant)
-  const caption = `${outputId}${layers?.fps ? `  ·  ${layers.fps.toFixed(2)} fps` : ''}`
+
+  // Which output the MONITOR shows — not necessarily the one being operated.
+  // A take fans out to the ITEM's destinations (ADR 0018), so a full-screen
+  // fired from a lower-third rundown lands on another output; a monitor
+  // pinned to one output makes that success look like a failure.
+  const [watching, setWatching] = useState<string | null>(null)
+  const outputs = node.state?.outputs ?? []
+  const watched = watching ?? outputId
+  const watchedPort = outputs.find((o) => o.id === watched)?.preview_port ?? 0
+  // The node reports each output's own preview port; the advertised URL
+  // carries the host. Port 0 means that output has no preview.
+  const watchedUrl =
+    node.preview_url && watchedPort > 0
+      ? node.preview_url.replace(/:\d+\/?$/, `:${watchedPort}/`)
+      : watched === outputId
+        ? node.preview_url
+        : null
+
+  const caption = `${watched}${layers?.fps ? `  ·  ${layers.fps.toFixed(2)} fps` : ''}`
 
   return (
     <ProgramCanvas label="Program output" onAir={anyOnAir} output={caption}>
-      {node.preview_url ? (
-        <Preview url={node.preview_url} name={node.name} outputId={outputId} anyOnAir={anyOnAir} />
+      {outputs.length > 1 ? (
+        <div className="c-program__picker" role="tablist" aria-label="Watch output">
+          {outputs.map((o) => (
+            <button
+              key={o.id}
+              type="button"
+              role="tab"
+              aria-selected={o.id === watched}
+              className={
+                o.id === watched ? 'c-program__pick c-program__pick--on' : 'c-program__pick'
+              }
+              onClick={() => setWatching(o.id)}
+            >
+              {o.id}
+            </button>
+          ))}
+        </div>
+      ) : null}
+      {watchedUrl ? (
+        <Preview
+          key={watchedUrl}
+          url={watchedUrl}
+          name={node.name}
+          outputId={watched}
+          anyOnAir={anyOnAir}
+        />
       ) : (
         <div className="c-program__empty">
-          {anyOnAir
-            ? `${node.name} publishes no preview. What is on air is listed below.`
-            : 'Nothing on air, and no preview from this node.'}
+          {watched !== outputId
+            ? `${watched} publishes no preview.`
+            : anyOnAir
+              ? `${node.name} publishes no preview. What is on air is listed below.`
+              : 'Nothing on air, and no preview from this node.'}
         </div>
       )}
     </ProgramCanvas>
