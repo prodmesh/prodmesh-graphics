@@ -682,6 +682,31 @@ mod design_api {
             design::set_shadow(&self.armed, &id, None).map_err(|e| JsValue::from_str(&e))
         }
 
+        /// A node subtree as document JSON — the element clipboard's payload.
+        #[wasm_bindgen(js_name = copyNode)]
+        pub fn copy_node(&self, id: String) -> Result<String, JsValue> {
+            design::copy_node(&self.armed, &id).map_err(|e| JsValue::from_str(&e))
+        }
+
+        /// Paste a copied subtree into `target` (a container swallows it, a
+        /// leaf gets it as the next sibling; empty string means the root).
+        /// Returns `{"doc": …, "id": …}` so the caller can select the paste.
+        #[wasm_bindgen(js_name = pasteNode)]
+        pub fn paste_node(
+            &self,
+            target: String,
+            node_json: String,
+            beside: bool,
+        ) -> Result<String, JsValue> {
+            let t = if target.is_empty() {
+                None
+            } else {
+                Some(target.as_str())
+            };
+            design::paste_node(&self.armed, t, &node_json, beside)
+                .map_err(|e| JsValue::from_str(&e))
+        }
+
         /// Set a linear gradient fill. `stops_json` is `[[[r,g,b,a], at], …]`,
         /// 2 to 4 stops ascending — the same shape the facts report.
         #[wasm_bindgen(js_name = setGradient)]

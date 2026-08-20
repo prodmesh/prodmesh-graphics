@@ -143,6 +143,75 @@ function OptionalSection({
   )
 }
 
+/**
+ * The element menu, at the pointer. Force of habit for most hands — cut, copy,
+ * paste, duplicate live here and on the matching Cmd keys, backed by the same
+ * clipboard. Closes on any press elsewhere, Escape, or leaving the window.
+ */
+type MenuItem = { label: string; disabled?: boolean; danger?: boolean; onPick: () => void } | 'rule'
+
+function ContextMenu({
+  x,
+  y,
+  items,
+  onClose,
+}: {
+  x: number
+  y: number
+  items: MenuItem[]
+  onClose: () => void
+}) {
+  useEffect(() => {
+    const close = () => onClose()
+    const key = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') onClose()
+    }
+    // Bubble phase, so a press inside the menu (which stops propagation)
+    // reaches its item before anything closes.
+    window.addEventListener('pointerdown', close)
+    window.addEventListener('keydown', key)
+    window.addEventListener('blur', close)
+    return () => {
+      window.removeEventListener('pointerdown', close)
+      window.removeEventListener('keydown', key)
+      window.removeEventListener('blur', close)
+    }
+  }, [onClose])
+  const style: React.CSSProperties = {
+    left: Math.min(x, window.innerWidth - 190),
+    top: Math.min(y, window.innerHeight - items.length * 28 - 20),
+  }
+  return (
+    <div
+      className="ctx"
+      role="menu"
+      style={style}
+      onPointerDown={(e) => e.stopPropagation()}
+      onContextMenu={(e) => e.preventDefault()}
+    >
+      {items.map((it, i) =>
+        it === 'rule' ? (
+          <div key={`rule-${i}`} className="ctx__rule" role="separator" />
+        ) : (
+          <button
+            key={it.label}
+            type="button"
+            role="menuitem"
+            disabled={it.disabled}
+            className={it.danger ? 'ctx__item ctx__item--danger' : 'ctx__item'}
+            onClick={() => {
+              onClose()
+              it.onPick()
+            }}
+          >
+            {it.label}
+          </button>
+        ),
+      )}
+    </div>
+  )
+}
+
 type GradStops = [[number, number, number, number], number][]
 
 /**
@@ -1697,6 +1766,135 @@ export function Design() {
     }
   }, [session, selNode, rootId])
 
+  // ---- The element clipboard and its menu ----------------------------------
+  // In-app, not the system clipboard: the payload is document JSON and the
+  // habit being served is cut/copy/paste WITHIN a template. Cut+paste keeps
+  // ids (a move — timeline tracks follow); copy+paste re-ids the duplicate.
+  const [clipboard, setClipboard] = useState<{ json: string; label: string } | null>(null)
+  const [menu, setMenu] = useState<{ x: number; y: number; id: string | null } | null>(null)
+
+  const copyEl = useCallback(
+    (id: string) => {
+      const s = session.current
+      if (!s) return
+      try {
+        setClipboard({ json: s.copyNode(id), label: id })
+      } catch {
+        // Nothing to copy; the clipboard keeps what it had.
+      }
+    },
+    [session],
+  )
+
+  const cutEl = useCallback(
+    (id: string) => {
+      const s = session.current
+      if (!s || id === rootId) return
+      try {
+        const json = s.copyNode(id)
+        edit(JSON.parse(s.deleteNode(id)) as Record<string, unknown>)
+        setClipboard({ json, label: id })
+        setSelNode((cur) => (cur === id ? null : cur))
+      } catch {
+        // Refused (the root); the sentence shows where delete's does.
+      }
+    },
+    [session, rootId, edit],
+  )
+
+  const pasteEl = useCallback(
+    (target: string | null, beside = false) => {
+      const s = session.current
+      if (!s || !clipboard) return
+      try {
+        const r = JSON.parse(s.pasteNode(target ?? '', clipboard.json, beside)) as {
+          id: string
+          doc: Record<string, unknown>
+        }
+        edit(r.doc)
+        setSelNode(r.id)
+      } catch (e) {
+        setPublishState(e instanceof Error ? e.message : String(e))
+      }
+    },
+    [session, clipboard, edit],
+  )
+
+  const duplicateEl = useCallback(
+    (id: string) => {
+      const s = session.current
+      if (!s || id === rootId) return
+      try {
+        const r = JSON.parse(s.pasteNode(id, s.copyNode(id), true)) as {
+          id: string
+          doc: Record<string, unknown>
+        }
+        edit(r.doc)
+        setSelNode(r.id)
+      } catch (e) {
+        setPublishState(e instanceof Error ? e.message : String(e))
+      }
+    },
+    [session, rootId, edit],
+  )
+
+  // Cmd/Ctrl+C, X, V, D on elements — outside text controls, which keep their
+  // native clipboard for words.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (!(e.metaKey || e.ctrlKey) || e.shiftKey || e.altKey) return
+      const k = e.key.toLowerCase()
+      if (!['c', 'x', 'v', 'd'].includes(k)) return
+      const t = e.target as HTMLElement | null
+      if (t && (['INPUT', 'TEXTAREA', 'SELECT'].includes(t.tagName) || t.isContentEditable)) return
+      if (k === 'v') {
+        if (!clipboard) return
+        e.preventDefault()
+        pasteEl(selNode)
+        return
+      }
+      if (!selNode) return
+      e.preventDefault()
+      if (k === 'c') copyEl(selNode)
+      if (k === 'x') cutEl(selNode)
+      if (k === 'd') duplicateEl(selNode)
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [selNode, clipboard, copyEl, cutEl, pasteEl, duplicateEl])
+
+  const menuItems = useCallback(
+    (id: string | null): MenuItem[] => {
+      if (!id) {
+        return [{ label: 'Paste', disabled: !clipboard, onPick: () => pasteEl(null) }]
+      }
+      const isRoot = id === rootId
+      return [
+        { label: 'Cut', disabled: isRoot, onPick: () => cutEl(id) },
+        { label: 'Copy', onPick: () => copyEl(id) },
+        { label: 'Paste', disabled: !clipboard, onPick: () => pasteEl(id) },
+        { label: 'Duplicate', disabled: isRoot, onPick: () => duplicateEl(id) },
+        'rule',
+        {
+          label: 'Delete',
+          disabled: isRoot,
+          danger: true,
+          onPick: () => {
+            const s = session.current
+            if (!s) return
+            try {
+              edit(JSON.parse(s.deleteNode(id)) as Record<string, unknown>)
+              setSelNode((cur) => (cur === id ? null : cur))
+            } catch {
+              // Refused; nothing changed.
+            }
+          },
+        },
+      ]
+    },
+    [clipboard, rootId, copyEl, cutEl, pasteEl, duplicateEl, session, edit],
+  )
+
   return (
     <div className="design-console">
       <div className="console__toolbar">
@@ -1781,6 +1979,7 @@ export function Design() {
               selected={selNode}
               onSelect={setSelNode}
               onEdit={edit}
+              onMenu={(x, y, id) => setMenu({ x, y, id })}
             />
           </PanelBody>
         </Panel>
@@ -1801,6 +2000,7 @@ export function Design() {
               onSelect={setSelNode}
               onEdit={edit}
               onDelete={deleteSelected}
+              onMenu={(x, y, id) => setMenu({ x, y, id })}
             />
 
             {status === 'idle' ? (
@@ -1945,6 +2145,9 @@ export function Design() {
       </div>
 
       {mediaOpen ? <MediaBrowser faces={faces} onClose={() => setMediaOpen(false)} /> : null}
+      {menu ? (
+        <ContextMenu x={menu.x} y={menu.y} items={menuItems(menu.id)} onClose={() => setMenu(null)} />
+      ) : null}
     </div>
   )
 }

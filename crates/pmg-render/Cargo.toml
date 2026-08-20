@@ -8,6 +8,9 @@ publish.workspace = true
 
 [dependencies]
 serde = { workspace = true }
+# The element clipboard's payload is document JSON (interact::copy_node /
+# apply_paste). Pure, so the wasm32 pure-set build still proves the rule.
+serde_json = { workspace = true }
 thiserror = { workspace = true }
 pmg-scene = { path = "../pmg-scene" }
 pmg-layout = { path = "../pmg-layout" }

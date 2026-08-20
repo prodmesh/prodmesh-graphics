@@ -60,6 +60,7 @@ export function CanvasStage({
   onSelect,
   onEdit,
   onDelete,
+  onMenu,
 }: {
   canvasRef: React.RefObject<HTMLCanvasElement | null>
   session: React.RefObject<DesignSession | null>
@@ -79,6 +80,9 @@ export function CanvasStage({
   /** Delete the selection. The owner decides what is deletable (never the
    *  root), so this fires unconditionally on the key. */
   onDelete?: () => void
+  /** Right-click: the hit node (already selected) or null for empty canvas,
+   *  at viewport coordinates for a menu. */
+  onMenu?: (x: number, y: number, id: string | null) => void
 }) {
   const wrapRef = useRef<HTMLDivElement | null>(null)
   const svgRef = useRef<SVGSVGElement | null>(null)
@@ -162,6 +166,10 @@ export function CanvasStage({
 
   const onPointerDown = useCallback(
     (e: React.PointerEvent) => {
+      // Primary button only. A right-click used to begin a drag whose
+      // pointerup went to the browser's context menu instead — a phantom drag
+      // that edited the template on the next stray move.
+      if (e.button !== 0) return
       const s = session.current
       const p = toCanvas(e)
       if (!s || !p) return
@@ -282,6 +290,18 @@ export function CanvasStage({
             onPointerDown={onPointerDown}
             onPointerMove={onPointerMove}
             onPointerUp={onPointerUp}
+            onContextMenu={(e) => {
+              // Ours, not the browser's. Right-click selects what it hit —
+              // the convention every design tool shares — and asks the owner
+              // for a menu there.
+              e.preventDefault()
+              const s = session.current
+              const p = toCanvas(e)
+              if (!s || !p) return
+              const hit = s.hitTest(p[0], p[1]) ?? null
+              if (hit) onSelect(hit)
+              onMenu?.(e.clientX, e.clientY, hit)
+            }}
           >
             {handles && c ? (
               <g>

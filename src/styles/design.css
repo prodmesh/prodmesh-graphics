@@ -338,6 +338,37 @@
 .opt__head:hover { color: var(--pm-text-primary); }
 .opt__body { display: flex; flex-direction: column; gap: 8px; }
 
+/* ---- Context menu — the element menu, at the pointer ---------------------- */
+.ctx {
+  position: fixed;
+  z-index: 60;
+  min-width: 168px;
+  display: flex;
+  flex-direction: column;
+  padding: 4px;
+  border-radius: var(--pm-radius-4);
+  background: var(--pm-surface-raised);
+  border: 1px solid var(--pm-border-hairline);
+  box-shadow: 0 8px 24px rgb(0 0 0 / 45%);
+}
+.ctx__item {
+  border: 0;
+  border-radius: var(--pm-radius-4);
+  background: none;
+  color: var(--pm-text-secondary);
+  font-family: var(--pm-font-ui);
+  font-size: 12px;
+  text-align: left;
+  padding: 6px 10px;
+  cursor: pointer;
+}
+.ctx__item:hover:not(:disabled) { background: var(--pm-surface-field); color: var(--pm-text-primary); }
+.ctx__item:disabled { color: var(--pm-text-idle); cursor: default; }
+/* Destructive, not ON AIR: the console's red stays reserved, so danger here
+   is the hover telling you what you are about to do. */
+.ctx__item--danger:hover:not(:disabled) { color: var(--pm-state-air); }
+.ctx__rule { height: 1px; margin: 4px 6px; background: var(--pm-border-hairline); }
+
 .design-console__gradstop {
   display: flex;
   align-items: center;

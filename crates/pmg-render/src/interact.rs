@@ -1809,6 +1809,100 @@ pub fn apply_delete(doc: &mut SceneDoc, id: &str) -> Result<(), String> {
     }
 }
 
+/// Serialize a node's subtree — the element clipboard's payload.
+///
+/// Plain document JSON, so what the clipboard holds is the format itself: a
+/// payload pasted into next year's Design still parses, because documents do.
+pub fn copy_node(doc: &SceneDoc, id: &str) -> Result<String, String> {
+    let n = find_node(&doc.root, id).ok_or_else(|| format!("no node {id}"))?;
+    serde_json::to_string(n).map_err(|e| e.to_string())
+}
+
+/// Paste a copied subtree, returning the pasted root's id.
+///
+/// `target` is where the designer pointed: pasted INTO it when it is a
+/// container, beside it otherwise, at the end of the root when there is no
+/// target. `beside` forces the sibling placement even for a container —
+/// duplicating a box must land next to it, not swallow the copy into the
+/// original. That resolution lives here because it needs the tree.
+///
+/// Ids must be unique, so every id in the payload that is already taken gets a
+/// fresh one — but a FREE id is kept. That distinction is what makes
+/// cut-then-paste a move: the ids survive, so timeline tracks addressing them
+/// keep animating. Copy-paste of something still in the tree collides and
+/// re-ids instead, and the duplicate deliberately arrives without animations
+/// rather than half-addressed.
+pub fn apply_paste(
+    doc: &mut SceneDoc,
+    target: Option<&str>,
+    node_json: &str,
+    beside: bool,
+) -> Result<String, String> {
+    let mut pasted: Node =
+        serde_json::from_str(node_json).map_err(|_| "that is not an element".to_string())?;
+
+    // Re-id collisions first, against the ids in the document plus the ids
+    // already claimed within this paste.
+    let mut used: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
+    doc.root.walk(&mut |n| {
+        used.insert(n.id.clone());
+    });
+    fn claim(n: &mut Node, used: &mut std::collections::BTreeSet<String>) {
+        if used.contains(&n.id) {
+            let prefix = format!("{:?}", n.kind).to_lowercase();
+            n.id = (1..)
+                .map(|k| format!("{prefix}-{k}"))
+                .find(|id| !used.contains(id))
+                .expect("the integers do not run out");
+        }
+        used.insert(n.id.clone());
+        for c in &mut n.children {
+            claim(c, used);
+        }
+    }
+    claim(&mut pasted, &mut used);
+    let id = pasted.id.clone();
+
+    match target {
+        Some(t) => {
+            // A box holds children — a background image does not change that.
+            let is_container = {
+                let t = find_node(&doc.root, t).ok_or_else(|| format!("no node {t}"))?;
+                matches!(t.kind, pmg_scene::doc::NodeKind::Box)
+            };
+            if is_container && !beside {
+                find_node_mut(&mut doc.root, t)
+                    .expect("just found")
+                    .children
+                    .push(pasted);
+            } else {
+                // Beside the target: find its parent and insert after it.
+                fn insert_after(n: &mut Node, target: &str, node: Node) -> Option<Node> {
+                    if let Some(i) = n.children.iter().position(|c| c.id == target) {
+                        n.children.insert(i + 1, node);
+                        return None;
+                    }
+                    let mut carry = Some(node);
+                    for c in &mut n.children {
+                        carry = insert_after(c, target, carry.take()?);
+                        if carry.is_none() {
+                            return None;
+                        }
+                    }
+                    carry
+                }
+                if doc.root.id == t {
+                    doc.root.children.push(pasted);
+                } else if insert_after(&mut doc.root, t, pasted).is_some() {
+                    return Err(format!("no node {t}"));
+                }
+            }
+        }
+        None => doc.root.children.push(pasted),
+    }
+    Ok(id)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2183,6 +2277,83 @@ mod tests {
         assert_eq!(doc.timelines[0].duration_ms, 1200.0);
         apply_delete_timeline(&mut doc, "In").unwrap();
         assert!(apply_delete_timeline(&mut doc, "In").is_err());
+    }
+
+    #[test]
+    fn paste_keeps_free_ids_and_re_ids_collisions() {
+        // The same tree the reparent test uses: root ── a ── inner, b beside.
+        let mut doc: SceneDoc = serde_json::from_value(serde_json::json!({
+            "format": "pmg.scene",
+            "format_version": {"major": 1, "minor": 0},
+            "min_reader": 1,
+            "id": "t", "name": "t",
+            "canvas": {"width": 400, "height": 300},
+            "fields": [], "fonts": [], "assets": [],
+            "root": {
+                "id": "root", "kind": "box", "layout": {}, "transform": {}, "style": {},
+                "children": [
+                    {"id": "a", "kind": "box", "layout": {}, "transform": {}, "style": {},
+                     "children": [
+                        {"id": "inner", "kind": "box", "layout": {}, "transform": {},
+                         "style": {}, "children": []}
+                     ]},
+                    {"id": "b", "kind": "box", "layout": {}, "transform": {}, "style": {},
+                     "children": []}
+                ]
+            },
+            "timelines": []
+        }))
+        .expect("fixture doc parses");
+
+        // Copy a (with inner inside) and paste it into b: the ids collide with
+        // the originals still in the tree, so BOTH get fresh ones.
+        let payload = copy_node(&doc, "a").unwrap();
+        let id = apply_paste(&mut doc, Some("b"), &payload, false).unwrap();
+        assert_ne!(id, "a", "a collision re-ids");
+        let b = find_node(&doc.root, "b").unwrap();
+        assert_eq!(b.children.len(), 1);
+        assert_ne!(b.children[0].children[0].id, "inner", "children re-id too");
+
+        // Cut-then-paste is a MOVE: delete first, so the ids are free and are
+        // kept — which is what lets timeline tracks keep addressing them.
+        let payload = copy_node(&doc, "inner").unwrap();
+        apply_delete(&mut doc, "inner").unwrap();
+        let id = apply_paste(&mut doc, Some("root"), &payload, false).unwrap();
+        assert_eq!(id, "inner", "a free id survives the paste");
+
+        // A box target is a container, so the paste goes INSIDE it.
+        let payload = copy_node(&doc, "b").unwrap();
+        let pasted = apply_paste(&mut doc, Some("inner"), &payload, false).unwrap();
+        let inner = find_node(&doc.root, "inner").unwrap();
+        assert_eq!(
+            inner.children[0].id, pasted,
+            "a box target contains the paste"
+        );
+
+        // A LEAF target — text — is not a container: the paste lands after it
+        // among its siblings instead of vanishing into it.
+        doc.root.children.push(
+            serde_json::from_value(serde_json::json!({
+                "id": "label", "kind": "text", "layout": {}, "transform": {},
+                "style": {}, "children": []
+            }))
+            .unwrap(),
+        );
+        let pasted = apply_paste(&mut doc, Some("label"), &payload, false).unwrap();
+        let ids: Vec<_> = doc.root.children.iter().map(|c| c.id.as_str()).collect();
+        let at = ids.iter().position(|i| *i == "label").unwrap();
+        assert_eq!(ids[at + 1], pasted, "lands right after the leaf");
+
+        // Garbage is refused with a sentence, not a panic.
+        assert!(apply_paste(&mut doc, None, "not json", false).is_err());
+
+        // Duplicate semantics: beside forces the sibling placement even for a
+        // container, so a duplicated box cannot swallow its own copy.
+        let payload = copy_node(&doc, "a").unwrap();
+        let dup = apply_paste(&mut doc, Some("a"), &payload, true).unwrap();
+        let ids: Vec<_> = doc.root.children.iter().map(|c| c.id.as_str()).collect();
+        let at = ids.iter().position(|i| *i == "a").unwrap();
+        assert_eq!(ids[at + 1], dup, "the duplicate lands beside the original");
     }
 
     #[test]

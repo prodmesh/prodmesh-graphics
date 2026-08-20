@@ -464,6 +464,29 @@ pub fn set_stroke(
 }
 
 /// Set or clear a drop shadow: colour, offset, and edge softness.
+/// The element clipboard's payload: a node subtree as document JSON.
+pub fn copy_node(armed: &Armed, id: &str) -> Result<String, String> {
+    interact::copy_node(&armed.doc, id)
+}
+
+/// Paste a copied subtree. Returns `{"doc": ..., "id": "..."}` — the edited
+/// document plus the pasted root's id, so the caller can select it.
+pub fn paste_node(
+    armed: &Armed,
+    target: Option<&str>,
+    node_json: &str,
+    beside: bool,
+) -> Result<String, String> {
+    let mut doc = armed.doc.clone();
+    let id = interact::apply_paste(&mut doc, target, node_json, beside)?;
+    let doc_json = edited_json(doc)?;
+    Ok(format!(
+        "{{\"id\":{},\"doc\":{}}}",
+        serde_json::to_string(&id).map_err(|e| e.to_string())?,
+        doc_json
+    ))
+}
+
 /// `stops_json` is `[[[r,g,b,a], at], ...]` — the GradientFacts encoding, so
 /// the picker sends back exactly the shape the facts gave it.
 pub fn set_gradient(

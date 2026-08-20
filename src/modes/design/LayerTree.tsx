@@ -108,12 +108,15 @@ export function LayerTree({
   selected,
   onSelect,
   onEdit,
+  onMenu,
 }: {
   session: React.RefObject<DesignSession | null>
   doc: Record<string, unknown> | null
   selected: string | null
   onSelect: (id: string | null) => void
   onEdit: (doc: Record<string, unknown>) => void
+  /** Right-click on a row: the same element menu the canvas offers. */
+  onMenu?: (x: number, y: number, id: string) => void
 }) {
   const root = (doc?.root as DocNode | undefined) ?? null
   const rows = useMemo(() => {
@@ -318,6 +321,11 @@ export function LayerTree({
               onPointerDown={(e) => onRowPointerDown(e, row)}
               onDoubleClick={() => setRenaming(row.id)}
               onKeyDown={(e) => onRowKeyDown(e, row)}
+              onContextMenu={(e) => {
+                e.preventDefault()
+                onSelect(row.id)
+                onMenu?.(e.clientX, e.clientY, row.id)
+              }}
             >
               <Icon size={12} aria-hidden />
               {renaming === row.id ? (
