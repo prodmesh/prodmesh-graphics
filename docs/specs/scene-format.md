@@ -400,8 +400,15 @@ compatibility mechanism here. You find out at 10am Saturday, not at 10:15 Sunday
 - **`major`** — anything a previous reader would misinterpret. `min_reader` is
   raised.
 
-Current version: **1.1**, which introduced `style.gradient`. A 1.0 reader
-ignores the field and renders the flat `fill` writers keep beside it.
+Current version: **1.2**. 1.1 introduced `style.gradient` (a 1.0 reader
+ignores the field and renders the flat `fill` writers keep beside it). 1.2
+introduced theme tokens (ADR 0021): colours and `FontSpec` may carry a
+`token` naming the theme token their stored value was resolved from, and the
+document carries `theme` — the content address of that theme. The values are
+REAL and every reader renders them; the token and stamp are provenance, so
+recompiling under a different theme rewrites the values. Resolution happens
+at compile, never at arm — that is what keeps `template_rev` naming its
+pixels.
 
 ### 9.3 Migration
 

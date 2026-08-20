@@ -546,3 +546,45 @@ test('the revisions listing carries manifests and who is pinned where', async ()
   assert.equal(old.items[0].label, 'Pastor Dan')
   assert.equal(head.items.length, 0, 'nobody is on head yet')
 })
+
+// ---------------------------------------------------------------------------
+// Themes (ADR 0021)
+// ---------------------------------------------------------------------------
+
+test('a theme stores under its verified address and lists with its tokens', async () => {
+  const tokens = { 'brand.primary': { color: { rgba: [0.8, 0.1, 0.1, 1] } } }
+  const bytes = Buffer.from('canonical-theme-bytes-stand-in')
+  const hash = await cas.hashBuffer(bytes)
+
+  const made = await req('POST', '/api/themes', {
+    name: 'Advent', tokens, hash, bytes: bytes.toString('base64'),
+  })
+  assert.equal(made.status, 201)
+  assert.equal(made.json.head_hash, hash)
+
+  const list = await req('GET', '/api/themes')
+  const t = list.json.themes.find((x) => x.id === made.json.id)
+  assert.equal(t.name, 'Advent')
+  assert.deepEqual(t.tokens, tokens, 'the listing copy carries the tokens verbatim')
+
+  // The canonical bytes are in the CAS, addressable like everything else.
+  const blob = await req('GET', `/cas/${hash}`)
+  assert.deepEqual(blob.bytes, bytes)
+
+  // Updating moves head_hash — a theme's identity is its content.
+  const bytes2 = Buffer.from('canonical-theme-bytes-v2')
+  const up = await req('POST', '/api/themes', {
+    id: made.json.id, name: 'Advent', tokens, hash: await cas.hashBuffer(bytes2), bytes: bytes2.toString('base64'),
+  })
+  assert.equal(up.status, 200)
+  assert.notEqual(up.json.head_hash, hash)
+})
+
+test('a theme whose bytes do not match the claimed hash is refused', async () => {
+  const r = await req('POST', '/api/themes', {
+    name: 'Liar', tokens: {}, hash: `blake3:${'0'.repeat(64)}`,
+    bytes: Buffer.from('not those bytes').toString('base64'),
+  })
+  assert.equal(r.status, 422)
+  assert.match(r.json.label, /do not belong together/)
+})

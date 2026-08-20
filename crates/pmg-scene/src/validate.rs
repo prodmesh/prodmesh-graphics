@@ -174,6 +174,11 @@ pub struct Manifest {
     pub fields: Vec<Field>,
     pub timelines: Vec<String>,
     pub assets: Vec<String>,
+    /// The theme this document's token values were resolved under (ADR 0021),
+    /// so "which theme was this compiled under" is answerable from the
+    /// manifest the server actually stores.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub theme: Option<String>,
     pub warnings: Vec<ManifestWarning>,
 }
 
@@ -203,6 +208,7 @@ pub fn compile(doc: &SceneDoc) -> Result<(Vec<u8>, Manifest), SceneError> {
         fields: doc.fields.clone(),
         timelines: doc.timelines.iter().map(|t| t.name.clone()).collect(),
         assets,
+        theme: doc.theme.clone(),
         warnings: warnings
             .into_iter()
             .map(|w| ManifestWarning {

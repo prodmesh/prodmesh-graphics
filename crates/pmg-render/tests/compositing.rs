@@ -339,12 +339,14 @@ fn strokes_and_shadows_draw_where_the_format_says() {
     b.style.stroke = Some(pmg_scene::doc::Stroke {
         color: pmg_scene::doc::Rgba {
             rgba: [1.0, 1.0, 1.0, 1.0],
+            token: None,
         },
         width: 4.0,
     });
     b.style.shadow = Some(pmg_scene::doc::Shadow {
         color: pmg_scene::doc::Rgba {
             rgba: [0.0, 0.0, 0.0, 1.0],
+            token: None,
         },
         dx: 12.0,
         dy: 0.0,
@@ -441,16 +443,19 @@ fn text_effects_ring_the_glyph_and_shadow_the_outlined_shape() {
         style: Style {
             fill: Some(Rgba {
                 rgba: [1.0, 1.0, 1.0, 1.0],
+                token: None,
             }),
             stroke: Some(Stroke {
                 color: Rgba {
                     rgba: [1.0, 0.0, 0.0, 1.0],
+                    token: None,
                 },
                 width: 3.0,
             }),
             shadow: Some(Shadow {
                 color: Rgba {
                     rgba: [0.0, 0.0, 1.0, 1.0],
+                    token: None,
                 },
                 dx: 14.0,
                 dy: 0.0,
@@ -472,6 +477,7 @@ fn text_effects_ring_the_glyph_and_shadow_the_outlined_shape() {
                 features: vec![],
                 tracking: 0.0,
                 line_height: 1.0,
+                token: None,
             },
             align: Align::Start,
             max_lines: None,
@@ -544,12 +550,14 @@ fn a_gradient_walks_its_stops_across_the_rect() {
             pmg_scene::doc::GradientStop {
                 color: pmg_scene::doc::Rgba {
                     rgba: [1.0, 0.0, 0.0, 1.0],
+                    token: None,
                 },
                 at: 0.0,
             },
             pmg_scene::doc::GradientStop {
                 color: pmg_scene::doc::Rgba {
                     rgba: [0.0, 0.0, 1.0, 1.0],
+                    token: None,
                 },
                 at: 1.0,
             },

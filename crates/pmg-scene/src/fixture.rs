@@ -23,6 +23,7 @@ pub fn lower_third() -> SceneDoc {
         style: Style {
             fill: Some(Rgba {
                 rgba: [0.93, 0.95, 0.97, 1.0],
+                token: None,
             }),
             ..Default::default()
         },
@@ -40,6 +41,7 @@ pub fn lower_third() -> SceneDoc {
                 features: vec!["kern".into(), "liga".into()],
                 tracking: 0.0,
                 line_height: 1.1,
+                token: None,
             },
             align: Align::Start,
             max_lines: Some(1),
@@ -61,6 +63,7 @@ pub fn lower_third() -> SceneDoc {
         style: Style {
             fill: Some(Rgba {
                 rgba: [0.58, 0.64, 0.69, 1.0],
+                token: None,
             }),
             ..Default::default()
         },
@@ -83,6 +86,7 @@ pub fn lower_third() -> SceneDoc {
                 features: vec!["kern".into()],
                 tracking: 0.02,
                 line_height: 1.2,
+                token: None,
             },
             align: Align::Start,
             max_lines: Some(1),
@@ -119,6 +123,7 @@ pub fn lower_third() -> SceneDoc {
         style: Style {
             fill: Some(Rgba {
                 rgba: [0.03, 0.05, 0.07, 0.92],
+                token: None,
             }),
             radius: 4.0,
             ..Default::default()
@@ -269,6 +274,7 @@ pub fn lower_third() -> SceneDoc {
                 }],
             },
         ],
+        theme: None,
         ext: Default::default(),
     }
 }

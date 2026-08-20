@@ -62,6 +62,7 @@ fn spec(size: f32) -> FontSpec {
         features: vec!["kern".into(), "liga".into()],
         tracking: 0.0,
         line_height: 1.2,
+        token: None,
     }
 }
 

@@ -57,6 +57,7 @@ fn text_doc(text_size: f32, canvas: (u32, u32), bg: Option<[f32; 4]>) -> SceneDo
         style: Style {
             fill: Some(Rgba {
                 rgba: [1.0, 1.0, 1.0, 1.0],
+                token: None,
             }),
             ..Default::default()
         },
@@ -74,6 +75,7 @@ fn text_doc(text_size: f32, canvas: (u32, u32), bg: Option<[f32; 4]>) -> SceneDo
                 features: vec!["kern".into(), "liga".into()],
                 tracking: 0.0,
                 line_height: 1.2,
+                token: None,
             },
             align: Align::Start,
             max_lines: Some(1),
@@ -95,7 +97,7 @@ fn text_doc(text_size: f32, canvas: (u32, u32), bg: Option<[f32; 4]>) -> SceneDo
         },
         transform: Transform2D::default(),
         style: Style {
-            fill: bg.map(|rgba| Rgba { rgba }),
+            fill: bg.map(Rgba::flat),
             ..Default::default()
         },
         clip: false,
@@ -134,6 +136,7 @@ fn text_doc(text_size: f32, canvas: (u32, u32), bg: Option<[f32; 4]>) -> SceneDo
         assets: vec![],
         root,
         timelines: vec![],
+        theme: None,
         ext: Default::default(),
     }
 }
@@ -321,6 +324,7 @@ fn box_doc(canvas: (u32, u32)) -> SceneDoc {
         style: Style {
             fill: Some(Rgba {
                 rgba: [1.0, 1.0, 1.0, 1.0],
+                token: None,
             }),
             radius: 6.0,
             ..Default::default()

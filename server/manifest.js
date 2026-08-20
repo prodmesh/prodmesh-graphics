@@ -94,6 +94,11 @@ export function validateManifest(m, blobHash) {
   if (m.warnings != null && !Array.isArray(m.warnings)) {
     throw new Invalid('manifest.warnings must be an array')
   }
+  // ADR 0021: the theme this revision's token values were resolved under —
+  // a content address like everything else, when it is there at all.
+  if (m.theme != null && !HASH_RE.test(m.theme)) {
+    throw new Invalid('manifest.theme must be a content address')
+  }
 
   return m
 }

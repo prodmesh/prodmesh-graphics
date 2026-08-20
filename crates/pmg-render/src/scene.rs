@@ -451,10 +451,10 @@ fn flatten(
         parent,
         rect,
         base_transform: node.transform,
-        fill: node.style.fill,
+        fill: node.style.fill.clone(),
         gradient: node.style.gradient.clone(),
-        stroke: node.style.stroke,
-        shadow: node.style.shadow,
+        stroke: node.style.stroke.clone(),
+        shadow: node.style.shadow.clone(),
         radius: node.style.radius,
         opacity: node.style.opacity,
         clip: node.clip,
@@ -503,9 +503,10 @@ fn pack_atlas(inst: &mut SceneInstance, pending: Vec<(usize, Vec<RunGlyph>, f32)
         let origin = inst.nodes[node_idx].rect;
         let stroke_w = inst.nodes[node_idx]
             .stroke
+            .as_ref()
             .map(|s| s.width)
             .filter(|w| *w > 0.0);
-        let shadow = inst.nodes[node_idx].shadow;
+        let shadow = inst.nodes[node_idx].shadow.clone();
         for g in run {
             // Whitespace rasterizes to nothing; packing a zero-area glyph
             // would put a degenerate rect in the atlas.
@@ -529,7 +530,7 @@ fn pack_atlas(inst: &mut SceneInstance, pending: Vec<(usize, Vec<RunGlyph>, f32)
                     bytes: ring.bytes,
                 });
             }
-            if let Some(sh) = shadow {
+            if let Some(sh) = &shadow {
                 // The shadow is of the ink the viewer sees: the OUTLINED
                 // silhouette when there is an outline, the bare glyph when not.
                 let (src, sw, sh_h, base_off) = match stroke_w {

@@ -34,6 +34,9 @@ pub fn main(args: &[String]) -> Result<()> {
                 Ok(())
             }
         },
+        Some("theme-hash") => theme_hash(Path::new(
+            args.get(1).map(String::as_str).unwrap_or_default(),
+        )),
         Some("fmt") => fmt(Path::new(
             args.get(1).map(String::as_str).unwrap_or_default(),
         )),
@@ -254,5 +257,19 @@ fn layout(args: &[String]) -> Result<()> {
 
     println!("\nMeasured with StubMeasure — a fixed function of character count, not");
     println!("real shaping. Real metrics arrive with pmg-text in M1c.");
+    Ok(())
+}
+
+/// `pmgctl scene theme-hash <theme.json>` — the theme's content address and
+/// canonical bytes (written beside the input as `<stem>.pmgtheme`), from the
+/// same encoder behind `template_rev`. What a script needs to publish a theme
+/// the way the browser does (ADR 0021).
+fn theme_hash(input: &Path) -> Result<()> {
+    let theme: pmg_scene::theme::Theme = serde_json::from_str(&std::fs::read_to_string(input)?)?;
+    let (hash, bytes) = theme.address().map_err(|e| anyhow::anyhow!("{e}"))?;
+    let out = input.with_extension("pmgtheme");
+    std::fs::write(&out, &bytes)?;
+    println!("{hash}");
+    println!("bytes         {}", out.display());
     Ok(())
 }

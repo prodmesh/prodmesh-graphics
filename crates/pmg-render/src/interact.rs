@@ -632,6 +632,9 @@ pub struct NodeFacts {
     /// As authored: encoded straight RGBA, `None` for an unfilled box.
     /// For a text node this IS the text colour.
     pub fill: Option<[f32; 4]>,
+    /// The colour token the fill follows, when it follows one (ADR 0021).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub fill_token: Option<String>,
     pub radius: f32,
     pub opacity: f32,
     /// The pin: an absolute node moves freely; a relative one lives in the
@@ -688,6 +691,8 @@ pub struct VideoFacts {
 pub struct StrokeFacts {
     pub color: [f32; 4],
     pub width: f32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub token: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -696,6 +701,8 @@ pub struct ShadowFacts {
     pub dx: f32,
     pub dy: f32,
     pub blur: f32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub token: Option<String>,
 }
 
 /// What the inspector shows for a node drawing a picture.
@@ -717,6 +724,9 @@ pub struct TextFacts {
     pub weight: u16,
     pub size: f32,
     pub align: String,
+    /// The font token this face follows, when it follows one (ADR 0021).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub token: Option<String>,
 }
 
 fn find_node<'a>(n: &'a Node, id: &str) -> Option<&'a Node> {
@@ -740,6 +750,7 @@ pub fn node_facts(doc: &SceneDoc, id: &str) -> Result<NodeFacts, String> {
             weight: font.weight,
             size: font.size,
             align: format!("{align:?}").to_lowercase(),
+            token: font.token.clone(),
         }),
         _ => None,
     };
@@ -774,7 +785,8 @@ pub fn node_facts(doc: &SceneDoc, id: &str) -> Result<NodeFacts, String> {
     };
     Ok(NodeFacts {
         id: n.id.clone(),
-        fill: n.style.fill.map(|c| c.rgba),
+        fill: n.style.fill.as_ref().map(|c| c.rgba),
+        fill_token: n.style.fill.as_ref().and_then(|c| c.token.clone()),
         radius: n.style.radius,
         opacity: n.style.opacity,
         absolute: n.layout.position == Position::Absolute,
@@ -797,15 +809,17 @@ pub fn node_facts(doc: &SceneDoc, id: &str) -> Result<NodeFacts, String> {
         text,
         image,
         video,
-        stroke: n.style.stroke.map(|s| StrokeFacts {
+        stroke: n.style.stroke.as_ref().map(|s| StrokeFacts {
             color: s.color.rgba,
             width: s.width,
+            token: s.color.token.clone(),
         }),
-        shadow: n.style.shadow.map(|s| ShadowFacts {
+        shadow: n.style.shadow.as_ref().map(|s| ShadowFacts {
             color: s.color.rgba,
             dx: s.dx,
             dy: s.dy,
             blur: s.blur,
+            token: s.color.token.clone(),
         }),
         gradient: n.style.gradient.as_ref().map(|g| GradientFacts {
             angle: g.angle_deg,
@@ -819,7 +833,7 @@ pub fn node_facts(doc: &SceneDoc, id: &str) -> Result<NodeFacts, String> {
 /// the inspector says so before the designer loses the selection.
 pub fn apply_fill(doc: &mut SceneDoc, id: &str, fill: Option<[f32; 4]>) -> Result<(), String> {
     let n = find_node_mut(&mut doc.root, id).ok_or_else(|| format!("no node {id}"))?;
-    n.style.fill = fill.map(|rgba| pmg_scene::doc::Rgba { rgba });
+    n.style.fill = fill.map(pmg_scene::doc::Rgba::flat);
     // Choosing a flat colour IS leaving the gradient — readers draw the
     // gradient over the fill, so keeping both would make this edit invisible.
     n.style.gradient = None;
@@ -1043,6 +1057,7 @@ pub fn apply_add_box(doc: &mut SceneDoc, parent: Option<&str>) -> Result<String,
         style: pmg_scene::doc::Style {
             fill: Some(pmg_scene::doc::Rgba {
                 rgba: [1.0, 1.0, 1.0, 1.0],
+                token: None,
             }),
             ..Default::default()
         },
@@ -1096,6 +1111,7 @@ pub fn apply_add_text(doc: &mut SceneDoc, parent: Option<&str>) -> Result<String
         style: pmg_scene::doc::Style {
             fill: Some(pmg_scene::doc::Rgba {
                 rgba: [1.0, 1.0, 1.0, 1.0],
+                token: None,
             }),
             ..Default::default()
         },
@@ -1113,6 +1129,7 @@ pub fn apply_add_text(doc: &mut SceneDoc, parent: Option<&str>) -> Result<String
                 features: vec!["kern".into(), "liga".into()],
                 tracking: 0.0,
                 line_height: 1.2,
+                token: None,
             },
             align: Align::Start,
             max_lines: None,
@@ -1199,7 +1216,7 @@ pub fn apply_set_stroke(
 ) -> Result<(), String> {
     let n = find_node_mut(&mut doc.root, id).ok_or_else(|| format!("no node {id}"))?;
     n.style.stroke = stroke.map(|(rgba, width)| pmg_scene::doc::Stroke {
-        color: pmg_scene::doc::Rgba { rgba },
+        color: pmg_scene::doc::Rgba::flat(rgba),
         width: width.max(0.5),
     });
     Ok(())
@@ -1215,12 +1232,176 @@ pub fn apply_set_shadow(
 ) -> Result<(), String> {
     let n = find_node_mut(&mut doc.root, id).ok_or_else(|| format!("no node {id}"))?;
     n.style.shadow = shadow.map(|(rgba, dx, dy, blur)| pmg_scene::doc::Shadow {
-        color: pmg_scene::doc::Rgba { rgba },
+        color: pmg_scene::doc::Rgba::flat(rgba),
         dx,
         dy,
         blur: blur.max(0.0),
     });
     Ok(())
+}
+
+/// Bind a colour slot to a theme token — or release it with `None`.
+///
+/// The token's CURRENT value is written into the slot at the same moment, so
+/// the document always renders standalone (ADR 0021: the stored value is
+/// real; the token is provenance). Releasing keeps the value and drops the
+/// provenance.
+pub fn apply_set_color_token(
+    doc: &mut SceneDoc,
+    id: &str,
+    slot: &str,
+    token: Option<&str>,
+    theme_json: &str,
+) -> Result<(), String> {
+    let value = match token {
+        Some(t) => {
+            let theme: pmg_scene::theme::Theme =
+                serde_json::from_str(theme_json).map_err(|_| "that is not a theme".to_string())?;
+            match theme.tokens.get(t) {
+                Some(pmg_scene::theme::TokenValue::Color { rgba }) => Some(*rgba),
+                Some(_) => return Err(format!("token {t} is a font, not a colour")),
+                None => return Err(format!("the theme has no token {t}")),
+            }
+        }
+        None => None,
+    };
+    let n = find_node_mut(&mut doc.root, id).ok_or_else(|| format!("no node {id}"))?;
+    let apply = |c: &mut Option<pmg_scene::doc::Rgba>| -> Result<(), String> {
+        let c = c
+            .as_mut()
+            .ok_or_else(|| format!("node {id} has no {slot} to token"))?;
+        c.token = token.map(str::to_string);
+        if let Some(rgba) = value {
+            c.rgba = rgba;
+        }
+        Ok(())
+    };
+    match slot {
+        "fill" => apply(&mut n.style.fill)?,
+        "stroke" => {
+            let s = n
+                .style
+                .stroke
+                .as_mut()
+                .ok_or_else(|| format!("node {id} has no outline"))?;
+            s.color.token = token.map(str::to_string);
+            if let Some(rgba) = value {
+                s.color.rgba = rgba;
+            }
+        }
+        "shadow" => {
+            let s = n
+                .style
+                .shadow
+                .as_mut()
+                .ok_or_else(|| format!("node {id} has no shadow"))?;
+            s.color.token = token.map(str::to_string);
+            if let Some(rgba) = value {
+                s.color.rgba = rgba;
+            }
+        }
+        _ => return Err(format!("no colour slot called {slot}")),
+    }
+    if token.is_some() {
+        doc.format_version = pmg_scene::migrate::CURRENT;
+    }
+    Ok(())
+}
+
+/// Bind a text node's font to a theme token — family and weight move together
+/// — or release it with `None`.
+pub fn apply_set_font_token(
+    doc: &mut SceneDoc,
+    id: &str,
+    token: Option<&str>,
+    theme_json: &str,
+) -> Result<(), String> {
+    let value = match token {
+        Some(t) => {
+            let theme: pmg_scene::theme::Theme =
+                serde_json::from_str(theme_json).map_err(|_| "that is not a theme".to_string())?;
+            match theme.tokens.get(t) {
+                Some(pmg_scene::theme::TokenValue::Font { family, weight }) => {
+                    Some((family.clone(), *weight))
+                }
+                Some(_) => return Err(format!("token {t} is a colour, not a font")),
+                None => return Err(format!("the theme has no token {t}")),
+            }
+        }
+        None => None,
+    };
+    let n = find_node_mut(&mut doc.root, id).ok_or_else(|| format!("no node {id}"))?;
+    let Some(pmg_scene::doc::Content::Text { font, .. }) = &mut n.content else {
+        return Err(format!("node {id} is not text"));
+    };
+    font.token = token.map(str::to_string);
+    if let Some((family, weight)) = value {
+        font.family = family.clone();
+        font.weight = weight;
+        // The declaration list is what a node stages fonts FROM; keep it in
+        // step exactly as the family picker does.
+        if !doc
+            .fonts
+            .iter()
+            .any(|f| f.family == family && f.weight == weight)
+        {
+            doc.fonts.push(pmg_scene::doc::FontRef {
+                family,
+                weight,
+                style: None,
+                asset: None,
+                system_fallback: false,
+            });
+        }
+    }
+    if token.is_some() {
+        doc.format_version = pmg_scene::migrate::CURRENT;
+    }
+    Ok(())
+}
+
+/// Re-resolve every token in the document from `theme` and stamp its address —
+/// the primitive the theme sweep and the theme picker both stand on.
+pub fn apply_theme(
+    doc: &mut SceneDoc,
+    theme_json: &str,
+    theme_hash: &str,
+) -> Result<usize, String> {
+    let theme: pmg_scene::theme::Theme =
+        serde_json::from_str(theme_json).map_err(|_| "that is not a theme".to_string())?;
+    let changed = pmg_scene::theme::resolve(doc, &theme, theme_hash).map_err(|e| e.to_string())?;
+    doc.format_version = pmg_scene::migrate::CURRENT;
+    Ok(changed)
+}
+
+/// Detach the document from its theme: every token marker is released (values
+/// stay exactly as they are) and the stamp is cleared. The opposite of
+/// `apply_theme`, for the designer who wants this template to stop following.
+pub fn apply_clear_theme(doc: &mut SceneDoc) {
+    fn walk(n: &mut Node) {
+        if let Some(f) = &mut n.style.fill {
+            f.token = None;
+        }
+        if let Some(g) = &mut n.style.gradient {
+            for s in &mut g.stops {
+                s.color.token = None;
+            }
+        }
+        if let Some(s) = &mut n.style.stroke {
+            s.color.token = None;
+        }
+        if let Some(s) = &mut n.style.shadow {
+            s.color.token = None;
+        }
+        if let Some(pmg_scene::doc::Content::Text { font, .. }) = &mut n.content {
+            font.token = None;
+        }
+        for c in &mut n.children {
+            walk(c);
+        }
+    }
+    walk(&mut doc.root);
+    doc.theme = None;
 }
 
 /// Set or clear a linear gradient fill.
@@ -1252,13 +1433,13 @@ pub fn apply_set_gradient(
     let n = find_node_mut(&mut doc.root, id).ok_or_else(|| format!("no node {id}"))?;
     match gradient {
         Some((angle_deg, stops)) => {
-            n.style.fill = Some(pmg_scene::doc::Rgba { rgba: stops[0].0 });
+            n.style.fill = Some(pmg_scene::doc::Rgba::flat(stops[0].0));
             n.style.gradient = Some(pmg_scene::doc::Gradient {
                 angle_deg,
                 stops: stops
                     .into_iter()
                     .map(|(rgba, at)| pmg_scene::doc::GradientStop {
-                        color: pmg_scene::doc::Rgba { rgba },
+                        color: pmg_scene::doc::Rgba::flat(rgba),
                         at,
                     })
                     .collect(),
@@ -1928,12 +2109,15 @@ mod tests {
             clip: false,
             content: RenderContent::Box,
         };
-        let white = Some(Rgba { rgba: [1.0; 4] });
+        let white = Some(Rgba {
+            rgba: [1.0; 4],
+            token: None,
+        });
         let inst = SceneInstance {
             canvas_w: 400,
             canvas_h: 300,
             nodes: vec![
-                node("band", None, 50.0, 50.0, 200.0, 100.0, white, 12.0),
+                node("band", None, 50.0, 50.0, 200.0, 100.0, white.clone(), 12.0),
                 node("chip", Some(0), 70.0, 60.0, 40.0, 30.0, white, 0.0),
             ],
             ..Default::default()

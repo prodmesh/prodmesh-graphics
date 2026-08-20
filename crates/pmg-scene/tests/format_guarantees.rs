@@ -240,7 +240,8 @@ fn a_default_style_is_fully_opaque() {
     assert_eq!(
         Style {
             fill: Some(Rgba {
-                rgba: [1.0, 1.0, 1.0, 1.0]
+                rgba: [1.0, 1.0, 1.0, 1.0],
+                token: None
             }),
             ..Default::default()
         }

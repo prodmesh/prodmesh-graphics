@@ -1,0 +1,73 @@
+{
+ "format": "pmg.scene",
+ "format_version": {
+  "major": 1,
+  "minor": 1
+ },
+ "min_reader": 1,
+ "id": "01MIGRATIONFIXTURE1TO1201",
+ "name": "Frozen 1.1 document",
+ "canvas": {
+  "width": 1920,
+  "height": 1080
+ },
+ "root": {
+  "id": "root",
+  "display_name": "Root",
+  "kind": "box",
+  "layout": {
+   "width": {
+    "Px": 1920.0
+   },
+   "height": {
+    "Px": 1080.0
+   }
+  },
+  "children": [
+   {
+    "id": "band",
+    "kind": "box",
+    "layout": {
+     "width": {
+      "Px": 600.0
+     },
+     "height": {
+      "Px": 120.0
+     }
+    },
+    "style": {
+     "fill": {
+      "rgba": [
+       0.1,
+       0.5,
+       0.6,
+       1.0
+      ]
+     },
+     "radius": 4.0
+    }
+   }
+  ]
+ },
+ "timelines": [
+  {
+   "name": "In",
+   "duration_ms": 300.0,
+   "tracks": [
+    {
+     "target": "band/style.opacity",
+     "keys": [
+      {
+       "t": 0,
+       "v": 0.0
+      },
+      {
+       "t": 300,
+       "v": 1.0
+      }
+     ]
+    }
+   ]
+  }
+ ]
+}

@@ -2,7 +2,9 @@
 //!
 //! One directory per step in `testdata/migrations/`. A shipped fixture is
 //! never edited — if a step is wrong, a new step is added — so these tests are
-//! the durable meaning of "this reader could migrate that version".
+//! the durable meaning of "this reader could migrate that version". Each
+//! fixture certifies its ONE step; the chain test certifies that the steps
+//! compose to [`migrate::CURRENT`].
 
 use pmg_scene::doc::SceneDoc;
 use pmg_scene::{cbor, migrate};
@@ -17,26 +19,36 @@ fn fixture(step: &str, file: &str) -> SceneDoc {
         .unwrap_or_else(|e| panic!("{p:?} does not parse: {e}"))
 }
 
-#[test]
-fn the_1_0_to_1_1_step_matches_its_frozen_fixture() {
-    let mut doc = fixture("1.0-to-1.1", "input.json");
-    let expected = fixture("1.0-to-1.1", "expected.json");
-
-    let applied = migrate::migrate(&mut doc).expect("a 1.0 document migrates");
-    assert_eq!(applied, vec!["1.0-to-1.1"]);
-
-    // Compared as canonical BYTES, not as structs: the bytes are what
-    // template_rev hashes, so byte equality is the claim that actually matters.
+/// One step, one frozen fixture, compared as canonical BYTES — the bytes are
+/// what `template_rev` hashes, so byte equality is the claim that matters.
+fn step_matches(step: &str, f: fn(&mut SceneDoc)) {
+    let mut doc = fixture(step, "input.json");
+    let expected = fixture(step, "expected.json");
+    f(&mut doc);
     assert_eq!(
         cbor::to_canonical(&doc).unwrap(),
         cbor::to_canonical(&expected).unwrap(),
-        "the migrated document is byte-for-byte the frozen expectation"
+        "step {step}: the migrated document is byte-for-byte the frozen expectation"
     );
 }
 
 #[test]
+fn each_step_matches_its_frozen_fixture() {
+    step_matches("1.0-to-1.1", migrate::v1_0_to_v1_1);
+    step_matches("1.1-to-1.2", migrate::v1_1_to_v1_2);
+}
+
+#[test]
+fn the_chain_composes_to_current() {
+    let mut doc = fixture("1.0-to-1.1", "input.json");
+    let applied = migrate::migrate(&mut doc).expect("a 1.0 document migrates");
+    assert_eq!(applied, vec!["1.0-to-1.1", "1.1-to-1.2"]);
+    assert_eq!(doc.format_version, migrate::CURRENT);
+}
+
+#[test]
 fn a_current_document_migrates_to_nothing() {
-    let mut doc = fixture("1.0-to-1.1", "expected.json");
+    let mut doc = fixture("1.1-to-1.2", "expected.json");
     let before = cbor::to_canonical(&doc).unwrap();
     let applied = migrate::migrate(&mut doc).expect("current is current");
     assert!(applied.is_empty(), "no steps to take");

@@ -48,6 +48,12 @@ pub struct SceneDoc {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub timelines: Vec<Timeline>,
 
+    /// The theme this document's token values were resolved under — the CAS
+    /// hash of a theme document (format 1.2, ADR 0021). "Which theme was this
+    /// compiled under" has exactly one answer, and this is it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub theme: Option<String>,
+
     /// Forward-compat escape hatch, preserved verbatim across a read/write cycle.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub ext: Unknown,
@@ -95,6 +101,7 @@ impl SceneDoc {
                 unknown: Default::default(),
             },
             timelines: vec![],
+            theme: None,
             ext: Default::default(),
         }
     }
@@ -436,9 +443,23 @@ impl Default for Transform2D {
 
 /// Linear-light **straight** RGBA as authored. Premultiplication happens in the
 /// renderer's working space, not in the document (ADR 0012).
-#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Rgba {
     pub rgba: [f32; 4],
+    /// Theme-token provenance (format 1.2, ADR 0021). The `rgba` beside it is
+    /// REAL — it is what every reader renders — and this records which theme
+    /// token it came from, so recompiling under a different theme rewrites the
+    /// value. Readers that do not know the key ignore it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub token: Option<String>,
+}
+
+impl Rgba {
+    /// A colour with no token behind it — the constructor every literal used
+    /// to be.
+    pub const fn flat(rgba: [f32; 4]) -> Self {
+        Rgba { rgba, token: None }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -475,7 +496,7 @@ pub struct Gradient {
     pub stops: Vec<GradientStop>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct GradientStop {
     pub color: Rgba,
     pub at: f32,
@@ -487,7 +508,7 @@ pub struct GradientStop {
 /// node past the box layout gave it — an outline that widens a lower third
 /// changes what the clip reveals and where the safe margins fall, silently.
 /// The spec reserved this shape in §3; the width is in design units.
-#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Stroke {
     pub color: Rgba,
     pub width: f32,
@@ -498,7 +519,7 @@ pub struct Stroke {
 /// `blur` is the softness of the edge in design units — 0 is a hard-edged
 /// copy. The shadow is a lobe of the node's own rounded-rect silhouette,
 /// offset by `dx, dy`; it draws UNDER the node and never affects layout.
-#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Shadow {
     pub color: Rgba,
     pub dx: f32,
@@ -620,6 +641,10 @@ pub struct FontSpec {
     pub tracking: f32,
     #[serde(default = "default_line_height")]
     pub line_height: f32,
+    /// Theme-token provenance for `family`/`weight` (format 1.2, ADR 0021).
+    /// The named values are real; this records the font token they came from.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub token: Option<String>,
 }
 
 fn default_line_height() -> f32 {

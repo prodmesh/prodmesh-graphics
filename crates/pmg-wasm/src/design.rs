@@ -464,6 +464,45 @@ pub fn set_stroke(
 }
 
 /// Set or clear a drop shadow: colour, offset, and edge softness.
+/// Bind or release a colour slot's theme token.
+pub fn set_color_token(
+    armed: &Armed,
+    id: &str,
+    slot: &str,
+    token: Option<&str>,
+    theme_json: &str,
+) -> Result<String, String> {
+    let mut doc = armed.doc.clone();
+    interact::apply_set_color_token(&mut doc, id, slot, token, theme_json)?;
+    edited_json(doc)
+}
+
+/// Bind or release a text node's font token.
+pub fn set_font_token(
+    armed: &Armed,
+    id: &str,
+    token: Option<&str>,
+    theme_json: &str,
+) -> Result<String, String> {
+    let mut doc = armed.doc.clone();
+    interact::apply_set_font_token(&mut doc, id, token, theme_json)?;
+    edited_json(doc)
+}
+
+/// Re-resolve every token from `theme` and stamp its address.
+pub fn apply_theme(armed: &Armed, theme_json: &str, theme_hash: &str) -> Result<String, String> {
+    let mut doc = armed.doc.clone();
+    interact::apply_theme(&mut doc, theme_json, theme_hash)?;
+    edited_json(doc)
+}
+
+/// Detach from the theme: markers released, values kept, stamp cleared.
+pub fn clear_theme(armed: &Armed) -> Result<String, String> {
+    let mut doc = armed.doc.clone();
+    interact::apply_clear_theme(&mut doc);
+    edited_json(doc)
+}
+
 /// The element clipboard's payload: a node subtree as document JSON.
 pub fn copy_node(armed: &Armed, id: &str) -> Result<String, String> {
     interact::copy_node(&armed.doc, id)

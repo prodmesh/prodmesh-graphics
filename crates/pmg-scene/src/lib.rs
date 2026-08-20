@@ -23,6 +23,7 @@ pub mod cbor;
 pub mod doc;
 pub mod fixture;
 pub mod migrate;
+pub mod theme;
 pub mod validate;
 
 pub use doc::*;
@@ -60,6 +61,9 @@ pub enum SceneError {
 
     #[error("node {node:?} has a gradient with {why}")]
     BadGradient { node: String, why: String },
+
+    #[error("token {token:?} is not defined by theme {theme:?} — a dangling token is a typo worth catching while someone is looking")]
+    UnknownToken { token: String, theme: String },
 }
 
 /// Can this reader open the document?

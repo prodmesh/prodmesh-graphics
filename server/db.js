@@ -364,6 +364,27 @@ const MIGRATIONS = [
   (d) => {
     d.exec(`ALTER TABLE playlist_items ADD COLUMN section TEXT;`)
   },
+
+  // 11 — themes (ADR 0021).
+  //
+  // The canonical bytes live in the CAS under head_hash, hashed by the same
+  // Rust encoder that makes template_rev mean something; the tokens JSON here
+  // is a LISTING convenience the server never interprets. head_hash moves on
+  // every save because a theme's identity is its content, like everything
+  // else — templates record which hash their token values were resolved
+  // under, so "compiled under which theme" always has one answer.
+  (d) => {
+    d.exec(`
+      CREATE TABLE themes (
+        id          TEXT PRIMARY KEY,
+        name        TEXT NOT NULL,
+        head_hash   TEXT NOT NULL,
+        tokens      TEXT NOT NULL,
+        created_at  INTEGER NOT NULL,
+        updated_at  INTEGER NOT NULL
+      );
+    `)
+  },
 ]
 
 /**

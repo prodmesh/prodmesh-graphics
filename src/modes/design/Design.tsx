@@ -31,7 +31,7 @@
  * the tests can actually cover.
  */
 
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { AlertTriangle, Clapperboard, FileUp, FolderOpen, Image as ImageIcon, Plus, Redo2, Trash2, Type, Undo2, Upload } from 'lucide-react'
 import { useQuery, invalidate } from '../../lib/useQuery'
 import { keys } from '../../lib/keys'
@@ -70,6 +70,68 @@ import { CanvasStage } from './CanvasStage'
 import type { Item } from '../show/types'
 
 type TemplateSummary = { id: string; name: string; head_rev: string | null }
+
+/** A theme as the server lists it (ADR 0021). The tokens JSON is a listing
+ *  copy; the canonical bytes live in the CAS under `head_hash`. */
+type ThemeToken = {
+  color?: { rgba: [number, number, number, number] }
+  font?: { family: string; weight: number }
+}
+type ThemeRow = {
+  id: string
+  name: string
+  head_hash: string
+  tokens: Record<string, ThemeToken>
+  updated_at: number
+}
+/** What the token editors need, in one place. */
+type ActiveTheme = {
+  hash: string
+  name: string
+  json: string
+  colorTokens: string[]
+  fontTokens: string[]
+}
+
+const themeToActive = (t: ThemeRow): ActiveTheme => ({
+  hash: t.head_hash,
+  name: t.name,
+  json: JSON.stringify({ name: t.name, tokens: t.tokens }),
+  colorTokens: Object.keys(t.tokens).filter((k) => 'color' in t.tokens[k]!),
+  fontTokens: Object.keys(t.tokens).filter((k) => 'font' in t.tokens[k]!),
+})
+
+/**
+ * "Follows" — which theme token a slot takes its value from. Custom releases
+ * the binding and keeps the value; the value inputs disable while bound,
+ * because the token is now the one place the colour comes from.
+ */
+function TokenSelect({
+  label,
+  tokens,
+  value,
+  onPick,
+}: {
+  label: string
+  tokens: string[]
+  value: string | null
+  onPick: (t: string | null) => void
+}) {
+  return (
+    <FormGroup label="Follows">
+      <select
+        value={value ?? ''}
+        aria-label={label}
+        onChange={(e) => onPick(e.target.value || null)}
+      >
+        <option value="">Custom</option>
+        {tokens.map((t) => (
+          <option key={t} value={t}>{t}</option>
+        ))}
+      </select>
+    </FormGroup>
+  )
+}
 type TemplateDetail = {
   head_rev: string | null
   head: { mirror_hash: string | null; manifest: { fields: { key: string; sample?: string }[] } } | null
@@ -312,6 +374,7 @@ function SelectedNode({
   selected,
   faces,
   imageAssets,
+  theme,
   onEdit,
   onDelete,
 }: {
@@ -325,6 +388,9 @@ function SelectedNode({
   faces: FaceInfo[]
   /** Image assets this server holds — what the picture picker offers. */
   imageAssets: { hash: string; size: number }[]
+  /** The theme this document follows, when it follows one — what the token
+   *  pickers offer (ADR 0021). */
+  theme: ActiveTheme | null
   onEdit: (doc: Record<string, unknown>) => void
   /** Absent for the root: the root is the canvas, not a thing to delete. */
   onDelete?: () => void
@@ -572,6 +638,7 @@ function SelectedNode({
                       will stage. */}
                   <select
                     value={family}
+                    disabled={!!facts.text?.token}
                     aria-label="Font family"
                     onChange={(e) => {
                       const fam = e.target.value
@@ -595,6 +662,14 @@ function SelectedNode({
                     ))}
                   </select>
                 </FormGroup>
+                {theme && theme.fontTokens.length ? (
+                  <TokenSelect
+                    label="Font token"
+                    tokens={theme.fontTokens}
+                    value={facts.text?.token ?? null}
+                    onPick={(t) => edit((s) => s.setFontToken(selected, t ?? '', theme.json))}
+                  />
+                ) : null}
                 <FormGroup label="Weight">
                   <input
                     type="number"
@@ -602,6 +677,7 @@ function SelectedNode({
                     max={1000}
                     step={100}
                     value={weight}
+                    disabled={!!facts.text?.token}
                     onChange={(e) => setWeight(e.target.value)}
                     onBlur={() => commitFont()}
                     onKeyDown={enterCommits(() => commitFont())}
@@ -746,28 +822,39 @@ function SelectedNode({
           {facts.text ? (
             // The fill IS the text colour — not an option, the ink itself.
             facts.fill ? (
-              <div className="design-console__size">
-                <FormGroup label="Fill">
-                  <input
-                    type="color"
-                    value={rgbToHex(facts.fill)}
-                    onChange={(e) => commitFill(e.target.value)}
-                    aria-label="Fill colour"
+              <>
+                <div className="design-console__size">
+                  <FormGroup label="Fill">
+                    <input
+                      type="color"
+                      value={rgbToHex(facts.fill)}
+                      disabled={!!facts.fill_token}
+                      onChange={(e) => commitFill(e.target.value)}
+                      aria-label="Fill colour"
+                    />
+                  </FormGroup>
+                  <FormGroup label="Fill opacity %">
+                    <input
+                      type="number"
+                      min={0}
+                      max={100}
+                      value={alpha}
+                      onChange={(e) => setAlpha(e.target.value)}
+                      onBlur={() => commitFill()}
+                      onKeyDown={enterCommits(() => commitFill())}
+                      aria-label="Fill opacity"
+                    />
+                  </FormGroup>
+                </div>
+                {theme ? (
+                  <TokenSelect
+                    label="Fill token"
+                    tokens={theme.colorTokens}
+                    value={facts.fill_token ?? null}
+                    onPick={(t) => edit((s) => s.setColorToken(selected, 'fill', t ?? '', theme.json))}
                   />
-                </FormGroup>
-                <FormGroup label="Fill opacity %">
-                  <input
-                    type="number"
-                    min={0}
-                    max={100}
-                    value={alpha}
-                    onChange={(e) => setAlpha(e.target.value)}
-                    onBlur={() => commitFill()}
-                    onKeyDown={enterCommits(() => commitFill())}
-                    aria-label="Fill opacity"
-                  />
-                </FormGroup>
-              </div>
+                ) : null}
+              </>
             ) : null
           ) : (
             <OptionalSection
@@ -806,28 +893,39 @@ function SelectedNode({
                   }
                 />
               ) : facts.fill ? (
-                <div className="design-console__size">
-                  <FormGroup label="Colour">
-                    <input
-                      type="color"
-                      value={rgbToHex(facts.fill)}
-                      onChange={(e) => commitFill(e.target.value)}
-                      aria-label="Fill colour"
+                <>
+                  <div className="design-console__size">
+                    <FormGroup label="Colour">
+                      <input
+                        type="color"
+                        value={rgbToHex(facts.fill)}
+                        disabled={!!facts.fill_token}
+                        onChange={(e) => commitFill(e.target.value)}
+                        aria-label="Fill colour"
+                      />
+                    </FormGroup>
+                    <FormGroup label="Opacity %">
+                      <input
+                        type="number"
+                        min={0}
+                        max={100}
+                        value={alpha}
+                        onChange={(e) => setAlpha(e.target.value)}
+                        onBlur={() => commitFill()}
+                        onKeyDown={enterCommits(() => commitFill())}
+                        aria-label="Fill opacity"
+                      />
+                    </FormGroup>
+                  </div>
+                  {theme ? (
+                    <TokenSelect
+                      label="Fill token"
+                      tokens={theme.colorTokens}
+                      value={facts.fill_token ?? null}
+                      onPick={(t) => edit((s) => s.setColorToken(selected, 'fill', t ?? '', theme.json))}
                     />
-                  </FormGroup>
-                  <FormGroup label="Opacity %">
-                    <input
-                      type="number"
-                      min={0}
-                      max={100}
-                      value={alpha}
-                      onChange={(e) => setAlpha(e.target.value)}
-                      onBlur={() => commitFill()}
-                      onKeyDown={enterCommits(() => commitFill())}
-                      aria-label="Fill opacity"
-                    />
-                  </FormGroup>
-                </div>
+                  ) : null}
+                </>
               ) : null}
             </OptionalSection>
           )}
@@ -850,6 +948,7 @@ function SelectedNode({
                       <input
                         type="color"
                         value={rgbToHex(facts.stroke.color)}
+                        disabled={!!facts.stroke.token}
                         aria-label="Outline colour"
                         onChange={(e) => {
                           const rgb = hexToRgb(e.target.value)
@@ -876,6 +975,14 @@ function SelectedNode({
                     </FormGroup>
                   </div>
                 ) : null}
+                {facts.stroke && theme ? (
+                  <TokenSelect
+                    label="Outline token"
+                    tokens={theme.colorTokens}
+                    value={facts.stroke.token ?? null}
+                    onPick={(t) => edit((s) => s.setColorToken(selected, 'stroke', t ?? '', theme.json))}
+                  />
+                ) : null}
               </OptionalSection>
 
               <OptionalSection
@@ -891,6 +998,7 @@ function SelectedNode({
                         <input
                           type="color"
                           value={rgbToHex(facts.shadow.color)}
+                          disabled={!!facts.shadow.token}
                           aria-label="Shadow colour"
                           onChange={(e) => {
                             const rgb = hexToRgb(e.target.value)
@@ -938,6 +1046,14 @@ function SelectedNode({
                         </FormGroup>
                       ))}
                     </div>
+                    {theme ? (
+                      <TokenSelect
+                        label="Shadow token"
+                        tokens={theme.colorTokens}
+                        value={facts.shadow.token ?? null}
+                        onPick={(t) => edit((s) => s.setColorToken(selected, 'shadow', t ?? '', theme.json))}
+                      />
+                    ) : null}
                   </>
                 ) : null}
               </OptionalSection>
@@ -1398,6 +1514,7 @@ export function Design() {
   const { data: templates } = useQuery<{ templates: TemplateSummary[] }>(keys.templates())
   const { data: assets } = useQuery<{ assets: Asset[] }>(keys.assets())
   const { data: items } = useQuery<{ items: Item[] }>(keys.items())
+  const { data: themesData } = useQuery<{ themes: ThemeRow[] }>(keys.themes())
 
   const [selected, setSelected] = useState<string | null>(null)
   // The document, behind its undo history: `edit` for changes, `load` for
@@ -1714,6 +1831,14 @@ export function Design() {
   const docId = doc ? String(doc.id ?? '') : null
   const usedBy = docId ? (items?.items ?? []).filter((i) => i.template_id === docId).length : 0
   const published = docId ? list.some((t) => t.id === docId && t.head_rev) : false
+  const themes = themesData?.themes ?? []
+  const docTheme = doc ? ((doc.theme as string | undefined) ?? null) : null
+  // The theme the token pickers speak for: the one whose CURRENT head this
+  // document was resolved under. A stale stamp offers a refresh instead.
+  const activeTheme = useMemo(() => {
+    const t = docTheme ? themes.find((x) => x.head_hash === docTheme) : undefined
+    return t ? themeToActive(t) : null
+  }, [docTheme, themes])
 
   // The right panel: template-level facts on one tab, the selected node on the
   // other. Selection drives the tab — clicking a node is asking about it, and
@@ -2099,6 +2224,48 @@ export function Design() {
                     return docId && headRev ? <Revisions docId={docId} headRev={headRev} /> : null
                   })()}
 
+                  {themes.length ? (
+                    <>
+                      <GroupHeader label="Theme" />
+                      <FormGroup label="Follows">
+                        <select
+                          value={activeTheme?.hash ?? docTheme ?? ''}
+                          aria-label="Theme"
+                          onChange={(e) => {
+                            const s = session.current
+                            if (!s) return
+                            try {
+                              if (!e.target.value) {
+                                edit(JSON.parse(s.clearTheme()) as Record<string, unknown>)
+                              } else {
+                                const t = themes.find((x) => x.head_hash === e.target.value)
+                                if (!t) return
+                                const a = themeToActive(t)
+                                edit(JSON.parse(s.applyTheme(a.json, a.hash)) as Record<string, unknown>)
+                              }
+                            } catch (err) {
+                              setPublishState(err instanceof Error ? err.message : String(err))
+                            }
+                          }}
+                        >
+                          <option value="">No theme</option>
+                          {docTheme && !activeTheme ? (
+                            <option value={docTheme}>an older theme version</option>
+                          ) : null}
+                          {themes.map((t) => (
+                            <option key={t.id} value={t.head_hash}>{t.name}</option>
+                          ))}
+                        </select>
+                      </FormGroup>
+                      {docTheme && !activeTheme ? (
+                        <p className="design-console__dim">
+                          This template was resolved under a theme version this server has moved
+                          past — pick the theme again to update its values.
+                        </p>
+                      ) : null}
+                    </>
+                  ) : null}
+
                   <GroupHeader label="Sample data" />
                   {Object.keys(data).map((k) => (
                     <FormGroup key={k} label={k}>
@@ -2119,6 +2286,7 @@ export function Design() {
                   selected={selNode}
                   faces={faces}
                   imageAssets={imageAssets}
+                  theme={activeTheme}
                   onEdit={edit}
                   onDelete={selNode === rootId ? undefined : deleteSelected}
                 />

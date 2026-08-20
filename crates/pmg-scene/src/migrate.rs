@@ -3,7 +3,9 @@
 //! `migrate` walks a document forward to [`CURRENT`], one step at a time. Each
 //! step has a **frozen fixture** in `testdata/migrations/<from>-to-<to>/`; a
 //! shipped fixture is never edited, because editing one silently changes what
-//! "we could read that version" means.
+//! "we could read that version" means. The step functions are public for
+//! exactly that reason: each fixture certifies ONE step, not wherever the
+//! chain happens to end this year.
 //!
 //! Migrating changes the document's bytes, so re-compiling it produces a NEW
 //! `template_rev`. Items pin revisions, so a migration never changes anything
@@ -14,7 +16,7 @@ use crate::doc::{FormatVersion, SceneDoc};
 use crate::SceneError;
 
 /// The version this writer emits.
-pub const CURRENT: FormatVersion = FormatVersion { major: 1, minor: 1 };
+pub const CURRENT: FormatVersion = FormatVersion { major: 1, minor: 2 };
 
 /// Walk `doc` forward to [`CURRENT`], returning the names of the steps taken
 /// — empty when it was already current.
@@ -34,6 +36,10 @@ pub fn migrate(doc: &mut SceneDoc) -> Result<Vec<&'static str>, SceneError> {
         v1_0_to_v1_1(doc);
         applied.push("1.0-to-1.1");
     }
+    if doc.format_version.minor == 1 {
+        v1_1_to_v1_2(doc);
+        applied.push("1.1-to-1.2");
+    }
     Ok(applied)
 }
 
@@ -43,6 +49,14 @@ pub fn migrate(doc: &mut SceneDoc) -> Result<Vec<&'static str>, SceneError> {
 /// there is nothing to rewrite — the step exists so the chain, the fixture
 /// discipline, and the "migration produces a new revision" flow are exercised
 /// by a real version rather than remaining a paragraph in the spec.
-fn v1_0_to_v1_1(doc: &mut SceneDoc) {
+pub fn v1_0_to_v1_1(doc: &mut SceneDoc) {
     doc.format_version = FormatVersion { major: 1, minor: 1 };
+}
+
+/// 1.1 → 1.2: the version that introduced theme tokens (ADR 0021) — `token`
+/// provenance on colours and fonts, and the document's `theme` stamp.
+///
+/// Also purely a stamp: every 1.1 document simply has no tokens.
+pub fn v1_1_to_v1_2(doc: &mut SceneDoc) {
+    doc.format_version = FormatVersion { major: 1, minor: 2 };
 }

@@ -820,9 +820,11 @@ impl SceneRenderer {
             // defaults to: unfilled boxes used to be skipped entirely, but a
             // stroke or shadow now draws them — and the fill under an outline
             // must be nothing, not a white plate.
-            let color = match (&n.content, n.fill) {
+            let color = match (&n.content, &n.fill) {
                 (RenderContent::Box, None) => [0.0; 4],
-                (_, fill) => crate::color_to_linear(fill.map(|c| c.rgba).unwrap_or([1.0; 4])),
+                (_, fill) => {
+                    crate::color_to_linear(fill.as_ref().map(|c| c.rgba).unwrap_or([1.0; 4]))
+                }
             };
 
             let u = NodeUniform {
@@ -849,17 +851,19 @@ impl SceneRenderer {
                 // existed — measured by the goldens, not assumed.
                 stroke_color: n
                     .stroke
+                    .as_ref()
                     .map(|s| crate::color_to_linear(s.color.rgba))
                     .unwrap_or([0.0; 4]),
                 shadow_color: n
                     .shadow
+                    .as_ref()
                     .map(|s| crate::color_to_linear(s.color.rgba))
                     .unwrap_or([0.0; 4]),
                 effect: [
-                    n.stroke.map(|s| s.width.max(0.0)).unwrap_or(0.0),
-                    n.shadow.map(|s| s.dx).unwrap_or(0.0),
-                    n.shadow.map(|s| s.dy).unwrap_or(0.0),
-                    n.shadow.map(|s| s.blur.max(0.0)).unwrap_or(0.0),
+                    n.stroke.as_ref().map(|s| s.width.max(0.0)).unwrap_or(0.0),
+                    n.shadow.as_ref().map(|s| s.dx).unwrap_or(0.0),
+                    n.shadow.as_ref().map(|s| s.dy).unwrap_or(0.0),
+                    n.shadow.as_ref().map(|s| s.blur.max(0.0)).unwrap_or(0.0),
                 ],
                 grad: gradient_stops(n.gradient.as_ref()),
                 grad_at: gradient_offsets(n.gradient.as_ref()),

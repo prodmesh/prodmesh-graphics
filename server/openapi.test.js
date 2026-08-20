@@ -43,6 +43,8 @@ const NOT_PUBLIC = new Map([
   ['GET /api/audit', 'Administration, not operation.'],
   ['GET /cas/:hash', 'Content-addressed asset transfer — plain HTTP with Range, deliberately NOT on the control socket (ADR 0007). Its own spec: asset-cas.md.'],
   ['POST /api/templates/:id/update-items', 'Design’s revision workflow — moving pinned Items forward is a browser action; integrators pin per Item via PATCH /api/items.'],
+  ['GET /api/themes', 'Design’s theme workflow (ADR 0021) — themes resolve at compile in the browser; integrators see their effect as ordinary revisions.'],
+  ['POST /api/themes', 'Design’s theme workflow (ADR 0021).'],
   ['HEAD /cas/:hash', 'As above.'],
   ['GET /api/assets', 'Asset management, used by Design.'],
   ['GET /api/assets/sync', 'Per-node asset possession for the Media Browser. Derived view, not a contract.'],

@@ -13,6 +13,7 @@ export const keys = {
   templates: () => '/api/templates',
   template: (id: string) => `/api/templates/${id}`,
   templateRevisions: (id: string) => `/api/templates/${id}/revisions`,
+  themes: () => '/api/themes',
 
   items: () => '/api/items',
   item: (id: string) => `/api/items/${id}`,

@@ -29,6 +29,7 @@ fn doc() -> SceneDoc {
         style: Style {
             fill: Some(Rgba {
                 rgba: [1.0, 0.0, 0.0, 1.0],
+                token: None,
             }),
             ..Default::default()
         },
@@ -128,6 +129,7 @@ fn doc() -> SceneDoc {
                 OnComplete::Goto("Highlight".into()),
             ),
         ],
+        theme: None,
         ext: Default::default(),
     }
 }

@@ -235,6 +235,26 @@ mod design_api {
         }
     }
 
+    /// A theme's content address and canonical bytes, from the same encoder
+    /// that makes template_rev mean something. Returns
+    /// `{ hash: "blake3:…", bytes: base64 }` for a publish.
+    #[wasm_bindgen(js_name = themeHash)]
+    pub fn theme_hash(theme_json: &str) -> Result<JsValue, JsValue> {
+        let theme: pmg_scene::theme::Theme =
+            serde_json::from_str(theme_json).map_err(|e| JsValue::from_str(&format!("{e}")))?;
+        let (hash, bytes) = theme
+            .address()
+            .map_err(|e| JsValue::from_str(&format!("{e}")))?;
+        let out = js_sys::Object::new();
+        js_sys::Reflect::set(&out, &"hash".into(), &hash.into())?;
+        js_sys::Reflect::set(
+            &out,
+            &"bytes".into(),
+            &js_sys::Uint8Array::from(&bytes[..]).into(),
+        )?;
+        Ok(out.into())
+    }
+
     /// The document a "New template" starts from, as JSON. Built by the format
     /// crate, never by the browser — an empty document authored in JavaScript
     /// would be the start of the second implementation ADR 0004 forbids.
@@ -705,6 +725,63 @@ mod design_api {
             };
             design::paste_node(&self.armed, t, &node_json, beside)
                 .map_err(|e| JsValue::from_str(&e))
+        }
+
+        /// Bind a colour slot ("fill" | "stroke" | "shadow") to a theme
+        /// token, writing the token's current value in the same edit. An empty
+        /// token releases the binding and keeps the value.
+        #[wasm_bindgen(js_name = setColorToken)]
+        pub fn set_color_token(
+            &self,
+            id: String,
+            slot: String,
+            token: String,
+            theme_json: String,
+        ) -> Result<String, JsValue> {
+            let t = if token.is_empty() {
+                None
+            } else {
+                Some(token.as_str())
+            };
+            design::set_color_token(&self.armed, &id, &slot, t, &theme_json)
+                .map_err(|e| JsValue::from_str(&e))
+        }
+
+        /// Bind a text node's font to a theme token — family and weight move
+        /// together. An empty token releases the binding.
+        #[wasm_bindgen(js_name = setFontToken)]
+        pub fn set_font_token(
+            &self,
+            id: String,
+            token: String,
+            theme_json: String,
+        ) -> Result<String, JsValue> {
+            let t = if token.is_empty() {
+                None
+            } else {
+                Some(token.as_str())
+            };
+            design::set_font_token(&self.armed, &id, t, &theme_json)
+                .map_err(|e| JsValue::from_str(&e))
+        }
+
+        /// Re-resolve every token in the document from a theme and stamp its
+        /// address — the sweep primitive (ADR 0021).
+        #[wasm_bindgen(js_name = applyTheme)]
+        pub fn apply_theme(
+            &self,
+            theme_json: String,
+            theme_hash: String,
+        ) -> Result<String, JsValue> {
+            design::apply_theme(&self.armed, &theme_json, &theme_hash)
+                .map_err(|e| JsValue::from_str(&e))
+        }
+
+        /// Detach the document from its theme — markers released, values
+        /// kept exactly as they are, stamp cleared.
+        #[wasm_bindgen(js_name = clearTheme)]
+        pub fn clear_theme(&self) -> Result<String, JsValue> {
+            design::clear_theme(&self.armed).map_err(|e| JsValue::from_str(&e))
         }
 
         /// Set a linear gradient fill. `stops_json` is `[[[r,g,b,a], at], …]`,

@@ -50,6 +50,7 @@ const h = vi.hoisted(() => {
       ],
     },
     timelines: [],
+    theme: 'blake3:themehead',
   }
   const doc = () => JSON.stringify({ ...DOC, nonce: Math.random() })
   const facts = (id: string) =>
@@ -118,6 +119,10 @@ const h = vi.hoisted(() => {
     deleteNode: vi.fn(() => doc()),
     reparent: vi.fn(() => doc()),
     setName: vi.fn(() => doc()),
+    setColorToken: vi.fn(() => doc()),
+    setFontToken: vi.fn(() => doc()),
+    applyTheme: vi.fn(() => doc()),
+    clearTheme: vi.fn(() => doc()),
   }
   return { session, style, DOC }
 })
@@ -211,6 +216,18 @@ beforeEach(() => {
       }
       if (u.includes('/cas/blake3:mirror')) return json(h.DOC)
       if (u.endsWith('/api/assets')) return json({ assets: [] })
+      if (u.endsWith('/api/themes')) {
+        return json({
+          themes: [{
+            id: 'th-1', name: 'Advent', head_hash: 'blake3:themehead',
+            tokens: {
+              'brand.primary': { color: { rgba: [0.8, 0.1, 0.1, 1] } },
+              'brand.font': { font: { family: 'IBM Plex Sans', weight: 600 } },
+            },
+            updated_at: 0,
+          }],
+        })
+      }
       if (u.endsWith('/api/items')) return json({ items: [] })
       throw new Error(`unrouted fetch ${u} ${init?.method ?? 'GET'}`)
     }),
@@ -377,5 +394,28 @@ describe('revisions', () => {
     fireEvent.click(screen.getByRole('button', { name: /Update 1 Item/ }))
     // Refused means NAMED and untouched — the dialog says which and why.
     await screen.findByText(/Pastor Dan was not moved: lt · Graphics: Campus is required./)
+  })
+})
+
+
+describe('theme tokens', () => {
+  test('a bound colour follows its token: picker offered, value input disabled', async () => {
+    await openTemplate()
+    selectInTree('band')
+    const follows = await screen.findByLabelText('Fill token')
+    expect(within(follows).getByRole('option', { name: 'brand.primary' })).toBeDefined()
+
+    fireEvent.change(follows, { target: { value: 'brand.primary' } })
+    expect(h.session.setColorToken).toHaveBeenCalledWith(
+      'band', 'fill', 'brand.primary', expect.stringContaining('brand.primary'),
+    )
+  })
+
+  test('the Template tab shows which theme the document follows', async () => {
+    await openTemplate()
+    const select = screen.getByLabelText('Theme') as HTMLSelectElement
+    expect(select.value).toBe('blake3:themehead')
+    fireEvent.change(select, { target: { value: '' } })
+    expect(h.session.clearTheme).toHaveBeenCalled()
   })
 })

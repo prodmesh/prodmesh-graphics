@@ -28,6 +28,7 @@ import { declare, report } from './health.js'
 import { router as healthRouter } from './routes/health.js'
 import { router as templatesRouter } from './routes/templates.js'
 import { router as itemsRouter } from './routes/items.js'
+import { router as themesRouter } from './routes/themes.js'
 import { router as cueRouter } from './routes/cue.js'
 import { router as rundownRouter } from './routes/rundown.js'
 import { router as authRouter } from './routes/auth.js'
@@ -92,6 +93,7 @@ export function createApp() {
   app.use(authRouter)
   app.use(templatesRouter)
   app.use(itemsRouter)
+  app.use(themesRouter)
   app.use(cueRouter)
   app.use(rundownRouter)
 
