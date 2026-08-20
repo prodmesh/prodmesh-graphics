@@ -1276,6 +1276,37 @@ fn render_group(
                     p.offer_rgb(small);
                 }
             }
+
+            // Audio levels for the same viewer, ~10 Hz: this frame's peak per
+            // CHANNEL, from the samples that just went to the wire — so the
+            // meter reads what the plant hears, not what a decoder produced.
+            // Cheap enough not to gate: one pass over one frame's samples,
+            // every sixth frame, only while something previews.
+            if out.spec.audio_channels > 0 && out.frame.is_multiple_of(6) {
+                if let Some(p) = &out.preview_h264 {
+                    let ch = out.spec.audio_channels as usize;
+                    let mut peaks = vec![0u32; ch];
+                    for (i, s) in out.audio.iter().enumerate() {
+                        let c = i % ch;
+                        peaks[c] = peaks[c].max(s.unsigned_abs());
+                    }
+                    // −120 dBFS stands in for silence: JSON has no infinity,
+                    // and no meter distinguishes below that anyway.
+                    let dbfs: Vec<f32> = peaks
+                        .iter()
+                        .map(|&pk| {
+                            if pk == 0 {
+                                -120.0
+                            } else {
+                                (20.0 * (pk as f32 / i32::MAX as f32).log10()).max(-120.0)
+                            }
+                        })
+                        .collect();
+                    if let Ok(json) = serde_json::to_vec(&serde_json::json!({ "levels": dbfs })) {
+                        p.offer_levels(json);
+                    }
+                }
+            }
         }
 
         // Tick every output in this group together, which is what sharing a

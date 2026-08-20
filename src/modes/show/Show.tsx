@@ -894,13 +894,31 @@ function Preview({
 }) {
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const [status, setStatus] = useState<PreviewStatus>({ state: 'connecting' })
+  const [levels, setLevels] = useState<number[]>([])
+  // Peak-hold per channel: the loudest recent moment, decaying — the mark an
+  // operator's eye actually reads on a meter.
+  const holds = useRef<{ db: number; at: number }[]>([])
 
   useEffect(() => {
     const canvas = canvasRef.current
     if (!canvas) return
-    const handle = startH264Preview(previewSocketUrl(url), canvas, setStatus)
+    const handle = startH264Preview(previewSocketUrl(url), canvas, setStatus, (dbfs) => {
+      const now = performance.now()
+      dbfs.forEach((db, i) => {
+        const h = holds.current[i]
+        // Hold 1.5 s, then fall.
+        if (!h || db >= h.db || now - h.at > 1500) holds.current[i] = { db, at: now }
+      })
+      setLevels(dbfs)
+    })
     return () => handle.close()
   }, [url])
+
+  // Channels split by PAIR: 1/2 ride the left edge, 3/4 the right — the
+  // layout an operator expects on a quad-channel feed. A stereo output only
+  // grows the left pair.
+  const left = levels.slice(0, 2)
+  const right = levels.slice(2, 4)
 
   return (
     <>
@@ -910,6 +928,14 @@ function Preview({
         aria-label={`Preview of ${outputId}`}
         hidden={status.state !== 'live'}
       />
+      {status.state === 'live' && levels.length > 0 ? (
+        <>
+          <Meters side="left" dbfs={left} holds={holds.current.slice(0, 2)} firstChannel={1} />
+          {right.length > 0 ? (
+            <Meters side="right" dbfs={right} holds={holds.current.slice(2, 4)} firstChannel={3} />
+          ) : null}
+        </>
+      ) : null}
       {status.state !== 'live' ? (
         <div className="c-program__empty">
           {status.state === 'connecting' || status.state === 'waiting-for-key'
@@ -918,5 +944,48 @@ function Preview({
         </div>
       ) : null}
     </>
+  )
+}
+
+/** dBFS → 0..1 of the bar, floored at −60: the range a programme meter reads. */
+const meterFrac = (db: number) => Math.max(0, Math.min(1, (db + 60) / 60))
+
+/**
+ * Peak meters overlaying one edge of the program monitor.
+ *
+ * The zone colours are the meter convention every console uses — green body,
+ * amber above −18, red only at the top −6 — and deliberately NOT the console's
+ * status palette: a meter's red means "about to clip", which is an audio fact,
+ * not an ON AIR mark (ADR 0020 governs status colour, and a meter is an
+ * instrument).
+ */
+function Meters({
+  side,
+  dbfs,
+  holds,
+  firstChannel,
+}: {
+  side: 'left' | 'right'
+  dbfs: number[]
+  holds: { db: number; at: number }[]
+  firstChannel: number
+}) {
+  return (
+    <div className={`c-meters c-meters--${side}`} aria-label={`Audio channels ${firstChannel}–${firstChannel + dbfs.length - 1}`}>
+      {dbfs.map((db, i) => (
+        <div key={i} className="c-meter" title={`Channel ${firstChannel + i}: ${db <= -119 ? 'silent' : `${db.toFixed(1)} dBFS`}`}>
+          {/* clip-path, not scaleY: the fill carries the zone gradient at full
+              height, and scaling it would drag the red zone down into quiet
+              levels. Clipping keeps every zone at its own dB. */}
+          <div
+            className="c-meter__fill"
+            style={{ clipPath: `inset(${(1 - meterFrac(db)) * 100}% 0 0 0)` }}
+          />
+          {holds[i] && holds[i].db > -119 ? (
+            <div className="c-meter__peak" style={{ bottom: `${meterFrac(holds[i].db) * 100}%` }} />
+          ) : null}
+        </div>
+      ))}
+    </div>
   )
 }

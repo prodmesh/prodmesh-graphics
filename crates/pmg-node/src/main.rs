@@ -65,7 +65,8 @@ USAGE:
                            Default ./var/node
     --name <name>          Display name. Default: this machine's hostname.
     --output <spec>        Repeatable. key=value,key=value — keys: id, backend,
-                           group, name, mode, device, key, preview, layers
+                           group, name, mode, device, key, preview, audio
+                           (embedded channel count), layers
                            (semicolon-separated), size, fps. Replaces the plain
                            output flags entirely when given.
                            e.g. --output id=sdi,backend=decklink,device=1,key=3,group=ref
@@ -152,6 +153,7 @@ fn parse_output(
             "device" => out.decklink_device = v.parse().context("device must be a number")?,
             "key" => out.decklink_key_device = Some(v.parse().context("key must be a number")?),
             "preview" => out.preview_port = v.parse().context("preview must be a port")?,
+            "audio" => out.audio_channels = v.parse().context("audio must be a channel count")?,
             // Semicolons, because commas already separate the pairs.
             "layers" => {
                 out.layers = v
@@ -171,7 +173,7 @@ fn parse_output(
             }
             other => anyhow::bail!(
                 "unknown --output key {other:?}. Known: id, backend, group, name, mode, \
-                 device, key, preview, layers, size, fps"
+                 device, key, preview, audio, layers, size, fps"
             ),
         }
     }

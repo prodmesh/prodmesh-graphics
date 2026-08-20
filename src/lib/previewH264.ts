@@ -38,6 +38,9 @@ export function startH264Preview(
   url: string,
   canvas: HTMLCanvasElement,
   onStatus: (s: PreviewStatus) => void,
+  /** Per-channel peak levels in dBFS, ~10 Hz, straight off the node's wire
+   *  samples — the meter reads what the plant hears. */
+  onLevels?: (dbfs: number[]) => void,
 ): PreviewHandle {
   // Named rather than assumed: a browser without WebCodecs should say so, not
   // present an empty box. Safari gained VideoDecoder late and this is exactly
@@ -93,6 +96,22 @@ export function startH264Preview(
     if (closed || !decoder || decoder.state !== 'configured') return
     const buf = new Uint8Array(ev.data as ArrayBuffer)
     if (buf.length < 2) return
+    // Frame type 2: audio levels as JSON, riding the same socket as the
+    // pictures they meter — one connection, one lifetime, no second thing
+    // to reconnect.
+    if (buf[0] === 2) {
+      if (onLevels) {
+        try {
+          const parsed = JSON.parse(new TextDecoder().decode(buf.subarray(1))) as {
+            levels?: number[]
+          }
+          if (Array.isArray(parsed.levels)) onLevels(parsed.levels)
+        } catch {
+          // A malformed levels frame is not worth killing the picture over.
+        }
+      }
+      return
+    }
     const key = buf[0] === 1
     // A decoder cannot start mid-GOP. Dropping deltas until the first key is
     // what makes a mid-service connection paint rather than throw.

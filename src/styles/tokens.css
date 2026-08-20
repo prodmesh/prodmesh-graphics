@@ -30,6 +30,15 @@
   --pm-cyan: #00f0ff; /* ARMED / cursor / next */
   --pm-green: #30d158; /* healthy / online / enabled */
 
+  /* Instrument colours — audio meters ONLY. A meter's zones are the
+     industry's own contract (green body, amber caution, red at clipping) and
+     they state audio facts, not console status: this red means "about to
+     clip", never ON AIR. It is a different hue than --pm-red on purpose, so
+     the two can never be mistaken for each other even side by side. */
+  --pm-meter-ok: var(--pm-green);
+  --pm-meter-hot: #ffd60a;
+  --pm-meter-clip: #ff453a;
+
   /* Signal tints, exact alphas from source */
   --pm-red-tint: rgba(255, 59, 48, 0.1216);
   --pm-red-shadow: rgba(255, 59, 48, 0.251);

@@ -538,6 +538,49 @@
   min-height: 0;
 }
 .c-program__frame { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: contain; }
+
+/* ---- Audio meters, overlaying the program monitor's edges -----------------
+   Channels 1/2 ride the left edge, 3/4 the right. The zone colours are the
+   meter convention every console uses — green body, amber above −18 dBFS, red
+   only in the top −6 — an instrument's meaning, not the status palette's. */
+.c-meters {
+  position: absolute;
+  top: 6px;
+  bottom: 6px;
+  display: flex;
+  gap: 3px;
+  pointer-events: none;
+}
+.c-meters--left { left: 6px; }
+.c-meters--right { right: 6px; }
+.c-meter {
+  position: relative;
+  width: 7px;
+  height: 100%;
+  border-radius: 2px;
+  background: rgb(0 0 0 / 55%);
+  overflow: hidden;
+}
+.c-meter__fill {
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(
+    to top,
+    var(--pm-meter-ok) 0%,
+    var(--pm-meter-ok) 70%,    /* green to −18 dBFS of the −60..0 range */
+    var(--pm-meter-hot) 70%,
+    var(--pm-meter-hot) 90%,   /* amber to −6 */
+    var(--pm-meter-clip) 90%,
+    var(--pm-meter-clip) 100%  /* clip red — an audio fact, never ON AIR */
+  );
+}
+.c-meter__peak {
+  position: absolute;
+  left: 0;
+  right: 0;
+  height: 2px;
+  background: rgb(255 255 255 / 85%);
+}
 .c-program__empty {
   position: absolute;
   inset: 0;

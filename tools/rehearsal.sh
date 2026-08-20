@@ -63,8 +63,10 @@ say "5. node — three outputs"
 # One layer per output, named the same on each, because an Item's destinations
 # name a layer per output and they have to exist to be armed into.
 if [ "$ALL_NDI" = 1 ]; then
-  OUTPUTS=(--output "id=lt,backend=ndi,name=CH Lower Third,layers=Graphics"
-           --output "id=fs,backend=ndi,name=CH Full Screen,layers=Graphics"
+  # audio=2 on the feeds that carry clips, so the program monitor's meters
+  # read something during a rehearsal instead of needing a flag nobody knows.
+  OUTPUTS=(--output "id=lt,backend=ndi,name=CH Lower Third,layers=Graphics,audio=2"
+           --output "id=fs,backend=ndi,name=CH Full Screen,layers=Graphics,audio=2"
            --output "id=wall,backend=ndi,name=CH LED Wall,layers=Graphics")
 else
   OUTPUTS=(--output "id=lt,backend=decklink,device=$DECKLINK,mode=1080p59.94,layers=Graphics"

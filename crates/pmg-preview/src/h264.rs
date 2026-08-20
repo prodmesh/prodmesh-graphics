@@ -71,6 +71,7 @@ pub struct H264Preview {
     clients: Arc<AtomicU64>,
     stop: Arc<AtomicBool>,
     child: Arc<Mutex<Option<Child>>>,
+    hub: Arc<Hub>,
 }
 
 impl H264Preview {
@@ -150,7 +151,14 @@ impl H264Preview {
             clients,
             stop,
             child: Arc::new(Mutex::new(Some(child))),
+            hub,
         })
+    }
+
+    /// Offer the newest audio levels as JSON bytes. Never blocks; every
+    /// connected viewer gets the latest on its next loop turn.
+    pub fn offer_levels(&self, json: Vec<u8>) {
+        self.hub.publish_levels(json);
     }
 
     /// Offer a downscaled RGB frame. **Never blocks.**
@@ -341,6 +349,11 @@ fn nal_type(nal: &[u8]) -> Option<u8> {
 struct Hub {
     inner: Mutex<HubState>,
     seq: AtomicU64,
+    /// The newest audio-levels payload (JSON bytes), on its own sequence —
+    /// levels tick at their own rate and must not wait for a video frame,
+    /// nor make one wait.
+    levels: Mutex<Option<Arc<Vec<u8>>>>,
+    levels_seq: AtomicU64,
 }
 
 #[derive(Default)]
@@ -372,6 +385,19 @@ impl Hub {
 
     fn last_key(&self) -> Option<Au> {
         self.inner.lock().unwrap().last_key.clone()
+    }
+
+    fn publish_levels(&self, json: Vec<u8>) {
+        *self.levels.lock().unwrap() = Some(Arc::new(json));
+        self.levels_seq.fetch_add(1, Ordering::Release);
+    }
+
+    fn levels_snapshot(&self, since: u64) -> Option<(u64, Arc<Vec<u8>>)> {
+        let seq = self.levels_seq.load(Ordering::Acquire);
+        if seq == since {
+            return None;
+        }
+        self.levels.lock().unwrap().clone().map(|b| (seq, b))
     }
 }
 
@@ -413,25 +439,38 @@ fn serve_ws(mut stream: TcpStream, hub: Arc<Hub>) -> std::io::Result<()> {
 
     // Start on a keyframe or the browser decodes nothing and says nothing.
     if let Some(k) = hub.last_key() {
-        write_frame(&mut stream, &k)?;
+        write_frame(&mut stream, u8::from(k.key), &k.bytes)?;
     }
 
     let mut sent = u64::MAX;
+    let mut sent_levels = u64::MAX;
     loop {
-        match hub.snapshot(sent) {
-            Some((seq, au)) => {
-                sent = seq;
-                write_frame(&mut stream, &au)?;
-            }
-            None => std::thread::sleep(std::time::Duration::from_millis(2)),
+        let mut idle = true;
+        if let Some((seq, au)) = hub.snapshot(sent) {
+            sent = seq;
+            write_frame(&mut stream, u8::from(au.key), &au.bytes)?;
+            idle = false;
+        }
+        if let Some((seq, bytes)) = hub.levels_snapshot(sent_levels) {
+            sent_levels = seq;
+            write_frame(&mut stream, FRAME_LEVELS, &bytes)?;
+            idle = false;
+        }
+        if idle {
+            std::thread::sleep(std::time::Duration::from_millis(2));
         }
     }
 }
 
-/// One access unit as a WebSocket binary frame, with a one-byte header saying
-/// whether the browser may start on it.
-fn write_frame(stream: &mut TcpStream, au: &Au) -> std::io::Result<()> {
-    let len = au.bytes.len() + 1;
+/// The type byte prefixed to every binary frame: 0 = delta access unit,
+/// 1 = key access unit, 2 = audio levels as JSON. One byte, because the
+/// hand-rolled server has exactly one frame shape and the byte is cheaper
+/// than a second framing scheme.
+pub const FRAME_LEVELS: u8 = 2;
+
+/// One payload as a WebSocket binary frame, with its one-byte type header.
+fn write_frame(stream: &mut TcpStream, kind: u8, bytes: &[u8]) -> std::io::Result<()> {
+    let len = bytes.len() + 1;
     let mut hdr = Vec::with_capacity(10);
     hdr.push(0x82); // FIN | binary
     if len < 126 {
@@ -444,8 +483,8 @@ fn write_frame(stream: &mut TcpStream, au: &Au) -> std::io::Result<()> {
         hdr.extend_from_slice(&(len as u64).to_be_bytes());
     }
     stream.write_all(&hdr)?;
-    stream.write_all(&[u8::from(au.key)])?;
-    stream.write_all(&au.bytes)?;
+    stream.write_all(&[kind])?;
+    stream.write_all(bytes)?;
     stream.flush()
 }
 
