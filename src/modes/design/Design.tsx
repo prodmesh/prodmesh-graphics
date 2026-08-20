@@ -102,6 +102,46 @@ const hexToRgb = (hex: string): [number, number, number] | null => {
  * document's encoded values directly: what the designer picks is what an Item
  * author later reads.
  */
+/**
+ * A style a node either has or does not — Fill, Outline, Shadow, a background
+ * image. The checkbox IS the add/remove: enabling applies a sensible default
+ * and reveals the controls; disabling clears the style and collapses them.
+ * Replaces the add/remove button pairs, which read as actions when these are
+ * really states.
+ */
+function OptionalSection({
+  label,
+  on,
+  onEnable,
+  onDisable,
+  offNote,
+  children,
+}: {
+  label: string
+  on: boolean
+  onEnable: () => void
+  onDisable: () => void
+  /** Shown while OFF, when off has a consequence worth stating. */
+  offNote?: string
+  children?: React.ReactNode
+}) {
+  return (
+    <section className="opt">
+      <label className="opt__head">
+        <input
+          type="checkbox"
+          checked={on}
+          aria-label={label}
+          onChange={(e) => (e.target.checked ? onEnable() : onDisable())}
+        />
+        <span>{label}</span>
+      </label>
+      {on ? <div className="opt__body">{children}</div> : null}
+      {!on && offNote ? <p className="design-console__dim">{offNote}</p> : null}
+    </section>
+  )
+}
+
 function SelectedNode({
   session,
   ready,
@@ -258,8 +298,8 @@ function SelectedNode({
             </select>
           </FormGroup>
 
-          {facts.image ? (
-            <>
+          {(() => {
+            const pictureControls = facts.image ? (
               <div className="design-console__size">
                 <FormGroup label="Picture">
                   <select
@@ -291,25 +331,22 @@ function SelectedNode({
                   </select>
                 </FormGroup>
               </div>
-              {facts.kind === 'box' ? (
-                <button
-                  type="button"
-                  className="edit-console__addbtn"
-                  onClick={() => edit((s) => s.clearImage(selected))}
-                >
-                  Remove the image
-                </button>
-              ) : null}
-            </>
-          ) : facts.kind === 'box' && imageAssets.length > 0 ? (
-            <button
-              type="button"
-              className="edit-console__addbtn"
-              onClick={() => edit((s) => s.setImage(selected, imageAssets[0]!.hash))}
-            >
-              Add a background image
-            </button>
-          ) : null}
+            ) : null
+            // An image NODE's picture is the point, not an option; only a
+            // box's background image is a style it may or may not have.
+            if (facts.kind !== 'box') return pictureControls
+            if (!facts.image && imageAssets.length === 0) return null
+            return (
+              <OptionalSection
+                label="Background image"
+                on={!!facts.image}
+                onEnable={() => edit((s) => s.setImage(selected, imageAssets[0]!.hash))}
+                onDisable={() => edit((s) => s.clearImage(selected))}
+              >
+                {pictureControls}
+              </OptionalSection>
+            )
+          })()}
 
           {facts.video ? (
             <>
@@ -543,8 +580,9 @@ function SelectedNode({
             </FormGroup>
           ) : null}
 
-          {facts.fill ? (
-            <>
+          {facts.text ? (
+            // The fill IS the text colour — not an option, the ink itself.
+            facts.fill ? (
               <div className="design-console__size">
                 <FormGroup label="Fill">
                   <input
@@ -567,30 +605,40 @@ function SelectedNode({
                   />
                 </FormGroup>
               </div>
-              {facts.text ? null : (
-                <>
-                  <button
-                    type="button"
-                    className="edit-console__addbtn"
-                    onClick={() => edit((s) => s.clearFill(selected))}
-                  >
-                    Remove the fill
-                  </button>
-                  <p className="design-console__dim">
-                    A box with no fill draws nothing and stops being clickable on the canvas —
-                    select it again from here if you change your mind.
-                  </p>
-                </>
-              )}
-            </>
+            ) : null
           ) : (
-            <button
-              type="button"
-              className="edit-console__addbtn"
-              onClick={() => edit((s) => s.setFill(selected, 1, 1, 1, 1))}
+            <OptionalSection
+              label="Fill"
+              on={!!facts.fill}
+              onEnable={() => edit((s) => s.setFill(selected, 1, 1, 1, 1))}
+              onDisable={() => edit((s) => s.clearFill(selected))}
+              offNote="An unfilled box draws nothing and stops being clickable on the canvas — select it from the layer tree instead."
             >
-              Add a fill
-            </button>
+              {facts.fill ? (
+                <div className="design-console__size">
+                  <FormGroup label="Colour">
+                    <input
+                      type="color"
+                      value={rgbToHex(facts.fill)}
+                      onChange={(e) => commitFill(e.target.value)}
+                      aria-label="Fill colour"
+                    />
+                  </FormGroup>
+                  <FormGroup label="Opacity %">
+                    <input
+                      type="number"
+                      min={0}
+                      max={100}
+                      value={alpha}
+                      onChange={(e) => setAlpha(e.target.value)}
+                      onBlur={() => commitFill()}
+                      onKeyDown={enterCommits(() => commitFill())}
+                      aria-label="Fill opacity"
+                    />
+                  </FormGroup>
+                </div>
+              ) : null}
+            </OptionalSection>
           )}
 
           {/* Outline and shadow, on everything with a silhouette. Boxes and
@@ -599,10 +647,15 @@ function SelectedNode({
               stroke eats thin letterforms. */}
           {facts.kind === 'box' || facts.kind === 'image' || facts.kind === 'text' ? (
             <>
-              {facts.stroke ? (
-                <>
+              <OptionalSection
+                label="Outline"
+                on={!!facts.stroke}
+                onEnable={() => edit((s) => s.setStroke(selected, 1, 1, 1, 1, 2))}
+                onDisable={() => edit((s) => s.clearStroke(selected))}
+              >
+                {facts.stroke ? (
                   <div className="design-console__size">
-                    <FormGroup label="Outline">
+                    <FormGroup label="Colour">
                       <input
                         type="color"
                         value={rgbToHex(facts.stroke.color)}
@@ -613,7 +666,7 @@ function SelectedNode({
                         }}
                       />
                     </FormGroup>
-                    <FormGroup label="Outline width">
+                    <FormGroup label="Width">
                       <input
                         type="number"
                         min={0.5}
@@ -631,95 +684,72 @@ function SelectedNode({
                       />
                     </FormGroup>
                   </div>
-                  <button
-                    type="button"
-                    className="edit-console__addbtn"
-                    onClick={() => edit((s) => s.clearStroke(selected))}
-                  >
-                    Remove the outline
-                  </button>
-                </>
-              ) : (
-                <button
-                  type="button"
-                  className="edit-console__addbtn"
-                  onClick={() => edit((s) => s.setStroke(selected, 1, 1, 1, 1, 2))}
-                >
-                  Add an outline
-                </button>
-              )}
+                ) : null}
+              </OptionalSection>
 
-              {facts.shadow ? (
-                <>
-                  <div className="design-console__size">
-                    <FormGroup label="Shadow">
-                      <input
-                        type="color"
-                        value={rgbToHex(facts.shadow.color)}
-                        aria-label="Shadow colour"
-                        onChange={(e) => {
-                          const rgb = hexToRgb(e.target.value)
-                          const sh = facts.shadow!
-                          if (rgb) edit((s) => s.setShadow(selected, rgb[0], rgb[1], rgb[2], sh.color[3], sh.dx, sh.dy, sh.blur))
-                        }}
-                      />
-                    </FormGroup>
-                    <FormGroup label="Shadow opacity %">
-                      <input
-                        type="number"
-                        min={0}
-                        max={100}
-                        key={`sa:${facts.shadow.color[3]}`}
-                        defaultValue={Math.round(facts.shadow.color[3] * 100)}
-                        aria-label="Shadow opacity"
-                        onBlur={(e) => {
-                          const v = Number(e.target.value)
-                          if (!Number.isFinite(v)) return
-                          const sh = facts.shadow!
-                          const c = sh.color
-                          edit((s) => s.setShadow(selected, c[0], c[1], c[2], Math.max(0, Math.min(100, v)) / 100, sh.dx, sh.dy, sh.blur))
-                        }}
-                      />
-                    </FormGroup>
-                  </div>
-                  <div className="design-console__size">
-                    {(['dx', 'dy', 'blur'] as const).map((k) => (
-                      <FormGroup key={k} label={k === 'dx' ? 'Offset X' : k === 'dy' ? 'Offset Y' : 'Softness'}>
+              <OptionalSection
+                label="Shadow"
+                on={!!facts.shadow}
+                onEnable={() => edit((s) => s.setShadow(selected, 0, 0, 0, 0.6, 6, 6, 12))}
+                onDisable={() => edit((s) => s.clearShadow(selected))}
+              >
+                {facts.shadow ? (
+                  <>
+                    <div className="design-console__size">
+                      <FormGroup label="Colour">
                         <input
-                          type="number"
-                          step={1}
-                          min={k === 'blur' ? 0 : undefined}
-                          key={`${k}:${facts.shadow![k]}`}
-                          defaultValue={facts.shadow![k]}
-                          aria-label={`Shadow ${k}`}
-                          onBlur={(e) => {
-                            const v = Number(e.target.value)
-                            if (!Number.isFinite(v) || v === facts.shadow![k]) return
-                            const sh = { ...facts.shadow!, [k]: v }
-                            const c = sh.color
-                            edit((s) => s.setShadow(selected, c[0], c[1], c[2], c[3], sh.dx, sh.dy, sh.blur))
+                          type="color"
+                          value={rgbToHex(facts.shadow.color)}
+                          aria-label="Shadow colour"
+                          onChange={(e) => {
+                            const rgb = hexToRgb(e.target.value)
+                            const sh = facts.shadow!
+                            if (rgb) edit((s) => s.setShadow(selected, rgb[0], rgb[1], rgb[2], sh.color[3], sh.dx, sh.dy, sh.blur))
                           }}
                         />
                       </FormGroup>
-                    ))}
-                  </div>
-                  <button
-                    type="button"
-                    className="edit-console__addbtn"
-                    onClick={() => edit((s) => s.clearShadow(selected))}
-                  >
-                    Remove the shadow
-                  </button>
-                </>
-              ) : (
-                <button
-                  type="button"
-                  className="edit-console__addbtn"
-                  onClick={() => edit((s) => s.setShadow(selected, 0, 0, 0, 0.6, 6, 6, 12))}
-                >
-                  Add a shadow
-                </button>
-              )}
+                      <FormGroup label="Opacity %">
+                        <input
+                          type="number"
+                          min={0}
+                          max={100}
+                          key={`sa:${facts.shadow.color[3]}`}
+                          defaultValue={Math.round(facts.shadow.color[3] * 100)}
+                          aria-label="Shadow opacity"
+                          onBlur={(e) => {
+                            const v = Number(e.target.value)
+                            if (!Number.isFinite(v)) return
+                            const sh = facts.shadow!
+                            const c = sh.color
+                            edit((s) => s.setShadow(selected, c[0], c[1], c[2], Math.max(0, Math.min(100, v)) / 100, sh.dx, sh.dy, sh.blur))
+                          }}
+                        />
+                      </FormGroup>
+                    </div>
+                    <div className="design-console__size">
+                      {(['dx', 'dy', 'blur'] as const).map((k) => (
+                        <FormGroup key={k} label={k === 'dx' ? 'Offset X' : k === 'dy' ? 'Offset Y' : 'Softness'}>
+                          <input
+                            type="number"
+                            step={1}
+                            min={k === 'blur' ? 0 : undefined}
+                            key={`${k}:${facts.shadow![k]}`}
+                            defaultValue={facts.shadow![k]}
+                            aria-label={`Shadow ${k}`}
+                            onBlur={(e) => {
+                              const v = Number(e.target.value)
+                              if (!Number.isFinite(v) || v === facts.shadow![k]) return
+                              const sh = { ...facts.shadow!, [k]: v }
+                              const c = sh.color
+                              edit((s) => s.setShadow(selected, c[0], c[1], c[2], c[3], sh.dx, sh.dy, sh.blur))
+                            }}
+                          />
+                        </FormGroup>
+                      ))}
+                    </div>
+                  </>
+                ) : null}
+              </OptionalSection>
             </>
           ) : null}
 
@@ -1491,6 +1521,15 @@ export function Design() {
   const docId = doc ? String(doc.id ?? '') : null
   const usedBy = docId ? (items?.items ?? []).filter((i) => i.template_id === docId).length : 0
   const published = docId ? list.some((t) => t.id === docId && t.head_rev) : false
+
+  // The right panel: template-level facts on one tab, the selected node on the
+  // other. Selection drives the tab — clicking a node is asking about it, and
+  // deselecting means the template is the subject again — but a manual tab
+  // click sticks until the selection changes.
+  const [panelTab, setPanelTab] = useState<'template' | 'inspector'>('template')
+  useEffect(() => {
+    setPanelTab(selNode ? 'inspector' : 'template')
+  }, [selNode])
   const rootId = doc ? ((doc.root as { id?: string } | undefined)?.id ?? null) : null
   // The families this document declares, deduplicated — what the font picker
   // offers. Declaring a NEW one happens by typing it; the editor adds the
@@ -1692,98 +1731,85 @@ export function Design() {
         </div>
 
         <Panel width="var(--pm-inspector-width)" label="Template and publish">
-          <PanelHeader
-            title="Template & Publish"
-            trailing={
-              doc ? (
-                <StatusPill tone={published ? 'ready' : 'staged'} variant="subtle" size={10}>
-                  {published ? 'PUBLISHED' : 'NOT PUBLISHED'}
-                </StatusPill>
-              ) : undefined
-            }
-          />
+          <div className="design-console__tabs" role="tablist" aria-label="Panel">
+            {(['template', 'inspector'] as const).map((t) => (
+              <button
+                key={t}
+                type="button"
+                role="tab"
+                aria-selected={panelTab === t}
+                className={
+                  panelTab === t
+                    ? 'design-console__tab design-console__tab--on'
+                    : 'design-console__tab'
+                }
+                onClick={() => setPanelTab(t)}
+              >
+                {t === 'template' ? 'Template' : 'Inspector'}
+              </button>
+            ))}
+            <span className="design-console__tabs-spacer" />
+            {doc ? (
+              <StatusPill tone={published ? 'ready' : 'staged'} variant="subtle" size={10}>
+                {published ? 'PUBLISHED' : 'NOT PUBLISHED'}
+              </StatusPill>
+            ) : null}
+          </div>
           <PanelBody pad16>
             {doc ? (
-              <>
-                <div className="design-console__name">
-                  <span className="design-console__title">{String(doc.name ?? 'Untitled')}</span>
-                  <span className="design-console__id">{docId}</span>
-                </div>
+              panelTab === 'template' ? (
+                <>
+                  <div className="design-console__name">
+                    <span className="design-console__title">{String(doc.name ?? 'Untitled')}</span>
+                    <span className="design-console__id">{docId}</span>
+                  </div>
 
-                <KeyValueRow
-                  label="Used by"
-                  value={usedBy === 1 ? '1 Item' : `${usedBy} Items`}
-                  tone={usedBy ? 'armed' : 'plain'}
-                />
-
-                {(() => {
-                  const headRev = docId ? list.find((t) => t.id === docId)?.head_rev : null
-                  return docId && headRev ? <Revisions docId={docId} headRev={headRev} /> : null
-                })()}
-
-                {selNode ? (
-                  <SelectedNode
-                    session={session}
-                    ready={status === 'ready'}
-                    generation={generation}
-                    selected={selNode}
-                    faces={faces}
-                    imageAssets={imageAssets}
-                    onEdit={edit}
-                    onDelete={selNode === rootId ? undefined : deleteSelected}
+                  <KeyValueRow
+                    label="Used by"
+                    value={usedBy === 1 ? '1 Item' : `${usedBy} Items`}
+                    tone={usedBy ? 'armed' : 'plain'}
                   />
-                ) : (
-                  <p className="design-console__dim">
-                    Click a box on the canvas to select it. Drag to move, drag a handle to
-                    resize, arrows nudge. Hold Alt to ignore snapping.
-                  </p>
-                )}
 
-                <GroupHeader label="Sample data" />
-                {Object.keys(data).map((k) => (
-                  <FormGroup key={k} label={k}>
-                    <input
-                      value={data[k] ?? ''}
-                      onChange={(e) => setData((d) => ({ ...d, [k]: e.target.value }))}
-                    />
-                  </FormGroup>
-                ))}
-              </>
+                  {(() => {
+                    const headRev = docId ? list.find((t) => t.id === docId)?.head_rev : null
+                    return docId && headRev ? <Revisions docId={docId} headRev={headRev} /> : null
+                  })()}
+
+                  <GroupHeader label="Sample data" />
+                  {Object.keys(data).map((k) => (
+                    <FormGroup key={k} label={k}>
+                      <input
+                        value={data[k] ?? ''}
+                        onChange={(e) => setData((d) => ({ ...d, [k]: e.target.value }))}
+                      />
+                    </FormGroup>
+                  ))}
+
+                  <FieldsEditor session={session} doc={doc} onEdit={edit} />
+                </>
+              ) : selNode ? (
+                <SelectedNode
+                  session={session}
+                  ready={status === 'ready'}
+                  generation={generation}
+                  selected={selNode}
+                  faces={faces}
+                  imageAssets={imageAssets}
+                  onEdit={edit}
+                  onDelete={selNode === rootId ? undefined : deleteSelected}
+                />
+              ) : (
+                <p className="design-console__dim">
+                  Nothing is selected. Click a box on the canvas or a layer in the tree —
+                  drag to move, drag a handle to resize, arrows nudge, Alt ignores snapping.
+                </p>
+              )
             ) : (
               <p className="design-console__dim">
                 Open a template from the browser or from a file. There is no canvas interaction
                 yet — no selection, no moving a box, no property editing.
               </p>
             )}
-
-            {doc ? <FieldsEditor session={session} doc={doc} onEdit={edit} /> : null}
-
-            {/* Uploads live in the Media Browser — one place media enters the
-                system, whatever its kind. The rail keeps the counts so a
-                missing font is diagnosable without opening a dialog. */}
-            <div className="design-console__fonts">
-              <GroupHeader
-                label="Media"
-                trailing={
-                  fontAssets.length + imageAssets.length
-                    ? `${fontAssets.length + imageAssets.length}`
-                    : undefined
-                }
-              />
-              <button
-                type="button"
-                className="design-console__file"
-                onClick={() => setMediaOpen(true)}
-              >
-                <FolderOpen size={14} aria-hidden />
-                <span>Media Browser — fonts, images, videos…</span>
-              </button>
-              <p className="design-console__dim">
-                {fontAssets.length === 0
-                  ? 'No fonts yet. A template can only render with a font this server holds — add one in the Media Browser.'
-                  : `${fontAssets.length} font(s), ${imageAssets.length} image(s). Carried by content hash and staged to nodes like any other asset.`}
-              </p>
-            </div>
 
             {publishState ? (
               <p className="design-console__status" role="status">

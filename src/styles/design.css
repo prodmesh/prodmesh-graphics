@@ -297,6 +297,47 @@
   color: var(--pm-text-primary);
 }
 .mdb__name > span:first-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* ---- Right panel tabs: Template | Inspector ------------------------------- */
+.design-console__tabs {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--pm-border-hairline);
+}
+.design-console__tab {
+  border: 0;
+  border-radius: var(--pm-radius-4);
+  background: none;
+  color: var(--pm-text-muted);
+  font-family: var(--pm-font-ui);
+  font-size: 11px;
+  letter-spacing: var(--pm-tracking-caps);
+  text-transform: uppercase;
+  padding: 4px 10px;
+  cursor: pointer;
+}
+.design-console__tab:hover { color: var(--pm-text-primary); }
+.design-console__tab--on { color: var(--pm-text-primary); background: var(--pm-surface-field); }
+.design-console__tabs-spacer { margin-left: auto; }
+
+/* ---- Optional style sections — the checkbox IS the add/remove ------------- */
+.opt { display: flex; flex-direction: column; gap: 8px; }
+.opt__head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 11px;
+  letter-spacing: var(--pm-tracking-caps);
+  text-transform: uppercase;
+  color: var(--pm-text-muted);
+  cursor: pointer;
+  user-select: none;
+}
+.opt__head input { accent-color: var(--pm-state-armed); }
+.opt__head:hover { color: var(--pm-text-primary); }
+.opt__body { display: flex; flex-direction: column; gap: 8px; }
+
 /* ---- Revisions — history rows and the update dialog ----------------------- */
 .revs { display: flex; flex-direction: column; gap: 6px; }
 .revs__row {
