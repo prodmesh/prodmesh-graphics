@@ -604,6 +604,12 @@ pub fn set_timeline_duration(armed: &Armed, name: &str, ms: f32) -> Result<Strin
     edited_json(doc)
 }
 
+pub fn set_timeline_loop(armed: &Armed, name: &str, looping: bool) -> Result<String, String> {
+    let mut doc = armed.doc.clone();
+    interact::apply_set_timeline_loop(&mut doc, name, looping)?;
+    edited_json(doc)
+}
+
 /// Set a key. `ease_json` is a serde-encoded `pmg_anim::Ease` — "linear",
 /// `{"cubic":[x1,y1,x2,y2]}` or `{"steps":n}` — so the wire speaks the same
 /// names the document does.

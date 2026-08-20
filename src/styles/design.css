@@ -111,6 +111,8 @@
   padding: 0 8px;
 }
 .tl__field { display: flex; align-items: center; gap: 6px; }
+/* The loop checkbox opts out of the text-input chrome above. */
+.tl__loop input { height: auto; padding: 0; accent-color: var(--pm-state-armed); }
 .tl__field > span {
   font-size: 10px;
   letter-spacing: var(--pm-tracking-caps);

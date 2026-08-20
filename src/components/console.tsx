@@ -410,6 +410,7 @@ export function LayerCard({
   action,
   onAction,
   actionDisabled = false,
+  children,
 }: {
   layer: string
   state: string
@@ -418,6 +419,8 @@ export function LayerCard({
   action?: string
   onAction?: () => void
   actionDisabled?: boolean
+  /** Extra controls between the content line and the action — cue chips. */
+  children?: ReactNode
 }) {
   const air = tone === 'air'
   const stateCls =
@@ -433,6 +436,7 @@ export function LayerCard({
         <span className={stateCls}>{state}</span>
       </div>
       <span className="c-layercard__content">{content}</span>
+      {children}
       {action ? (
         <Button variant={air ? 'primary' : 'quiet'} block onClick={onAction} disabled={actionDisabled}>
           {action}

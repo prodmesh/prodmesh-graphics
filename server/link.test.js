@@ -696,3 +696,33 @@ test('take_also on an item with nothing on request says so', async () => {
   assert.match(r.json.label, /waits to be asked for/)
   await n.close()
 })
+
+test('the layers snapshot tells each occupant its named timelines', async () => {
+  // The Show view's cue chips come from the PINNED revision's manifest — the
+  // document actually on air — not from the template's head, and never from
+  // the browser guessing. In and Out stay out: the take buttons own those.
+  const d = db.handle()
+  const rev = `blake3:${'7'.repeat(64)}`
+  d.prepare(`INSERT OR IGNORE INTO templates (id, name, created_at, updated_at) VALUES ('tpl-tl', 'Lower Third', 0, 0)`).run()
+  d.prepare(
+    `INSERT OR IGNORE INTO template_revisions (template_rev, template_id, name, min_reader, manifest, published_at)
+     VALUES (?, 'tpl-tl', 'Lower Third', 1, ?, 0)`,
+  ).run(rev, JSON.stringify({ timelines: ['In', 'Out', 'Update', 'Highlight'] }))
+
+  const n = await fakeNode({ nodeId: 'tl-1' })
+  n.report({ gen: 1, last_applied_seq: 0, outputs: [
+    { id: 'out-tl', fps: 59.94, late_frames: 0,
+      layers: [{ name: 'Lower Third', occupant: { item_id: 'item-1', template_rev: rev, phase: 'hold', timeline: null, t_ms: 0, degraded: false } }] }] })
+  await new Promise((r) => setTimeout(r, 30))
+
+  const ctrl = new AbortController()
+  const res = await fetch(`http://127.0.0.1:${port}/api/stream?topics=output:out-tl:layers`, { signal: ctrl.signal })
+  const reader = res.body.getReader()
+  let text = ''
+  while (!text.includes('\n\n')) text += new TextDecoder().decode((await reader.read()).value)
+  ctrl.abort()
+
+  const data = JSON.parse(text.split('\n').find((l) => l.startsWith('data: ')).slice(6))
+  assert.deepEqual(data.data.layers[0].occupant.timelines, ['Update', 'Highlight'])
+  await n.close()
+})

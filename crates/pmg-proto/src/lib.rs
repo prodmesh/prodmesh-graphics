@@ -687,6 +687,10 @@ pub enum RejectReason {
     /// scheduled take that fires immediately is worse than one that does not
     /// fire, because nobody finds out.
     Unsupported,
+    /// A `Timeline` cue named a timeline the armed template does not have.
+    /// Refused by name so the operator learns WHICH button is wired to
+    /// nothing, rather than watching a graphic not move.
+    NoSuchTimeline,
 }
 
 // ---------------------------------------------------------------------------
@@ -754,6 +758,12 @@ pub struct Occupant {
     /// transform treated as identity. It is on air and it is wrong, and saying
     /// so is the whole point.
     pub degraded: bool,
+    /// Named timelines currently RUNNING on this occupant — `Update`,
+    /// `Highlight`, whatever the designer called them. Finished-and-holding
+    /// runs are absent: this field exists so an operator's button can show
+    /// that the press did something, and a held final state is not motion.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub named: Vec<String>,
 }
 
 // ---------------------------------------------------------------------------

@@ -194,6 +194,19 @@ export function TimelinePanel({
                 }}
               />
             </label>
+            {active.name !== 'In' && active.name !== 'Out' ? (
+              // Only named timelines loop: In and Out are the graphic's own
+              // entrance and exit, and the editor refuses them anyway.
+              <label className="tl__field tl__loop">
+                <input
+                  type="checkbox"
+                  checked={active.loop ?? false}
+                  aria-label="Loop this timeline"
+                  onChange={(e) => edit((s) => s.setTimelineLoop(active.name, e.target.checked))}
+                />
+                <span>Loops</span>
+              </label>
+            ) : null}
             <span className="tl__readout">{Math.round(tMs)} ms</span>
             <button
               type="button"

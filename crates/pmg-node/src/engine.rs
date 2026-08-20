@@ -124,6 +124,22 @@ impl Tween {
     }
 }
 
+/// A named timeline in flight — `Update`, `Highlight`, whatever the designer
+/// called it — layered over the occupant's base phase.
+///
+/// Runs live in start order and the last writer per target wins each frame
+/// (`docs/specs/scene-format.md` §6.3). A finished run whose `on_complete` is
+/// `Hold` STAYS in the list asserting its final values — that is what Hold
+/// means — so the way back to the base look is an explicit `Stop`, or a
+/// timeline authored to end where it began.
+pub struct NamedRun {
+    pub name: String,
+    /// Milliseconds since this run started (wraps when the timeline loops).
+    pub t_ms: f64,
+    /// Still advancing. `false` is finished-and-holding.
+    pub running: bool,
+}
+
 pub struct Occupant {
     pub armed: Armed,
     pub phase: Phase,
@@ -131,6 +147,8 @@ pub struct Occupant {
     pub t_ms: f64,
     /// A rebind morphing to a new layout, if one is running.
     pub tween: Option<Tween>,
+    /// Named timelines playing (or holding) over the base phase, start order.
+    pub named: Vec<NamedRun>,
 }
 
 #[derive(Default)]
@@ -488,6 +506,10 @@ impl LayerEngine {
                         // A morph in flight is abandoned: it was interpolating
                         // toward data this graphic is no longer showing.
                         o.tween = None;
+                        // A flourish does not outlive the decision to leave —
+                        // a held Highlight overriding Out's own opacity track
+                        // would pin the graphic on screen while it "leaves".
+                        o.named.clear();
                         o
                     });
                     l.occupant = armed.map(|armed| Occupant {
@@ -495,6 +517,7 @@ impl LayerEngine {
                         phase: Phase::In,
                         t_ms: 0.0,
                         tween: None,
+                        named: Vec::new(),
                     });
                 }
                 Ok(frame)
@@ -532,6 +555,7 @@ impl LayerEngine {
                         phase: Phase::In,
                         t_ms: 0.0,
                         tween: None,
+                        named: Vec::new(),
                     });
                     Ok(Some(frame))
                 } else {
@@ -556,6 +580,10 @@ impl LayerEngine {
                     Some(o) => {
                         o.phase = Phase::Out;
                         o.t_ms = 0.0;
+                        // See the take path: a held named run overriding Out's
+                        // tracks would keep the graphic on screen while it
+                        // "leaves".
+                        o.named.clear();
                         Ok(Some(frame))
                     }
                     // Taking out an empty layer is success, not an error: the
@@ -660,13 +688,62 @@ impl LayerEngine {
                 let frame = out.frame;
                 let l = out.layer_mut(layer).ok_or(RejectReason::NoSuchLayer)?;
                 let o = l.occupant.as_mut().ok_or(RejectReason::NotReady)?;
-                match action {
-                    pmg_proto::TimelineAction::Play => {
-                        o.phase = if name == "Out" { Phase::Out } else { Phase::In };
-                        o.t_ms = 0.0;
+
+                // `In` and `Out` are reserved and drive the PHASE — the
+                // occupant's life. Every other name is a run layered over it
+                // (`docs/specs/scene-format.md` §6.1).
+                if name == "In" || name == "Out" {
+                    match action {
+                        pmg_proto::TimelineAction::Play => {
+                            o.phase = if name == "Out" { Phase::Out } else { Phase::In };
+                            o.t_ms = 0.0;
+                            if name == "Out" {
+                                o.named.clear();
+                            }
+                        }
+                        pmg_proto::TimelineAction::Stop => o.phase = Phase::Hold,
+                        pmg_proto::TimelineAction::Goto { t_ms } => o.t_ms = *t_ms as f64,
                     }
-                    pmg_proto::TimelineAction::Stop => o.phase = Phase::Hold,
-                    pmg_proto::TimelineAction::Goto { t_ms } => o.t_ms = *t_ms as f64,
+                    return Ok(Some(frame));
+                }
+
+                // Refused BY NAME, so the operator learns which button is
+                // wired to nothing — a graphic that silently does not move
+                // teaches them to distrust every button on the panel.
+                if timeline::find(&o.armed.doc, name).is_none() {
+                    return Err(RejectReason::NoSuchTimeline);
+                }
+                match action {
+                    // Play restarts a run already in flight rather than
+                    // stacking a second copy — double-tapping Highlight should
+                    // highlight NOW, not twice.
+                    pmg_proto::TimelineAction::Play => {
+                        match o.named.iter_mut().find(|r| &r.name == name) {
+                            Some(run) => {
+                                run.t_ms = 0.0;
+                                run.running = true;
+                            }
+                            None => o.named.push(NamedRun {
+                                name: name.clone(),
+                                t_ms: 0.0,
+                                running: true,
+                            }),
+                        }
+                    }
+                    // Stop REMOVES the run: its values vanish and the base
+                    // phase shows through again. Freezing mid-pose would leave
+                    // a stopped Loop shimmer half-lit with no way back.
+                    pmg_proto::TimelineAction::Stop => o.named.retain(|r| &r.name != name),
+                    pmg_proto::TimelineAction::Goto { t_ms } => {
+                        match o.named.iter_mut().find(|r| &r.name == name) {
+                            Some(run) => run.t_ms = *t_ms as f64,
+                            None => o.named.push(NamedRun {
+                                name: name.clone(),
+                                t_ms: *t_ms as f64,
+                                running: true,
+                            }),
+                        }
+                    }
                 }
                 Ok(Some(frame))
             }
@@ -904,6 +981,73 @@ impl LayerEngine {
                 }
             }
 
+            // Named runs advance on the same clock. Completion is where the
+            // format's `loop` and `on_complete` take effect — until then a run
+            // is just a `t` that grows.
+            let mut evict = false;
+            let mut chained: Vec<String> = Vec::new();
+            for run in &mut o.named {
+                if !run.running {
+                    continue;
+                }
+                run.t_ms += dt;
+                let Some(tl) = timeline::find(&o.armed.doc, &run.name) else {
+                    run.running = false;
+                    continue;
+                };
+                let dur = (tl.duration_ms as f64).max(1.0);
+                if run.t_ms < dur {
+                    continue;
+                }
+                if tl.looping {
+                    run.t_ms %= dur;
+                    continue;
+                }
+                match &tl.on_complete {
+                    // Hold: the run STAYS, asserting its final values — that
+                    // is what a designer means by it. It merely stops ticking.
+                    pmg_scene::doc::OnComplete::Hold => {
+                        run.running = false;
+                        run.t_ms = dur;
+                    }
+                    pmg_scene::doc::OnComplete::Evict => evict = true,
+                    pmg_scene::doc::OnComplete::Goto(next) => {
+                        run.running = false;
+                        run.t_ms = dur;
+                        chained.push(next.clone());
+                    }
+                }
+            }
+            for next in chained {
+                match next.as_str() {
+                    "In" => {
+                        o.phase = Phase::In;
+                        o.t_ms = 0.0;
+                    }
+                    "Out" => {
+                        o.phase = Phase::Out;
+                        o.t_ms = 0.0;
+                        o.named.clear();
+                    }
+                    _ if timeline::find(&o.armed.doc, &next).is_some() => {
+                        match o.named.iter_mut().find(|r| r.name == next) {
+                            Some(r) => {
+                                r.t_ms = 0.0;
+                                r.running = true;
+                            }
+                            None => o.named.push(NamedRun {
+                                name: next,
+                                t_ms: 0.0,
+                                running: true,
+                            }),
+                        }
+                    }
+                    // A Goto naming a timeline the document does not have: the
+                    // compiler already warned at publish; the chain just ends.
+                    _ => {}
+                }
+            }
+
             match o.phase {
                 // In runs to its end and then HOLDS at that end state. It is
                 // not re-evaluated from zero, which would restart the animation
@@ -913,6 +1057,11 @@ impl LayerEngine {
                     o.t_ms = 0.0;
                 }
                 Phase::Out if o.t_ms >= o.armed.out_ms => {
+                    layer.occupant = None;
+                }
+                // A named run finished with `on_complete: evict` — the graphic
+                // authored its own exit, an Out by another name.
+                _ if evict => {
                     layer.occupant = None;
                 }
                 _ => {}
@@ -954,6 +1103,16 @@ impl LayerEngine {
                                 // On air AND wrong is a thing the operator must
                                 // be told; staying quiet is the failure.
                                 degraded: o.armed.instance.degraded,
+                                // Running only — a finished-and-holding run is
+                                // a look, not motion, and this field exists so
+                                // the operator's button can show the press
+                                // took.
+                                named: o
+                                    .named
+                                    .iter()
+                                    .filter(|r| r.running)
+                                    .map(|r| r.name.clone())
+                                    .collect(),
                             }),
                         })
                         .collect(),
@@ -970,6 +1129,10 @@ impl Default for LayerEngine {
 }
 
 /// The timeline values for a layer at its current moment.
+///
+/// The base phase evaluates first, then every named run in start order — so
+/// the last writer per target wins, which is the format's whole blending rule
+/// in v1 (`docs/specs/scene-format.md` §6.3).
 pub fn frame_values(o: &Occupant) -> std::collections::BTreeMap<String, f32> {
     let (name, t) = match o.phase {
         Phase::In => ("In", o.t_ms),
@@ -977,7 +1140,13 @@ pub fn frame_values(o: &Occupant) -> std::collections::BTreeMap<String, f32> {
         Phase::Hold => ("In", o.armed.in_ms),
         Phase::Out => ("Out", o.t_ms),
     };
-    timeline::find(&o.armed.doc, name)
+    let mut values = timeline::find(&o.armed.doc, name)
         .map(|tl| timeline::evaluate(tl, t as f32))
-        .unwrap_or_default()
+        .unwrap_or_default();
+    for run in &o.named {
+        if let Some(tl) = timeline::find(&o.armed.doc, &run.name) {
+            values.extend(timeline::evaluate(tl, run.t_ms as f32));
+        }
+    }
+    values
 }

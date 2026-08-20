@@ -900,6 +900,23 @@ pub fn apply_set_timeline_duration(
     Ok(())
 }
 
+/// Whether a timeline wraps at its end and keeps playing. Refused on `In` and
+/// `Out`: the engine drives those as the occupant's LIFE — a looping In would
+/// be a graphic that never finishes arriving.
+pub fn apply_set_timeline_loop(
+    doc: &mut SceneDoc,
+    name: &str,
+    looping: bool,
+) -> Result<(), String> {
+    if name == "In" || name == "Out" {
+        return Err(format!(
+            "{name} cannot loop — it is the graphic's own entrance or exit"
+        ));
+    }
+    timeline_mut(doc, name)?.looping = looping;
+    Ok(())
+}
+
 /// Two keys closer than this are the same key: editing a key's value must
 /// replace it, not stack a twin the evaluator then steps through.
 const KEY_EPSILON_MS: f32 = 0.5;

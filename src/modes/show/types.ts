@@ -38,6 +38,14 @@ export type Occupant = {
   t_ms: number
   /** Something on air could not be drawn as authored. Saying so is the point. */
   degraded: boolean
+  /** Named timelines currently RUNNING on the node — the button's feedback. */
+  named?: string[]
+  /**
+   * Named timelines the ON-AIR revision offers — `Update`, `Highlight` — added
+   * by the server from the pinned revision's manifest. Absent on a template
+   * with none, which is most of them.
+   */
+  timelines?: string[]
 }
 
 export type LayersSnapshot = {

@@ -222,6 +222,49 @@ function seedOutputs(s) {
 }
 
 /** Publish the snapshot topics this node feeds. All conflate safely. */
+/**
+ * The named timelines a revision offers — `Update`, `Highlight` — from its
+ * manifest, minus the reserved `In`/`Out` the take buttons already own.
+ *
+ * Keyed by the OCCUPANT's pinned rev, not the template's head: the buttons
+ * must describe the document that is actually on air, and those can differ the
+ * moment a designer publishes mid-service. Cached forever because a
+ * template_rev is a content hash — the manifest behind it can never change.
+ */
+const timelinesByRev = new Map()
+function namedTimelines(rev) {
+  if (!rev) return []
+  const hit = timelinesByRev.get(rev)
+  if (hit) return hit
+  const row = handle()
+    .prepare('SELECT manifest FROM template_revisions WHERE template_rev = ?')
+    .get(rev)
+  if (!row) return [] // not cached: the rev may simply not be published YET
+  let names = []
+  try {
+    names = (JSON.parse(row.manifest).timelines ?? []).filter((n) => n !== 'In' && n !== 'Out')
+  } catch {
+    // An unreadable manifest offers no buttons; the graphic still plays.
+  }
+  timelinesByRev.set(rev, names)
+  return names
+}
+
+/** The `output:*:layers` payload, with each occupant told what it can do. */
+function layersPayload(nodeId, out) {
+  return {
+    output: out.id,
+    node: nodeId,
+    fps: out.fps,
+    late_frames: out.late_frames,
+    layers: (out.layers ?? []).map((l) =>
+      l.occupant
+        ? { ...l, occupant: { ...l.occupant, timelines: namedTimelines(l.occupant.template_rev) } }
+        : l,
+    ),
+  }
+}
+
 function republish(s) {
   publish(`node:${s.nodeId}:health`, {
     node: s.nodeId,
@@ -234,13 +277,7 @@ function republish(s) {
   })
   if (s.state) {
     for (const out of s.state.outputs ?? []) {
-      publish(`output:${out.id}:layers`, {
-        output: out.id,
-        node: s.nodeId,
-        fps: out.fps,
-        late_frames: out.late_frames,
-        layers: out.layers ?? [],
-      })
+      publish(`output:${out.id}:layers`, layersPayload(s.nodeId, out))
     }
   }
   // Republish every Item this node mentioned, aggregated across ALL nodes.
@@ -684,7 +721,7 @@ export function registerTopics() {
     snapshot: ([id]) => {
       for (const s of sessions.values()) {
         const out = (s.state?.outputs ?? []).find((o) => o.id === id)
-        if (out) return { output: id, node: s.nodeId, fps: out.fps, late_frames: out.late_frames, layers: out.layers ?? [] }
+        if (out) return layersPayload(s.nodeId, out)
       }
       return null
     },
@@ -703,6 +740,7 @@ export function _reset() {
     s.ws?.close?.()
   }
   sessions.clear()
+  timelinesByRev.clear()
   wss?.close?.()
   wss = null
 }

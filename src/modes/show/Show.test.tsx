@@ -232,6 +232,76 @@ describe('what is on air', () => {
     // It is on air AND it is wrong. Saying nothing would be the failure.
     await waitFor(() => expect(screen.getByText(/degraded/)).toBeDefined())
   })
+
+  test('a named timeline the template offers is a button, and it fires the cue', async () => {
+    topicValues['output:out-0:layers'] = {
+      output: 'out-0', node: 'booth-1', fps: 59.94, late_frames: 0,
+      layers: [{
+        name: 'Lower Third',
+        occupant: {
+          item_id: 'item-1', item_label: 'Pastor Dan', template_rev: 'blake3:aa',
+          phase: 'hold', timeline: null, t_ms: 0, degraded: false,
+          // The server adds these from the PINNED revision's manifest.
+          timelines: ['Update', 'Highlight'],
+        },
+      }],
+    }
+    await paint()
+
+    const btn = await screen.findByRole('button', { name: 'Highlight' })
+    await act(async () => { btn.click(); await Promise.resolve() })
+
+    const call = vi.mocked(fetch).mock.calls.find((c) => String(c[0]) === '/api/cue')
+    expect(call).toBeDefined()
+    const body = JSON.parse(String((call![1] as RequestInit).body))
+    expect(body.op).toBe('timeline')
+    expect(body.timeline).toBe('Highlight')
+    expect(body.action).toBe('play')
+    expect(body.layer).toBe('Lower Third')
+  })
+
+  test('a running timeline lights up and the same button stops it', async () => {
+    topicValues['output:out-0:layers'] = {
+      output: 'out-0', node: 'booth-1', fps: 59.94, late_frames: 0,
+      layers: [{
+        name: 'Lower Third',
+        occupant: {
+          item_id: 'item-1', item_label: 'Pastor Dan', template_rev: 'blake3:aa',
+          phase: 'hold', timeline: null, t_ms: 0, degraded: false,
+          timelines: ['Loop'],
+          // The NODE reports what is running — the light is the graphic
+          // moving, not the button hoping.
+          named: ['Loop'],
+        },
+      }],
+    }
+    await paint()
+
+    const btn = await screen.findByRole('button', { name: 'Loop' })
+    expect(btn.className).toContain('show-console__cue--running')
+    await act(async () => { btn.click(); await Promise.resolve() })
+
+    const call = vi.mocked(fetch).mock.calls.find((c) => String(c[0]) === '/api/cue')
+    const body = JSON.parse(String((call![1] as RequestInit).body))
+    // Clicking a running one is the toggle a looping shimmer needs.
+    expect(body.action).toBe('stop')
+  })
+
+  test('a template with no named timelines grows no dead chip row', async () => {
+    topicValues['output:out-0:layers'] = {
+      output: 'out-0', node: 'booth-1', fps: 59.94, late_frames: 0,
+      layers: [{
+        name: 'Lower Third',
+        occupant: {
+          item_id: 'item-1', item_label: 'Pastor Dan', template_rev: 'blake3:aa',
+          phase: 'hold', timeline: null, t_ms: 0, degraded: false,
+        },
+      }],
+    }
+    await paint()
+    await waitFor(() => expect(screen.getByLabelText('On air').textContent).toContain('Pastor Dan'))
+    expect(screen.queryByLabelText('Timeline cues')).toBeNull()
+  })
 })
 
 describe('a destination that waits to be asked for — ADR 0018', () => {

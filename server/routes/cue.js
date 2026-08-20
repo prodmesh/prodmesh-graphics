@@ -402,6 +402,7 @@ function rejectLabel(reason, body) {
     case 'NoSuchLayer': return `${body.node} has no layer called “${body.layer}”.`
     case 'UnreadableTemplate': return 'That node is too old to read this template.'
     case 'Unsupported': return 'That node doesn’t support scheduled takes.'
+    case 'NoSuchTimeline': return `The graphic on air has no timeline named “${body.timeline}”.`
     default: return 'The node refused that cue.'
   }
 }

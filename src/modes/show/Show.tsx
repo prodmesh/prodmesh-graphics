@@ -58,6 +58,7 @@ import type {
   LayersSnapshot,
   NodeSummary,
   CueLogSnapshot,
+  Occupant,
   Readiness,
 } from './types'
 
@@ -840,9 +841,80 @@ function LayerStrip({
               show: SHOW,
             }).catch((e) => onProblem(e instanceof ApiError ? e.message : String(e)))
           }
-        />
+        >
+          {l.occupant?.timelines?.length ? (
+            <TimelineCues
+              occupant={l.occupant}
+              nodeId={nodeId}
+              outputId={outputId}
+              layer={l.name}
+              reachable={reachable}
+              onProblem={onProblem}
+            />
+          ) : null}
+        </LayerCard>
       ))}
     </section>
+  )
+}
+
+/**
+ * The named-timeline cues the ON-AIR graphic offers — `Update`, `Highlight`,
+ * whatever the designer called them. `In` and `Out` never appear here: the
+ * take buttons own the lifecycle, and these are flourishes layered on top of
+ * it. The list comes from the pinned revision's manifest, so the buttons
+ * describe the document actually on air, not the template's newest draft.
+ *
+ * A chip whose run is RUNNING lights up — the node reports that, so the light
+ * is the graphic moving, not the button hoping. Clicking a running chip stops
+ * it, which is the toggle a looping shimmer needs; clicking an idle one plays
+ * it (again) from the top.
+ */
+function TimelineCues({
+  occupant,
+  nodeId,
+  outputId,
+  layer,
+  reachable,
+  onProblem,
+}: {
+  occupant: Occupant
+  nodeId: string
+  outputId: string
+  layer: string
+  reachable: boolean
+  onProblem: (p: string | null) => void
+}) {
+  const running = new Set(occupant.named ?? [])
+  return (
+    <div className="show-console__cues" aria-label="Timeline cues">
+      {(occupant.timelines ?? []).map((name) => {
+        const on = running.has(name)
+        return (
+          <button
+            key={name}
+            type="button"
+            className={on ? 'show-console__cue show-console__cue--running' : 'show-console__cue'}
+            disabled={!reachable}
+            title={on ? `Stop ${name}` : `Play ${name}`}
+            onClick={() =>
+              takeCue({
+                cue_id: newCueId(),
+                node: nodeId,
+                output: outputId,
+                layer,
+                op: 'timeline',
+                timeline: name,
+                action: on ? 'stop' : 'play',
+                show: SHOW,
+              }).catch((e) => onProblem(e instanceof ApiError ? e.message : String(e)))
+            }
+          >
+            {name}
+          </button>
+        )
+      })}
+    </div>
   )
 }
 

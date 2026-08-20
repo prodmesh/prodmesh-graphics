@@ -144,5 +144,28 @@
 .show-console__secondary { display: flex; gap: 6px; align-self: stretch; }
 .show-console__secondary > * { flex: 1; }
 
+/* ---- Timeline cue chips on a layer card ------------------------------------
+   The named timelines the on-air graphic offers — Update, Highlight, Loop.
+   Cyan when running, never red: red is ON AIR and these are motion, which is
+   the ARMED/active family. */
+.show-console__cues { display: flex; flex-wrap: wrap; gap: 4px; }
+.show-console__cue {
+  border: 1px solid var(--pm-border-hairline);
+  border-radius: var(--pm-radius-4);
+  background: var(--pm-surface-field);
+  color: var(--pm-text-secondary);
+  font-family: var(--pm-font-mono);
+  font-size: 10px;
+  padding: 3px 8px;
+  cursor: pointer;
+}
+.show-console__cue:hover:not(:disabled) { background: var(--pm-surface-hover); color: var(--pm-text-primary); }
+.show-console__cue:disabled { color: var(--pm-text-idle); cursor: default; }
+.show-console__cue--running {
+  border-color: var(--pm-state-armed);
+  color: var(--pm-state-armed);
+  background: var(--pm-state-armed-bg);
+}
+
 .show-console__log { display: flex; flex-direction: column; gap: 8px; align-self: stretch; margin-top: auto; }
 .show-console__log-list { display: flex; flex-direction: column; gap: 6px; align-self: stretch; }

@@ -792,6 +792,13 @@ mod design_api {
             design::set_timeline_duration(&self.armed, &name, ms).map_err(|e| JsValue::from_str(&e))
         }
 
+        /// Whether a named timeline loops at playout. Refused on In and Out.
+        #[wasm_bindgen(js_name = setTimelineLoop)]
+        pub fn set_timeline_loop(&self, name: String, looping: bool) -> Result<String, JsValue> {
+            design::set_timeline_loop(&self.armed, &name, looping)
+                .map_err(|e| JsValue::from_str(&e))
+        }
+
         /// Set a key. `ease` is serde-encoded `pmg_anim::Ease`: `"linear"`,
         /// `{"cubic":[x1,y1,x2,y2]}` or `{"steps":n}`.
         #[wasm_bindgen(js_name = setKey)]

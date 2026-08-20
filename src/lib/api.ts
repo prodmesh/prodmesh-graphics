@@ -89,8 +89,12 @@ export type CueRequest = {
     | 'clear_layer'
     | 'clear_all'
     | 'preload'
+    | 'timeline'
   item?: string
   data?: Record<string, unknown>
+  /** For `op: 'timeline'` — the named timeline, and play (default) or stop. */
+  timeline?: string
+  action?: 'play' | 'stop'
   show?: string
 }
 

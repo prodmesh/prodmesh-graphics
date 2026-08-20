@@ -59,7 +59,7 @@ export type Ease = 'linear' | { cubic: [number, number, number, number] } | { st
 
 export type DocKey = { t: number; v: number; ease?: Ease }
 export type DocTrack = { target: string; keys: DocKey[] }
-export type DocTimeline = { name: string; duration_ms: number; tracks: DocTrack[] }
+export type DocTimeline = { name: string; duration_ms: number; loop?: boolean; tracks: DocTrack[] }
 
 /** The AUTHORED facts for one node — what the inspector edits, as distinct
  *  from the solved geometry `Handles` reports. Straight from the document. */
