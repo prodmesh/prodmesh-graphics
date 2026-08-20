@@ -64,6 +64,8 @@ router.post('/api/themes', mayDesign, async (req, res) => {
   const now = Date.now()
   const id = b.id ?? newId()
   const cur = db.prepare('SELECT id FROM themes WHERE id = ?').get(id)
+  // The trail the apply sweep walks: every hash this theme has ever had.
+  db.prepare('INSERT OR IGNORE INTO theme_hashes (hash, theme_id) VALUES (?, ?)').run(b.hash, id)
   if (cur) {
     db.prepare('UPDATE themes SET name = ?, head_hash = ?, tokens = ?, updated_at = ? WHERE id = ?').run(
       b.name.trim(),
@@ -79,4 +81,48 @@ router.post('/api/themes', mayDesign, async (req, res) => {
     ).run(id, b.name.trim(), b.hash, JSON.stringify(b.tokens), now, now)
   }
   res.status(cur ? 200 : 201).json({ id, name: b.name.trim(), head_hash: b.hash })
+})
+
+
+/**
+ * `GET /api/themes/:id/followers` — the templates whose HEAD revision was
+ * resolved under any version of this theme, with whether they are current.
+ *
+ * This is what the apply sweep iterates: a follower whose recorded hash is not
+ * the theme's head needs a recompile-and-republish; one without an editable
+ * copy cannot be swept from the browser and is reported rather than skipped
+ * silently.
+ */
+router.get('/api/themes/:id/followers', (req, res) => {
+  const db = handle()
+  const theme = db.prepare('SELECT * FROM themes WHERE id = ?').get(req.params.id)
+  if (!theme) return fail(res, 404, 'not_found', 'There is no theme with that id.')
+  const hashes = new Set(
+    db.prepare('SELECT hash FROM theme_hashes WHERE theme_id = ?').all(req.params.id).map((r) => r.hash),
+  )
+  const rows = db
+    .prepare(
+      `SELECT t.id, t.name, t.head_rev, r.manifest, r.mirror_hash
+         FROM templates t JOIN template_revisions r ON r.template_rev = t.head_rev`,
+    )
+    .all()
+  const followers = []
+  for (const r of rows) {
+    let m
+    try {
+      m = JSON.parse(r.manifest)
+    } catch {
+      continue
+    }
+    if (!m.theme || !hashes.has(m.theme)) continue
+    followers.push({
+      id: r.id,
+      name: r.name,
+      head_rev: r.head_rev,
+      theme_hash: m.theme,
+      current: m.theme === theme.head_hash,
+      mirror_hash: r.mirror_hash ?? null,
+    })
+  }
+  res.json({ followers })
 })

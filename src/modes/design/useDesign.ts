@@ -143,6 +143,27 @@ export async function migrateDoc(doc: Record<string, unknown>): Promise<Record<s
   return JSON.parse(wasm.migrateDoc(JSON.stringify(doc))) as Record<string, unknown>
 }
 
+/** A theme's content address and canonical bytes, from the same Rust encoder
+ *  behind `template_rev` — what a theme save sends the server (ADR 0021). */
+export async function themeHash(theme: {
+  name: string
+  tokens: Record<string, unknown>
+}): Promise<{ hash: string; bytes: Uint8Array }> {
+  const wasm = await loadWasm()
+  return wasm.themeHash(JSON.stringify(theme)) as { hash: string; bytes: Uint8Array }
+}
+
+/** Re-resolve a document's tokens from a theme without arming a session —
+ *  the apply sweep walks every follower this way. */
+export async function rethemeDoc(
+  doc: Record<string, unknown>,
+  themeJson: string,
+  hash: string,
+): Promise<Record<string, unknown>> {
+  const wasm = await loadWasm()
+  return JSON.parse(wasm.rethemeDoc(JSON.stringify(doc), themeJson, hash)) as Record<string, unknown>
+}
+
 /** What one uploaded face is: its content hash, and the name and weight the
  *  file itself states. What a font picker offers must be the file's own name,
  *  not a string somebody typed near it. */

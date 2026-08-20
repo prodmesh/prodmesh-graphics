@@ -144,10 +144,12 @@ vi.mock('./useDesign', async () => {
         generation,
       }
     },
-    compileTemplate: vi.fn(async () => ({ template_rev: 'blake3:x', scene: new Uint8Array(), manifest: '{}' })),
+    compileTemplate: vi.fn(async () => ({ template_rev: 'blake3:swept', scene: new Uint8Array(), manifest: '{}' })),
     blankDoc: vi.fn(async () => ({})),
     migrateDoc: vi.fn(async (d: unknown) => d),
     fontFacts: vi.fn(async () => null),
+    themeHash: vi.fn(async () => ({ hash: 'blake3:newthemehash', bytes: new Uint8Array([1]) })),
+    rethemeDoc: vi.fn(async (d: unknown) => d),
   }
 })
 
@@ -216,6 +218,17 @@ beforeEach(() => {
       }
       if (u.includes('/cas/blake3:mirror')) return json(h.DOC)
       if (u.endsWith('/api/assets')) return json({ assets: [] })
+      if (u.endsWith('/api/themes/th-1/followers')) {
+        return json({
+          followers: [{
+            id: 'tpl-1', name: 'Lower third', head_rev: 'blake3:new',
+            theme_hash: 'blake3:oldthemehash', current: false, mirror_hash: 'blake3:mirror',
+          }],
+        })
+      }
+      if (u.endsWith('/api/templates/tpl-1/publish')) {
+        return json({ template_rev: 'blake3:swept', warnings: [], missing_assets: [] })
+      }
       if (u.endsWith('/api/themes')) {
         return json({
           themes: [{
@@ -417,5 +430,24 @@ describe('theme tokens', () => {
     expect(select.value).toBe('blake3:themehead')
     fireEvent.change(select, { target: { value: '' } })
     expect(h.session.clearTheme).toHaveBeenCalled()
+  })
+})
+
+
+describe('the theme manager and the apply sweep', () => {
+  test('a stale follower is named, and the sweep reports its verdicts', async () => {
+    await openTemplate()
+    fireEvent.click(screen.getByRole('button', { name: /Themes — tokens/ }))
+
+    const dialog = await screen.findByRole('dialog', { name: 'Themes' })
+    // The Advent theme's token row is editable.
+    expect(within(dialog).getByLabelText('Token brand.primary colour')).toBeDefined()
+    // The follower list names the template and its staleness.
+    await within(dialog).findByText(/Lower third — an older version of this theme/)
+    await within(dialog).findByText(/1 template was resolved under an older version/)
+
+    fireEvent.click(within(dialog).getByRole('button', { name: /Republish 1 template/ }))
+    // The sweep line: republished, Items moved — the whole verdict in one row.
+    await within(dialog).findByText(/Lower third: republished as swept · 1 Item moved/)
   })
 })

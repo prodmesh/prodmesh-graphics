@@ -588,3 +588,38 @@ test('a theme whose bytes do not match the claimed hash is refused', async () =>
   assert.equal(r.status, 422)
   assert.match(r.json.label, /do not belong together/)
 })
+
+test('followers: the sweep walks every hash a theme has ever had', async () => {
+  // A theme, and a template published under its FIRST version.
+  const bytesA = Buffer.from('theme-v1')
+  const hashA = await cas.hashBuffer(bytesA)
+  const th = await req('POST', '/api/themes', {
+    name: 'Advent', tokens: {}, hash: hashA, bytes: bytesA.toString('base64'),
+  })
+
+  const { m } = await publishFixture()
+  const d = db.handle()
+  const staleRev = `blake3:${'e'.repeat(64)}`
+  d.prepare(
+    `INSERT INTO template_revisions (template_rev, template_id, name, min_reader, manifest, published_at, mirror_hash)
+     VALUES (?, ?, 'Lower Third', 1, ?, ?, 'blake3:mirror')`,
+  ).run(staleRev, m.template_id, JSON.stringify({ ...manifest(), template_rev: staleRev, theme: hashA }), Date.now())
+  d.prepare('UPDATE templates SET head_rev = ? WHERE id = ?').run(staleRev, m.template_id)
+
+  // The theme moves on.
+  const bytesB = Buffer.from('theme-v2')
+  const hashB = await cas.hashBuffer(bytesB)
+  await req('POST', '/api/themes', {
+    id: th.json.id, name: 'Advent', tokens: {}, hash: hashB, bytes: bytesB.toString('base64'),
+  })
+
+  // The template still counts as a follower — via the OLD hash — and is
+  // reported stale, with its mirror so the sweep can actually run.
+  const r = await req('GET', `/api/themes/${th.json.id}/followers`)
+  assert.equal(r.json.followers.length, 1)
+  const f = r.json.followers[0]
+  assert.equal(f.id, m.template_id)
+  assert.equal(f.current, false, 'resolved under a version the theme has moved past')
+  assert.equal(f.theme_hash, hashA)
+  assert.equal(f.mirror_hash, 'blake3:mirror')
+})

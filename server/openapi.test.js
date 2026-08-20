@@ -45,6 +45,7 @@ const NOT_PUBLIC = new Map([
   ['POST /api/templates/:id/update-items', 'Design’s revision workflow — moving pinned Items forward is a browser action; integrators pin per Item via PATCH /api/items.'],
   ['GET /api/themes', 'Design’s theme workflow (ADR 0021) — themes resolve at compile in the browser; integrators see their effect as ordinary revisions.'],
   ['POST /api/themes', 'Design’s theme workflow (ADR 0021).'],
+  ['GET /api/themes/:id/followers', 'Design’s theme workflow (ADR 0021) — what the apply sweep iterates.'],
   ['HEAD /cas/:hash', 'As above.'],
   ['GET /api/assets', 'Asset management, used by Design.'],
   ['GET /api/assets/sync', 'Per-node asset possession for the Media Browser. Derived view, not a contract.'],

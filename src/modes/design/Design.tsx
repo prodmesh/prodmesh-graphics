@@ -63,6 +63,7 @@ import {
 } from './useDesign'
 import { newId } from '../../lib/ids'
 import { MediaBrowser } from './MediaBrowser'
+import { ThemeManager } from './ThemeManager'
 import { useDocHistory } from './useHistory'
 import { LayerTree } from './LayerTree'
 import { TimelinePanel } from './TimelinePanel'
@@ -1515,6 +1516,7 @@ export function Design() {
   const { data: assets } = useQuery<{ assets: Asset[] }>(keys.assets())
   const { data: items } = useQuery<{ items: Item[] }>(keys.items())
   const { data: themesData } = useQuery<{ themes: ThemeRow[] }>(keys.themes())
+  const [themesOpen, setThemesOpen] = useState(false)
 
   const [selected, setSelected] = useState<string | null>(null)
   // The document, behind its undo history: `edit` for changes, `load` for
@@ -2224,9 +2226,17 @@ export function Design() {
                     return docId && headRev ? <Revisions docId={docId} headRev={headRev} /> : null
                   })()}
 
+                  <GroupHeader label="Theme" />
+                  <button
+                    type="button"
+                    className="design-console__file"
+                    onClick={() => setThemesOpen(true)}
+                  >
+                    <FolderOpen size={14} aria-hidden />
+                    <span>Themes — tokens, and applying them…</span>
+                  </button>
                   {themes.length ? (
                     <>
-                      <GroupHeader label="Theme" />
                       <FormGroup label="Follows">
                         <select
                           value={activeTheme?.hash ?? docTheme ?? ''}
@@ -2313,6 +2323,19 @@ export function Design() {
       </div>
 
       {mediaOpen ? <MediaBrowser faces={faces} onClose={() => setMediaOpen(false)} /> : null}
+      {themesOpen ? (
+        <ThemeManager
+          themes={themes}
+          openDocId={docId}
+          onClose={() => setThemesOpen(false)}
+          onSwept={(ids) => {
+            // The open template may have just been republished under the new
+            // theme. Reload it so the editor shows what the server now holds —
+            // unless there are unsaved edits, which the dirty guard protects.
+            if (docId && ids.includes(docId)) void openTemplate(docId)
+          }}
+        />
+      ) : null}
       {menu ? (
         <ContextMenu x={menu.x} y={menu.y} items={menuItems(menu.id)} onClose={() => setMenu(null)} />
       ) : null}

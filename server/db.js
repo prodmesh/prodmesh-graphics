@@ -385,6 +385,22 @@ const MIGRATIONS = [
       );
     `)
   },
+
+  // 12 — every hash a theme has ever had (ADR 0021, the apply sweep).
+  //
+  // A template's manifest records the theme HASH its values were resolved
+  // under, and head_hash moves on every save — so "which templates follow
+  // this theme" needs the trail, not just the head. Immutable rows: a hash's
+  // meaning never changes, like every other content address here.
+  (d) => {
+    d.exec(`
+      CREATE TABLE theme_hashes (
+        hash      TEXT PRIMARY KEY,
+        theme_id  TEXT NOT NULL
+      );
+      INSERT INTO theme_hashes (hash, theme_id) SELECT head_hash, id FROM themes;
+    `)
+  },
 ]
 
 /**

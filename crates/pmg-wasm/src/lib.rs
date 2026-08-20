@@ -235,6 +235,22 @@ mod design_api {
         }
     }
 
+    /// Re-resolve a document's tokens from a theme WITHOUT a session — the
+    /// apply sweep walks every follower this way, and arming each one for a
+    /// GPU it will never paint with would be waste (ADR 0021).
+    #[wasm_bindgen(js_name = rethemeDoc)]
+    pub fn retheme_doc(
+        doc_json: &str,
+        theme_json: &str,
+        theme_hash: &str,
+    ) -> Result<String, JsValue> {
+        let mut doc: pmg_scene::doc::SceneDoc =
+            serde_json::from_str(doc_json).map_err(|e| JsValue::from_str(&format!("{e}")))?;
+        pmg_render::interact::apply_theme(&mut doc, theme_json, theme_hash)
+            .map_err(|e| JsValue::from_str(&e))?;
+        serde_json::to_string(&doc).map_err(|e| JsValue::from_str(&format!("{e}")))
+    }
+
     /// A theme's content address and canonical bytes, from the same encoder
     /// that makes template_rev mean something. Returns
     /// `{ hash: "blake3:…", bytes: base64 }` for a publish.

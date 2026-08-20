@@ -338,6 +338,27 @@
 .opt__head:hover { color: var(--pm-text-primary); }
 .opt__body { display: flex; flex-direction: column; gap: 8px; }
 
+/* ---- Theme manager -------------------------------------------------------- */
+.thm__pick { display: flex; flex-wrap: wrap; gap: 4px; margin-bottom: 8px; }
+.thm__token {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.thm__token input { min-width: 0; }
+.thm__token input[type='number'] { width: 72px; flex: 0 0 auto; }
+.thm__key {
+  font-family: var(--pm-font-mono);
+  font-size: 11px;
+  color: var(--pm-text-secondary);
+  flex: 0 0 140px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.thm__add { display: flex; gap: 6px; align-items: center; margin-top: 4px; }
+.thm__add input { flex: 1; min-width: 0; }
+.thm__follower { margin: 0; font-size: 11px; color: var(--pm-text-secondary); }
+
 /* ---- Context menu — the element menu, at the pointer ---------------------- */
 .ctx {
   position: fixed;
