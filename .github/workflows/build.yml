@@ -34,13 +34,22 @@ jobs:
             -p pmg-scene -p pmg-layout -p pmg-text \
             -p pmg-anim -p pmg-render -p pmg-color
 
+  # Linux only, deliberately — the Actions economics, measured 2026-08-19:
+  # macOS minutes bill at 10x and Windows at 2x, and one productive day of
+  # three-OS pushes burned the org's entire 2 000-minute free month (334 Linux
+  # + 175x2 Windows + 133x10 macOS = 2 014). Nearly everything a commit can
+  # break is platform-independent and Linux catches it at 1x; macOS and
+  # Windows still run the FULL suite — build, tests, selftest — on every tag
+  # (release.yml), which is where a platform difference must be caught before
+  # it ships. The parity workflow keeps its macOS runner: it exists to compare
+  # GPU backends, which is the one thing Linux runners cannot do.
   rust:
     name: rust (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
-        os: [macos-latest, ubuntu-latest, windows-latest]
+        os: [ubuntu-latest]
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable

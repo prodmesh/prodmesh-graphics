@@ -48,6 +48,11 @@ jobs:
       - uses: Swatinem/rust-cache@v2
 
       - run: cargo build --workspace --release
+      # The full test suite on every OS we ship for. Per-commit CI runs Linux
+      # only (the Actions economics are in build.yml); a platform-specific
+      # failure must therefore be caught HERE, before the artifact exists —
+      # which is also the only moment it matters.
+      - run: cargo test --workspace --release
       - run: npm ci && npm run build
 
       # The gate. A release that has not printed PASS does not ship.
