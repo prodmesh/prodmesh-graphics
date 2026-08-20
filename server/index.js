@@ -294,8 +294,25 @@ export function createApp() {
         ;(usedBy[hash] ??= []).push(h.name)
       }
     }
+    // Items reference media through their DATA (a field-driven clip or
+    // picture), not through a template manifest — both are "used by", and
+    // telling a user their on-air clip is "not used" is the kind of lie that
+    // gets an asset deleted on a Thursday.
+    const items = db.prepare('SELECT label, data FROM items').all()
+    for (const it of items) {
+      let data
+      try { data = JSON.parse(it.data ?? '{}') } catch { continue }
+      for (const v of Object.values(data)) {
+        if (typeof v === 'string' && /^blake3:[0-9a-f]{64}$/.test(v)) {
+          ;(usedBy[v] ??= []).push(`Item “${it.label}”`)
+        }
+      }
+    }
     res.json({
-      assets: db.prepare('SELECT * FROM assets ORDER BY first_seen DESC').all(),
+      assets: db
+        .prepare('SELECT * FROM assets ORDER BY first_seen DESC')
+        .all()
+        .map((a) => ({ ...a, media: a.media ? JSON.parse(a.media) : null })),
       used_by: usedBy,
       nodes: nodeLink.assetSync(),
     })

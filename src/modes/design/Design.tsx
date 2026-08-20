@@ -1156,16 +1156,6 @@ export function Design() {
     }
   }, [load])
 
-  const onUploadAsset = useCallback(async (file: File, kind: 'font' | 'image') => {
-    const bytes = new Uint8Array(await file.arrayBuffer())
-    const res = await fetch(`/api/assets?kind=${kind}`, {
-      method: 'POST',
-      headers: { 'content-type': 'application/octet-stream' },
-      body: bytes,
-    })
-    if (res.ok) invalidate(keys.assets())
-  }, [])
-
   const publish = useCallback(async () => {
     if (!doc) return
     setPublishState('Publishing…')
@@ -1464,43 +1454,30 @@ export function Design() {
 
             {doc ? <FieldsEditor session={session} doc={doc} onEdit={edit} /> : null}
 
+            {/* Uploads live in the Media Browser — one place media enters the
+                system, whatever its kind. The rail keeps the counts so a
+                missing font is diagnosable without opening a dialog. */}
             <div className="design-console__fonts">
               <GroupHeader
-                label="Fonts"
-                trailing={fontAssets.length ? `${fontAssets.length}` : undefined}
+                label="Media"
+                trailing={
+                  fontAssets.length + imageAssets.length
+                    ? `${fontAssets.length + imageAssets.length}`
+                    : undefined
+                }
               />
-              <label className="design-console__file">
-                <FileUp size={14} aria-hidden />
-                <span>Add a font…</span>
-                <input
-                  type="file"
-                  accept=".ttf,.otf,.ttc"
-                  onChange={(e) => { const f = e.target.files?.[0]; if (f) void onUploadAsset(f, 'font') }}
-                />
-              </label>
+              <button
+                type="button"
+                className="design-console__file"
+                onClick={() => setMediaOpen(true)}
+              >
+                <FolderOpen size={14} aria-hidden />
+                <span>Media Browser — fonts, images, videos…</span>
+              </button>
               <p className="design-console__dim">
                 {fontAssets.length === 0
-                  ? 'No fonts yet. A template can only render with a font this server holds — that is what makes it look the same on every machine.'
-                  : 'Fonts are carried by content hash and staged to nodes like any other asset.'}
-              </p>
-
-              <GroupHeader
-                label="Images"
-                trailing={imageAssets.length ? `${imageAssets.length}` : undefined}
-              />
-              <label className="design-console__file">
-                <FileUp size={14} aria-hidden />
-                <span>Add an image…</span>
-                <input
-                  type="file"
-                  accept=".png,.jpg,.jpeg"
-                  onChange={(e) => { const f = e.target.files?.[0]; if (f) void onUploadAsset(f, 'image') }}
-                />
-              </label>
-              <p className="design-console__dim">
-                {imageAssets.length === 0
-                  ? 'No images yet. Add one to place it on the canvas or behind a box.'
-                  : 'Pictures are carried by content hash, so a template shows the same pixels everywhere.'}
+                  ? 'No fonts yet. A template can only render with a font this server holds — add one in the Media Browser.'
+                  : `${fontAssets.length} font(s), ${imageAssets.length} image(s). Carried by content hash and staged to nodes like any other asset.`}
               </p>
             </div>
 

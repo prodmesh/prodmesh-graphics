@@ -22,6 +22,8 @@ export const keys = {
   rundown: (id: string) => `/api/rundowns/${id}`,
   assets: () => '/api/assets',
   assetSync: () => '/api/assets/sync',
+  ingest: () => '/api/ingest',
+  ingestJob: (id: string) => `/api/ingest/${id}`,
 
   nodes: () => '/api/nodes',
   node: (id: string) => `/api/nodes/${id}`,
