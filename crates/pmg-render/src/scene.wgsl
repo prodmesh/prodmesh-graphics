@@ -203,6 +203,27 @@ fn fs_text(in : VsOut) -> @location(0) vec4<f32> {
     return vec4<f32>(u.color.rgb * a, a);   // premultiplied
 }
 
+// Outline and shadow passes: identical sampling, a different colour uniform.
+// The ink itself — the ring outside the glyph, the softened silhouette — was
+// derived on the CPU at arm (`glyph_fx`) and lives in the atlas like any other
+// glyph; per frame these are just more quads. Unlike a box shadow there is no
+// silhouette knockout: text follows CSS text-shadow, where a translucent fill
+// shows its shadow through — the box rule guards a hole a glyph cannot have.
+
+@fragment
+fn fs_text_stroke(in : VsOut) -> @location(0) vec4<f32> {
+    let coverage = textureSample(atlas_tex, atlas_smp, in.uv).r;
+    let a = coverage * u.stroke_color.a * u.opacity;
+    return vec4<f32>(u.stroke_color.rgb * a, a);
+}
+
+@fragment
+fn fs_text_shadow(in : VsOut) -> @location(0) vec4<f32> {
+    let coverage = textureSample(atlas_tex, atlas_smp, in.uv).r;
+    let a = coverage * u.shadow_color.a * u.opacity;
+    return vec4<f32>(u.shadow_color.rgb * a, a);
+}
+
 // ---------------------------------------------------------------------------
 // Unknown node kinds.
 //

@@ -95,6 +95,8 @@ fn uniform_bytes(u: &NodeUniform) -> [u8; UNIFORM_SIZE as usize] {
 pub struct SceneRenderer {
     pipeline_box: wgpu::RenderPipeline,
     pipeline_text: wgpu::RenderPipeline,
+    pipeline_text_stroke: wgpu::RenderPipeline,
+    pipeline_text_shadow: wgpu::RenderPipeline,
     pipeline_unknown: wgpu::RenderPipeline,
     pipeline_image: wgpu::RenderPipeline,
     /// One bind group per image slot, built once at arm.
@@ -435,8 +437,21 @@ impl SceneRenderer {
         let pipeline_text = make(
             "vs_text",
             "fs_text",
-            &[Some(glyph_layout)],
+            &[Some(glyph_layout.clone())],
             "pmg-scene-text",
+        );
+        // Same quads, same atlas — only the colour uniform they read differs.
+        let pipeline_text_stroke = make(
+            "vs_text",
+            "fs_text_stroke",
+            &[Some(glyph_layout.clone())],
+            "pmg-scene-text-stroke",
+        );
+        let pipeline_text_shadow = make(
+            "vs_text",
+            "fs_text_shadow",
+            &[Some(glyph_layout)],
+            "pmg-scene-text-shadow",
         );
 
         // Upload the coverage atlas. A 1x1 transparent texture stands in when a
@@ -584,6 +599,8 @@ impl SceneRenderer {
         Self {
             pipeline_box,
             pipeline_text,
+            pipeline_text_stroke,
+            pipeline_text_shadow,
             pipeline_unknown,
             pipeline_image,
             image_texs,
@@ -695,7 +712,8 @@ impl SceneRenderer {
         // would be an allocation per node per frame.
         let mut ubytes = vec![0u8; (stride as usize) * inst.nodes.len().max(1)];
         let mut glyph_verts: Vec<f32> = Vec::new();
-        let mut glyph_ranges: Vec<(u32, u32)> = Vec::new();
+        // Per node: [shadow, stroke, fill] vertex ranges, in draw order.
+        let mut glyph_ranges: Vec<[(u32, u32); 3]> = Vec::new();
 
         // Compose each node's affine with its ancestors', so animating a parent
         // carries its children. Shared with the hit test (crate::interact) so
@@ -775,11 +793,13 @@ impl SceneRenderer {
             let off = (stride as usize) * i;
             ubytes[off..off + UNIFORM_SIZE as usize].copy_from_slice(&uniform_bytes(&u));
 
-            // Build glyph quads in the same pass.
-            let start = (glyph_verts.len() / 4) as u32;
-            if let RenderContent::Text(glyphs) = &n.content {
-                let (aw, ah) = (self.atlas_size.0 as f32, self.atlas_size.1 as f32);
-                for g in glyphs {
+            // Build glyph quads in the same pass — three ranges per node, in
+            // draw order: shadow, stroke, fill. Effect-free text has two empty
+            // ranges and costs nothing new.
+            let (aw, ah) = (self.atlas_size.0 as f32, self.atlas_size.1 as f32);
+            let mut emit = |placed: &[crate::scene::PlacedGlyph]| {
+                let start = (glyph_verts.len() / 4) as u32;
+                for g in placed {
                     // Outset every glyph quad by half a pixel, with the UV rect
                     // extended to match.
                     //
@@ -817,9 +837,14 @@ impl SceneRenderer {
                         glyph_verts.extend_from_slice(&[px, py, tu, tv]);
                     }
                 }
-            }
-            let end = (glyph_verts.len() / 4) as u32;
-            glyph_ranges.push((start, end));
+                (start, (glyph_verts.len() / 4) as u32)
+            };
+            let ranges = if let RenderContent::Text(ink) = &n.content {
+                [emit(&ink.shadow), emit(&ink.stroke), emit(&ink.fill)]
+            } else {
+                [(0, 0); 3]
+            };
+            glyph_ranges.push(ranges);
         }
 
         let ubuf = device.create_buffer(&wgpu::BufferDescriptor {
@@ -953,11 +978,20 @@ impl SceneRenderer {
                         }
                     }
                     RenderContent::Text(_) => {
-                        let (s, e) = glyph_ranges[i];
-                        if e > s {
-                            pass.set_pipeline(&self.pipeline_text);
-                            pass.set_bind_group(0, &bind, &[offset]);
-                            pass.draw(s..e, 0..1);
+                        // Shadow under stroke under fill — the same stacking
+                        // fs_box composes analytically, done here with draw
+                        // order because glyph ink lives in bitmaps.
+                        let [shadow, stroke, fill] = glyph_ranges[i];
+                        for ((s, e), pipeline) in [
+                            (shadow, &self.pipeline_text_shadow),
+                            (stroke, &self.pipeline_text_stroke),
+                            (fill, &self.pipeline_text),
+                        ] {
+                            if e > s {
+                                pass.set_pipeline(pipeline);
+                                pass.set_bind_group(0, &bind, &[offset]);
+                                pass.draw(s..e, 0..1);
+                            }
                         }
                     }
                 }

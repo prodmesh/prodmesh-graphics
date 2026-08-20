@@ -54,11 +54,27 @@ pub struct PlacedGlyph {
     pub uh: u32,
 }
 
+/// A text node's ink, split by pass.
+///
+/// `fill` is the glyphs as shaped. `stroke` and `shadow` are DERIVED bitmaps
+/// — an outline ring dilated outward, a softened silhouette — built at arm by
+/// [`crate::glyph_fx`] only when the node's style asks for them, so
+/// effect-free text packs nothing extra and renders exactly as it always has.
+/// Draw order is shadow, then stroke, then fill: with all of a node's rings
+/// down before any of its fills, tight kerning cannot put one glyph's outline
+/// across its neighbour's face.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct TextInk {
+    pub fill: Vec<PlacedGlyph>,
+    pub stroke: Vec<PlacedGlyph>,
+    pub shadow: Vec<PlacedGlyph>,
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum RenderContent {
     /// A filled box. Rounded corners are antialiased analytically.
     Box,
-    Text(Vec<PlacedGlyph>),
+    Text(TextInk),
     /// A decoded still. Video is M3d and will reuse this, swapping the texture
     /// per frame rather than rebuilding the instance.
     Image(PlacedImage),
@@ -357,9 +373,9 @@ fn flatten(
             match glyphs.run(&text, font, Some(rect.w), cap, align) {
                 Some((run, ascent)) if !run.is_empty() => {
                     pending.push((inst.nodes.len(), run, ascent));
-                    RenderContent::Text(Vec::new()) // filled in by pack_atlas
+                    RenderContent::Text(TextInk::default()) // filled in by pack_atlas
                 }
-                _ => RenderContent::Text(Vec::new()),
+                _ => RenderContent::Text(TextInk::default()),
             }
         }
         (true, Some(Content::Image { asset_key, fit, .. })) => {
@@ -457,77 +473,162 @@ fn pack_atlas(inst: &mut SceneInstance, pending: Vec<(usize, Vec<RunGlyph>, f32)
         return;
     }
 
-    // Index every glyph so placement can be written back afterwards.
-    let mut all: Vec<(usize, usize)> = Vec::new();
-    for (pi, (_, run, _)) in pending.iter().enumerate() {
-        for (gi, g) in run.iter().enumerate() {
-            // Whitespace rasterizes to nothing; packing a zero-area glyph would
-            // put a degenerate rect in the atlas.
-            if g.width > 0 && g.height > 0 {
-                all.push((pi, gi));
+    #[derive(Clone, Copy, PartialEq)]
+    enum Pass {
+        Fill,
+        Stroke,
+        Shadow,
+    }
+    /// One bitmap headed for the atlas: a glyph, or an effect derived from one.
+    struct Entry {
+        node_idx: usize,
+        pass: Pass,
+        /// Design-space top-left.
+        x: f32,
+        y: f32,
+        width: u32,
+        height: u32,
+        bytes: Vec<u8>,
+    }
+
+    // Derive every bitmap first — glyphs plus, for styled nodes, their outline
+    // rings and shadow blurs (`glyph_fx`, arm-time on purpose) — so the atlas
+    // can still be packed in a single pass.
+    let mut entries: Vec<Entry> = Vec::new();
+    for (node_idx, run, ascent) in pending {
+        let origin = inst.nodes[node_idx].rect;
+        let stroke_w = inst.nodes[node_idx]
+            .stroke
+            .map(|s| s.width)
+            .filter(|w| *w > 0.0);
+        let shadow = inst.nodes[node_idx].shadow;
+        for g in run {
+            // Whitespace rasterizes to nothing; packing a zero-area glyph
+            // would put a degenerate rect in the atlas.
+            if g.width == 0 || g.height == 0 {
+                continue;
             }
+            // The pen sits at the run origin; `left`/`top` place the bitmap
+            // relative to it, and the baseline sits `ascent` below the box top.
+            let fx = origin.x + g.x + g.left as f32;
+            let fy = origin.y + ascent + g.y - g.top as f32;
+
+            if let Some(w) = stroke_w {
+                let ring = crate::glyph_fx::outline_ring(&g.coverage, g.width, g.height, w);
+                entries.push(Entry {
+                    node_idx,
+                    pass: Pass::Stroke,
+                    x: fx + ring.offset as f32,
+                    y: fy + ring.offset as f32,
+                    width: ring.width,
+                    height: ring.height,
+                    bytes: ring.bytes,
+                });
+            }
+            if let Some(sh) = shadow {
+                // The shadow is of the ink the viewer sees: the OUTLINED
+                // silhouette when there is an outline, the bare glyph when not.
+                let (src, sw, sh_h, base_off) = match stroke_w {
+                    Some(w) => {
+                        let d = crate::glyph_fx::dilate(&g.coverage, g.width, g.height, w);
+                        (d.bytes, d.width, d.height, d.offset)
+                    }
+                    None => (g.coverage.clone(), g.width, g.height, 0),
+                };
+                // A hard shadow (blur under half a pixel) is the silhouette
+                // itself, offset — softening it anyway would put a fade on an
+                // edge the designer asked to be crisp.
+                let (bytes, bw, bh, off) = if sh.blur < 0.5 {
+                    (src, sw, sh_h, base_off)
+                } else {
+                    let s = crate::glyph_fx::soften(&src, sw, sh_h, sh.blur);
+                    (s.bytes, s.width, s.height, base_off + s.offset)
+                };
+                entries.push(Entry {
+                    node_idx,
+                    pass: Pass::Shadow,
+                    x: fx + off as f32 + sh.dx,
+                    y: fy + off as f32 + sh.dy,
+                    width: bw,
+                    height: bh,
+                    bytes,
+                });
+            }
+            entries.push(Entry {
+                node_idx,
+                pass: Pass::Fill,
+                x: fx,
+                y: fy,
+                width: g.width,
+                height: g.height,
+                bytes: g.coverage,
+            });
         }
     }
-    if all.is_empty() {
+    if entries.is_empty() {
         return;
     }
 
-    // Tallest first, so shelves stay tightly packed.
-    all.sort_by_key(|(pi, gi)| std::cmp::Reverse(pending[*pi].1[*gi].height));
-
     const PAD: u32 = 1; // keep bilinear sampling from bleeding between glyphs
-    let atlas_w: u32 = 1024;
-    let mut placements: BTreeMap<(usize, usize), (u32, u32)> = BTreeMap::new();
-    let (mut pen_x, mut pen_y, mut shelf_h) = (PAD, PAD, 0u32);
+                        // Wide enough for the widest bitmap — a heavily blurred headline glyph can
+                        // outgrow the historical 1024.
+    let widest = entries.iter().map(|e| e.width).max().unwrap_or(0);
+    let atlas_w: u32 = (widest + 2 * PAD).max(1024).next_power_of_two();
 
-    for (pi, gi) in &all {
-        let g = &pending[*pi].1[*gi];
-        if pen_x + g.width + PAD > atlas_w {
+    // Tallest first, so shelves stay tightly packed.
+    let mut order: Vec<usize> = (0..entries.len()).collect();
+    order.sort_by_key(|&i| std::cmp::Reverse(entries[i].height));
+
+    let mut placements: BTreeMap<usize, (u32, u32)> = BTreeMap::new();
+    let (mut pen_x, mut pen_y, mut shelf_h) = (PAD, PAD, 0u32);
+    for &i in &order {
+        let e = &entries[i];
+        if pen_x + e.width + PAD > atlas_w {
             pen_x = PAD;
             pen_y += shelf_h + PAD;
             shelf_h = 0;
         }
-        placements.insert((*pi, *gi), (pen_x, pen_y));
-        pen_x += g.width + PAD;
-        shelf_h = shelf_h.max(g.height);
+        placements.insert(i, (pen_x, pen_y));
+        pen_x += e.width + PAD;
+        shelf_h = shelf_h.max(e.height);
     }
     let atlas_h = (pen_y + shelf_h + PAD).next_power_of_two();
 
     let mut bytes = vec![0u8; (atlas_w * atlas_h) as usize];
-    for ((pi, gi), (x, y)) in &placements {
-        let g = &pending[*pi].1[*gi];
-        for row in 0..g.height {
-            let src = (row * g.width) as usize;
+    for (i, (x, y)) in &placements {
+        let e = &entries[*i];
+        for row in 0..e.height {
+            let src = (row * e.width) as usize;
             let dst = ((y + row) * atlas_w + x) as usize;
-            bytes[dst..dst + g.width as usize]
-                .copy_from_slice(&g.coverage[src..src + g.width as usize]);
+            bytes[dst..dst + e.width as usize]
+                .copy_from_slice(&e.bytes[src..src + e.width as usize]);
         }
     }
 
-    // Write placements back onto the nodes.
-    for (pi, (node_idx, run, ascent)) in pending.iter().enumerate() {
-        let origin = inst.nodes[*node_idx].rect;
-        let placed: Vec<PlacedGlyph> = run
-            .iter()
-            .enumerate()
-            .filter_map(|(gi, g)| {
-                let (u, v) = *placements.get(&(pi, gi))?;
-                Some(PlacedGlyph {
-                    // The pen sits at the run origin; `left`/`top` place the
-                    // bitmap relative to it, and the baseline sits `ascent`
-                    // below the box top.
-                    x: origin.x + g.x + g.left as f32,
-                    y: origin.y + ascent + g.y - g.top as f32,
-                    w: g.width as f32,
-                    h: g.height as f32,
-                    u,
-                    v,
-                    uw: g.width,
-                    uh: g.height,
-                })
-            })
-            .collect();
-        inst.nodes[*node_idx].content = RenderContent::Text(placed);
+    // Write placements back onto the nodes, split by pass. Entry order within
+    // a pass is glyph order, preserved.
+    let mut inks: BTreeMap<usize, TextInk> = BTreeMap::new();
+    for (i, e) in entries.iter().enumerate() {
+        let (u, v) = placements[&i];
+        let placed = PlacedGlyph {
+            x: e.x,
+            y: e.y,
+            w: e.width as f32,
+            h: e.height as f32,
+            u,
+            v,
+            uw: e.width,
+            uh: e.height,
+        };
+        let ink = inks.entry(e.node_idx).or_default();
+        match e.pass {
+            Pass::Fill => ink.fill.push(placed),
+            Pass::Stroke => ink.stroke.push(placed),
+            Pass::Shadow => ink.shadow.push(placed),
+        }
+    }
+    for (node_idx, ink) in inks {
+        inst.nodes[node_idx].content = RenderContent::Text(ink);
     }
 
     inst.atlas = CoverageAtlas {

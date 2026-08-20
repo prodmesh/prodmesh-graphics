@@ -593,10 +593,11 @@ function SelectedNode({
             </button>
           )}
 
-          {/* Outline and shadow: box and image nodes, where the rounded-rect
-              silhouette is what they decorate. Text effects are their own
-              rung — glyph outlines need their own rasterization. */}
-          {facts.kind === 'box' || facts.kind === 'image' ? (
+          {/* Outline and shadow, on everything with a silhouette. Boxes and
+              images decorate their rounded rect; text rings and shadows its
+              glyphs — the outline drawn OUTWARD there, because an inside
+              stroke eats thin letterforms. */}
+          {facts.kind === 'box' || facts.kind === 'image' || facts.kind === 'text' ? (
             <>
               {facts.stroke ? (
                 <>

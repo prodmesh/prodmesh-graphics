@@ -22,6 +22,7 @@
 #![forbid(unsafe_code)]
 
 pub mod draw;
+pub mod glyph_fx;
 pub mod interact;
 pub mod parity;
 pub mod scene;

@@ -84,6 +84,12 @@ upscale a 1080 raster to 2160; glyph antialiasing gives it away immediately.
                  "anchor": [0.5,0.5], "skew": [0,0] },
   "style":     { "fill": {...}, "stroke": {...}, "radius": 8,
                  "shadow": {...}, "blur": 0, "opacity": 1.0 },
+  // `stroke` and `shadow` decorate the node's silhouette, and WHERE depends on
+  // what the silhouette is. A box strokes INSIDE its edge (layout is never
+  // grown) and knocks its shadow out under its own silhouette, like CSS
+  // box-shadow. Text strokes OUTWARD — an inside stroke eats thin letterforms
+  // — and its shadow shows through a translucent fill, like CSS text-shadow.
+  // Neither effect ever changes layout; both are ink past the geometry.
   "clip": false,
   "visible_if": { /* §5.3 */ },
   "content": { /* kind-specific */ },

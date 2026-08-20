@@ -238,7 +238,7 @@ mod tests {
             node(
                 "line",
                 rect(0.0, 0.0, 90.0, 20.0),
-                RenderContent::Text(vec![]),
+                RenderContent::Text(Default::default()),
             ),
         ]);
         let b = inst(vec![
@@ -246,7 +246,7 @@ mod tests {
             node(
                 "line",
                 rect(0.0, 0.0, 190.0, 20.0),
-                RenderContent::Text(vec![]),
+                RenderContent::Text(Default::default()),
             ),
         ]);
 
@@ -300,7 +300,7 @@ mod tests {
             node(
                 "title",
                 rect(10.0, 60.0, 80.0, 20.0),
-                RenderContent::Text(vec![]),
+                RenderContent::Text(Default::default()),
             ),
         ]);
 
@@ -319,7 +319,7 @@ mod tests {
             node(
                 "line",
                 rect(8.0, 8.0, 880.0, 40.0),
-                RenderContent::Text(vec![]),
+                RenderContent::Text(Default::default()),
             ),
         ]);
         let narrow = inst(vec![
@@ -327,7 +327,7 @@ mod tests {
             node(
                 "line",
                 rect(8.0, 8.0, 280.0, 40.0),
-                RenderContent::Text(vec![]),
+                RenderContent::Text(Default::default()),
             ),
         ]);
 

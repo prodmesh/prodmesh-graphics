@@ -382,3 +382,148 @@ fn strokes_and_shadows_draw_where_the_format_says() {
         "nothing leaks past the left edge opposite the offset"
     );
 }
+
+/// One 32x32 solid-square "glyph", pen at the origin, baseline 32 below the
+/// box top. Effects need ink, not typography — a square shows exactly where
+/// the ring and the shadow land.
+struct SquareGlyph;
+impl GlyphSource for SquareGlyph {
+    fn run(
+        &mut self,
+        _text: &str,
+        _font: &FontSpec,
+        _max_width: Option<f32>,
+        _max_lines: usize,
+        _align: pmg_scene::doc::Align,
+    ) -> Option<(Vec<RunGlyph>, f32)> {
+        Some((
+            vec![RunGlyph {
+                x: 0.0,
+                y: 0.0,
+                left: 0,
+                top: 32,
+                width: 32,
+                height: 32,
+                coverage: vec![255u8; 32 * 32],
+            }],
+            32.0,
+        ))
+    }
+}
+
+#[test]
+fn text_effects_ring_the_glyph_and_shadow_the_outlined_shape() {
+    let Some(g) = gpu() else {
+        eprintln!("no GPU adapter; skipping");
+        return;
+    };
+
+    // A white square glyph at (64,64)..(96,96) with a red outline 3 px OUT
+    // from the edge and a blue shadow offset +14 in x, softness 6.
+    use pmg_scene::doc::*;
+    let mut doc = bar(0.0, [0.0, 0.0, 0.0, 0.0]);
+    doc.root.layout.padding = Edges {
+        top: 64.0,
+        right: 0.0,
+        bottom: 0.0,
+        left: 64.0,
+    };
+    doc.root.children = vec![Node {
+        id: "word".into(),
+        display_name: None,
+        kind: NodeKind::Text,
+        layout: Layout {
+            width: Dimension::Px(64.0),
+            height: Dimension::Px(64.0),
+            ..Default::default()
+        },
+        transform: Transform2D::default(),
+        style: Style {
+            fill: Some(Rgba {
+                rgba: [1.0, 1.0, 1.0, 1.0],
+            }),
+            stroke: Some(Stroke {
+                color: Rgba {
+                    rgba: [1.0, 0.0, 0.0, 1.0],
+                },
+                width: 3.0,
+            }),
+            shadow: Some(Shadow {
+                color: Rgba {
+                    rgba: [0.0, 0.0, 1.0, 1.0],
+                },
+                dx: 14.0,
+                dy: 0.0,
+                blur: 6.0,
+            }),
+            ..Default::default()
+        },
+        clip: false,
+        visible_if: None,
+        content: Some(Content::Text {
+            binding: Binding {
+                expr: "X".into(),
+                transform: vec![],
+            },
+            font: FontSpec {
+                family: "Test".into(),
+                weight: 400,
+                size: 32.0,
+                features: vec![],
+                tracking: 0.0,
+                line_height: 1.0,
+            },
+            align: Align::Start,
+            max_lines: None,
+        }),
+        children: vec![],
+        unknown: Default::default(),
+    }];
+
+    let solved = pmg_layout::solve(
+        &doc,
+        &Default::default(),
+        &pmg_layout::StubMeasure { advance_ratio: 0.5 },
+    )
+    .expect("layout solves");
+    let inst = SceneInstance::build(&doc, &solved, &mut SquareGlyph);
+
+    let fb = pmg_render::draw::LinearFrame::new(&g.device, W, H);
+    let view = fb.view().clone();
+    SceneRenderer::new(&g.device, &g.queue, &inst).render(
+        &g.device,
+        &g.queue,
+        &inst,
+        &[],
+        &view,
+        (W, H),
+    );
+    fb.encode(&g.device, &g.queue);
+    let px = read_back(&g, fb.output());
+
+    let at = |x: u32, y: u32| {
+        let i = ((y * W + x) * 4) as usize;
+        [px[i], px[i + 1], px[i + 2], px[i + 3]]
+    };
+
+    // Dead centre: the white fill, on top of everything.
+    let c = at(80, 80);
+    assert!(
+        c[0] > 220 && c[1] > 220 && c[2] > 220,
+        "fill is white, got {c:?}"
+    );
+    // Just outside the glyph edge: the ring, red and solid.
+    let r = at(97, 80);
+    assert!(
+        r[0] > 180 && r[1] < 90 && r[3] > 150,
+        "ring is red, got {r:?}"
+    );
+    // Past the ring, inside the offset silhouette: the shadow, blue.
+    let s = at(108, 80);
+    assert!(s[2] > 100 && s[0] < 90, "shadow is blue, got {s:?}");
+    // Opposite the offset nothing leaks left of the ring.
+    let l = at(56, 80);
+    assert_eq!(l[3], 0, "no ink left of the ring, got {l:?}");
+    // Far away stays empty.
+    assert_eq!(at(200, 200)[3], 0);
+}
