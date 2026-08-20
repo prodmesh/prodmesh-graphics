@@ -177,6 +177,8 @@ mod tests {
             rect,
             base_transform: Transform2D::default(),
             fill: None,
+            stroke: None,
+            shadow: None,
             radius: 0.0,
             opacity: 1.0,
             clip: false,

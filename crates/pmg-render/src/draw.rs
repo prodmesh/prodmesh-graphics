@@ -29,9 +29,15 @@ struct NodeUniform {
     /// Sub-rectangle of an image to sample: x, y, w, h, normalised. `fit` is
     /// resolved at build time so a frame never reasons about aspect ratios.
     uv: [f32; 4],
+    /// Stroke colour, LINEAR, straight alpha. Alpha 0 means no stroke.
+    stroke_color: [f32; 4],
+    /// Shadow colour, LINEAR, straight alpha. Alpha 0 means no shadow.
+    shadow_color: [f32; 4],
+    /// x: stroke width, y/z: shadow dx/dy, w: shadow blur — design units all.
+    effect: [f32; 4],
 }
 
-const UNIFORM_SIZE: u64 = 96;
+const UNIFORM_SIZE: u64 = 144;
 const _: () = assert!(std::mem::size_of::<NodeUniform>() as u64 == UNIFORM_SIZE);
 
 fn uniform_bytes(u: &NodeUniform) -> [u8; UNIFORM_SIZE as usize] {
@@ -61,6 +67,18 @@ fn uniform_bytes(u: &NodeUniform) -> [u8; UNIFORM_SIZE as usize] {
         u.uv[1],
         u.uv[2],
         u.uv[3],
+        u.stroke_color[0],
+        u.stroke_color[1],
+        u.stroke_color[2],
+        u.stroke_color[3],
+        u.shadow_color[0],
+        u.shadow_color[1],
+        u.shadow_color[2],
+        u.shadow_color[3],
+        u.effect[0],
+        u.effect[1],
+        u.effect[2],
+        u.effect[3],
     ];
     for (i, v) in f.iter().enumerate() {
         buf[i * 4..i * 4 + 4].copy_from_slice(&v.to_le_bytes());
@@ -707,7 +725,15 @@ impl SceneRenderer {
             let (m, t) = world[i];
             // Linear light, converted ONCE here on the CPU. Doing it in the
             // shader would repeat it per pixel for a value that is per node.
-            let color = crate::color_to_linear(n.fill.map(|c| c.rgba).unwrap_or([1.0; 4]));
+            //
+            // An unfilled BOX gets transparent, not the white other content
+            // defaults to: unfilled boxes used to be skipped entirely, but a
+            // stroke or shadow now draws them — and the fill under an outline
+            // must be nothing, not a white plate.
+            let color = match (&n.content, n.fill) {
+                (RenderContent::Box, None) => [0.0; 4],
+                (_, fill) => crate::color_to_linear(fill.map(|c| c.rgba).unwrap_or([1.0; 4])),
+            };
 
             let u = NodeUniform {
                 rect: [rect.x, rect.y, rect.w, rect.h],
@@ -727,6 +753,24 @@ impl SceneRenderer {
                     RenderContent::Image(img) => img.uv,
                     _ => [0.0, 0.0, 1.0, 1.0],
                 },
+                // Alpha 0 is the "absent" encoding for both: the shader's
+                // arithmetic multiplies through it to exact zeros, so a node
+                // without effects renders bit-identically to before they
+                // existed — measured by the goldens, not assumed.
+                stroke_color: n
+                    .stroke
+                    .map(|s| crate::color_to_linear(s.color.rgba))
+                    .unwrap_or([0.0; 4]),
+                shadow_color: n
+                    .shadow
+                    .map(|s| crate::color_to_linear(s.color.rgba))
+                    .unwrap_or([0.0; 4]),
+                effect: [
+                    n.stroke.map(|s| s.width.max(0.0)).unwrap_or(0.0),
+                    n.shadow.map(|s| s.dx).unwrap_or(0.0),
+                    n.shadow.map(|s| s.dy).unwrap_or(0.0),
+                    n.shadow.map(|s| s.blur.max(0.0)).unwrap_or(0.0),
+                ],
             };
             let off = (stride as usize) * i;
             ubytes[off..off + UNIFORM_SIZE as usize].copy_from_slice(&uniform_bytes(&u));
@@ -891,10 +935,10 @@ impl SceneRenderer {
                         pass.draw(0..6, 0..1);
                     }
                     RenderContent::Box => {
-                        // A box with no fill is a pure layout container; drawing
-                        // it would paint an opaque white rectangle over
-                        // everything behind it.
-                        if n.fill.is_some() {
+                        // A box with no fill, stroke, or shadow is a pure
+                        // layout container; drawing it would paint an opaque
+                        // white rectangle over everything behind it.
+                        if n.fill.is_some() || n.stroke.is_some() || n.shadow.is_some() {
                             pass.set_pipeline(&self.pipeline_box);
                             pass.set_bind_group(0, &bind, &[offset]);
                             pass.draw(0..6, 0..1);

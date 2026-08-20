@@ -78,10 +78,17 @@ export type NodeFacts = {
    *  The solved size is the handles' answer; this is the setting. */
   width_mode: string
   height_mode: string
+  /** Authored spacing, [top, right, bottom, left]. */
+  margin: [number, number, number, number]
+  padding: [number, number, number, number]
   /** Present exactly when the node is text. */
   text?: { expr: string; family: string; weight: number; size: number; align: string }
   /** Present exactly when the node draws a picture. */
   image?: { asset_key: string; hash: string | null; fit: string }
+  /** The outline, when there is one: encoded straight RGBA plus width. */
+  stroke?: { color: [number, number, number, number]; width: number }
+  /** The drop shadow, when there is one. */
+  shadow?: { color: [number, number, number, number]; dx: number; dy: number; blur: number }
 }
 
 export type DragResult = {

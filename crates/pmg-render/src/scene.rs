@@ -87,6 +87,10 @@ pub struct RenderNode {
     /// the design rather than to wherever the last frame left it.
     pub base_transform: Transform2D,
     pub fill: Option<Rgba>,
+    /// An outline inside the edge — see [`pmg_scene::doc::Stroke`].
+    pub stroke: Option<pmg_scene::doc::Stroke>,
+    /// A soft lobe of this node's silhouette, drawn under it.
+    pub shadow: Option<pmg_scene::doc::Shadow>,
     pub radius: f32,
     pub opacity: f32,
     pub clip: bool,
@@ -428,6 +432,8 @@ fn flatten(
         rect,
         base_transform: node.transform,
         fill: node.style.fill,
+        stroke: node.style.stroke,
+        shadow: node.style.shadow,
         radius: node.style.radius,
         opacity: node.style.opacity,
         clip: node.clip,
@@ -644,6 +650,8 @@ mod tests {
                 },
                 base_transform: Transform2D::default(),
                 fill: None,
+                stroke: None,
+                shadow: None,
                 radius: 0.0,
                 opacity: 1.0,
                 clip: false,
@@ -680,6 +688,8 @@ mod tests {
                 },
                 base_transform: Transform2D::default(),
                 fill: None,
+                stroke: None,
+                shadow: None,
                 radius: 0.0,
                 opacity: 1.0,
                 clip: false,

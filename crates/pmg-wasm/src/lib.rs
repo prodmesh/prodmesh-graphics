@@ -602,6 +602,65 @@ mod design_api {
                 .map_err(|e| JsValue::from_str(&e))
         }
 
+        /// Set one spacing edge: kind "margin"|"padding", edge
+        /// top|right|bottom|left, value in design px.
+        #[wasm_bindgen(js_name = setSpacing)]
+        pub fn set_spacing(
+            &self,
+            id: String,
+            kind: String,
+            edge: String,
+            v: f32,
+        ) -> Result<String, JsValue> {
+            design::set_spacing(&self.armed, &id, &kind, &edge, v)
+                .map_err(|e| JsValue::from_str(&e))
+        }
+
+        /// Set an outline: encoded straight RGBA plus width, drawn inside the
+        /// edge so it never grows the node.
+        #[wasm_bindgen(js_name = setStroke)]
+        #[allow(clippy::too_many_arguments)]
+        pub fn set_stroke(
+            &self,
+            id: String,
+            r: f32,
+            g: f32,
+            b: f32,
+            a: f32,
+            width: f32,
+        ) -> Result<String, JsValue> {
+            design::set_stroke(&self.armed, &id, Some(([r, g, b, a], width)))
+                .map_err(|e| JsValue::from_str(&e))
+        }
+
+        #[wasm_bindgen(js_name = clearStroke)]
+        pub fn clear_stroke(&self, id: String) -> Result<String, JsValue> {
+            design::set_stroke(&self.armed, &id, None).map_err(|e| JsValue::from_str(&e))
+        }
+
+        /// Set a drop shadow: colour, offset, and edge softness in design px.
+        #[wasm_bindgen(js_name = setShadow)]
+        #[allow(clippy::too_many_arguments)]
+        pub fn set_shadow(
+            &self,
+            id: String,
+            r: f32,
+            g: f32,
+            b: f32,
+            a: f32,
+            dx: f32,
+            dy: f32,
+            blur: f32,
+        ) -> Result<String, JsValue> {
+            design::set_shadow(&self.armed, &id, Some(([r, g, b, a], dx, dy, blur)))
+                .map_err(|e| JsValue::from_str(&e))
+        }
+
+        #[wasm_bindgen(js_name = clearShadow)]
+        pub fn clear_shadow(&self, id: String) -> Result<String, JsValue> {
+            design::set_shadow(&self.armed, &id, None).map_err(|e| JsValue::from_str(&e))
+        }
+
         /// Clip a node's contents to its bounds — the overflow mask.
         #[wasm_bindgen(js_name = setClip)]
         pub fn set_clip(&self, id: String, clip: bool) -> Result<String, JsValue> {

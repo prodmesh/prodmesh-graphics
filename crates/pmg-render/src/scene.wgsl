@@ -32,6 +32,12 @@ struct Node {
     _pad        : f32,
     // Sub-rectangle of an image to sample: x, y, w, h, normalised.
     uv          : vec4<f32>,
+    // Stroke colour, LINEAR, straight alpha. Alpha 0 means no stroke.
+    stroke_color : vec4<f32>,
+    // Shadow colour, LINEAR, straight alpha. Alpha 0 means no shadow.
+    shadow_color : vec4<f32>,
+    // x: stroke width, y/z: shadow dx/dy, w: shadow blur. Design units.
+    effect       : vec4<f32>,
 };
 
 @group(0) @binding(0) var<uniform> u : Node;
@@ -82,8 +88,18 @@ fn vs_box(@builtin(vertex_index) i : u32) -> VsOut {
         vec2<f32>(0.0, 1.0), vec2<f32>(1.0, 0.0), vec2<f32>(1.0, 1.0),
     );
     let c = corner[i];
-    let grown = u.rect.zw + vec2<f32>(2.0 * AA_OUTSET, 2.0 * AA_OUTSET);
-    let p = u.rect.xy - vec2<f32>(AA_OUTSET, AA_OUTSET) + c * grown;
+    // A shadow reaches past the rect by its offset plus its softness, and the
+    // quad has to cover it or the rasterizer never shades those pixels — the
+    // same truncation lesson AA_OUTSET already encodes, at a larger radius.
+    // Zero for a shadowless node, so its quad (and pixels) are unchanged.
+    let shadow_reach = select(
+        0.0,
+        max(abs(u.effect.y), abs(u.effect.z)) + u.effect.w + AA_OUTSET,
+        u.shadow_color.a > 0.0,
+    );
+    let outset = AA_OUTSET + shadow_reach;
+    let grown = u.rect.zw + vec2<f32>(2.0 * outset, 2.0 * outset);
+    let p = u.rect.xy - vec2<f32>(outset, outset) + c * grown;
 
     var out : VsOut;
     out.pos   = to_clip(p);
@@ -122,10 +138,37 @@ fn fs_box(in : VsOut) -> @location(0) vec4<f32> {
     // smoothstep was NOT the cause. The change is kept because it is the correct
     // coverage function, not because it fixed the stutter. The stutter's root
     // cause is still open — see docs/spikes/S2-text-typography.md.
-    let coverage = clamp(0.5 - d, 0.0, 1.0);
+    // Bands from ONE distance: the stroke occupies [-w, 0] inside the edge,
+    // the fill retreats behind it, and both share the outer AA ramp — so a
+    // stroked box antialiases exactly where an unstroked one does.
+    let w = u.effect.x;
+    let edge_cov = clamp(0.5 - d, 0.0, 1.0);
+    let fill_cov = clamp(0.5 - (d + w), 0.0, 1.0);
+    let stroke_cov = max(edge_cov - fill_cov, 0.0);
 
-    let a = clamp(coverage, 0.0, 1.0) * u.color.a * u.opacity;
-    return vec4<f32>(u.color.rgb * a, a);   // premultiplied
+    // Premultiplied within the node's own plane first. The bands are
+    // disjoint, so addition is composition.
+    let fill_pm = vec4<f32>(u.color.rgb, 1.0) * (u.color.a * fill_cov);
+    let stroke_pm = vec4<f32>(u.stroke_color.rgb, 1.0) * (u.stroke_color.a * stroke_cov);
+    let front = fill_pm + stroke_pm;
+
+    // The shadow: this same silhouette, offset, its coverage ramp stretched
+    // to `blur` design units. A linear ramp rather than a gaussian, for the
+    // same reason the edge uses one — it is deterministic arithmetic on a
+    // distance, where a gaussian invites per-backend texture or derivative
+    // tricks (rule 1: never fwidth). Alpha 0 multiplies the whole term to
+    // exact zeros, so a shadowless box renders exactly as it always has.
+    let so = vec2<f32>(u.effect.y, u.effect.z);
+    let sd = sd_rounded_box(in.local - so, half, r);
+    let shadow_cov = clamp(0.5 - sd / max(u.effect.w, 1.0), 0.0, 1.0);
+    let shadow_pm = vec4<f32>(u.shadow_color.rgb, 1.0) * (u.shadow_color.a * shadow_cov);
+
+    // The shadow is knocked out under the node's own SILHOUETTE — not under
+    // its painted alpha. An unfilled outlined box must not show its shadow
+    // through the hole (the shadow is of the box, not visible through it),
+    // and a translucent fill must not have a dark ghost bleeding up through
+    // it. The same rule CSS box-shadow settled on, for the same reasons.
+    return (front + shadow_pm * (1.0 - edge_cov)) * u.opacity;
 }
 
 // ---------------------------------------------------------------------------

@@ -398,6 +398,41 @@ pub fn retime_key(
     edited_json(doc)
 }
 
+/// Set one spacing edge: kind "margin"|"padding", edge top|right|bottom|left.
+pub fn set_spacing(
+    armed: &Armed,
+    id: &str,
+    kind: &str,
+    edge: &str,
+    v: f32,
+) -> Result<String, String> {
+    let mut doc = armed.doc.clone();
+    interact::apply_set_spacing(&mut doc, id, kind, edge, v)?;
+    edited_json(doc)
+}
+
+/// Set or clear an outline: encoded straight RGBA plus width, inside the edge.
+pub fn set_stroke(
+    armed: &Armed,
+    id: &str,
+    stroke: Option<([f32; 4], f32)>,
+) -> Result<String, String> {
+    let mut doc = armed.doc.clone();
+    interact::apply_set_stroke(&mut doc, id, stroke)?;
+    edited_json(doc)
+}
+
+/// Set or clear a drop shadow: colour, offset, and edge softness.
+pub fn set_shadow(
+    armed: &Armed,
+    id: &str,
+    shadow: Option<([f32; 4], f32, f32, f32)>,
+) -> Result<String, String> {
+    let mut doc = armed.doc.clone();
+    interact::apply_set_shadow(&mut doc, id, shadow)?;
+    edited_json(doc)
+}
+
 /// Clip a node's contents to its bounds — the overflow mask.
 pub fn set_clip(armed: &Armed, id: &str, clip: bool) -> Result<String, String> {
     let mut doc = armed.doc.clone();

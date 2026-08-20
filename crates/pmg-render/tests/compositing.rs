@@ -321,3 +321,64 @@ fn a_clipped_node_survives_rendering_at_output_scale() {
     assert_eq!(alpha(452, th / 2), 0, "outside the scaled clip stays clear");
     assert_eq!(alpha(316, th / 2), 0, "before the scaled clip stays clear");
 }
+
+#[test]
+fn strokes_and_shadows_draw_where_the_format_says() {
+    let Some(g) = gpu() else {
+        eprintln!("no GPU adapter; skipping");
+        return;
+    };
+
+    // An UNFILLED box with a white stroke and an offset black shadow. The
+    // outline must draw (an unfilled box used to be skipped entirely), the
+    // middle must stay transparent, and the shadow must appear past the
+    // bottom-right edge without leaking past the top-left.
+    let mut doc = bar(96.0, [1.0, 0.0, 0.0, 1.0]);
+    let b = &mut doc.root.children[0];
+    b.style.fill = None;
+    b.style.stroke = Some(pmg_scene::doc::Stroke {
+        color: pmg_scene::doc::Rgba {
+            rgba: [1.0, 1.0, 1.0, 1.0],
+        },
+        width: 4.0,
+    });
+    b.style.shadow = Some(pmg_scene::doc::Shadow {
+        color: pmg_scene::doc::Rgba {
+            rgba: [0.0, 0.0, 0.0, 1.0],
+        },
+        dx: 12.0,
+        dy: 0.0,
+        blur: 6.0,
+    });
+    let inst = instance(&doc);
+
+    let fb = pmg_render::draw::LinearFrame::new(&g.device, W, H);
+    let view = fb.view().clone();
+    SceneRenderer::new(&g.device, &g.queue, &inst).render(
+        &g.device,
+        &g.queue,
+        &inst,
+        &[],
+        &view,
+        (W, H),
+    );
+    fb.encode(&g.device, &g.queue);
+    let px = read_back(&g, fb.output());
+
+    // The bar spans x 96..160, full height. Mid-height row:
+    let a = |x: u32| alpha_at(&px, x);
+    assert!(a(98) > 200, "left stroke band draws (got {})", a(98));
+    assert_eq!(a(128), 0, "the unfilled middle stays TRANSPARENT");
+    assert!(a(158) > 200, "right stroke band draws (got {})", a(158));
+    // The shadow: offset +12 with blur 6 reaches past the right edge.
+    assert!(
+        a(166) > 60,
+        "the shadow shows past the right edge (got {})",
+        a(166)
+    );
+    assert_eq!(
+        a(80),
+        0,
+        "nothing leaks past the left edge opposite the offset"
+    );
+}

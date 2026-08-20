@@ -162,7 +162,9 @@ pub fn hit_test(inst: &SceneInstance, frame: &[FrameNode], x: f32, y: f32) -> Op
 
     for i in (0..inst.nodes.len()).rev() {
         let n = &inst.nodes[i];
-        if n.fill.is_none() && matches!(n.content, RenderContent::Box) {
+        // A stroked box draws, so it is clickable; a shadow is not a click
+        // target — it is behind the node, not of it.
+        if n.fill.is_none() && n.stroke.is_none() && matches!(n.content, RenderContent::Box) {
             continue;
         }
         if let Some(c) = clips[i] {
@@ -648,6 +650,30 @@ pub struct NodeFacts {
     /// Present exactly when the node draws a picture.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub image: Option<ImageFacts>,
+    /// Authored spacing, `[top, right, bottom, left]` — margin places the
+    /// node, padding keeps contents off a container's edge.
+    pub margin: [f32; 4],
+    pub padding: [f32; 4],
+    /// The outline, when there is one: encoded straight RGBA plus width.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub stroke: Option<StrokeFacts>,
+    /// The drop shadow, when there is one.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub shadow: Option<ShadowFacts>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct StrokeFacts {
+    pub color: [f32; 4],
+    pub width: f32,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ShadowFacts {
+    pub color: [f32; 4],
+    pub dx: f32,
+    pub dy: f32,
+    pub blur: f32,
 }
 
 /// What the inspector shows for a node drawing a picture.
@@ -721,8 +747,30 @@ pub fn node_facts(doc: &SceneDoc, id: &str) -> Result<NodeFacts, String> {
         clip: n.clip,
         width_mode: mode(&n.layout.width),
         height_mode: mode(&n.layout.height),
+        margin: [
+            n.layout.margin.top,
+            n.layout.margin.right,
+            n.layout.margin.bottom,
+            n.layout.margin.left,
+        ],
+        padding: [
+            n.layout.padding.top,
+            n.layout.padding.right,
+            n.layout.padding.bottom,
+            n.layout.padding.left,
+        ],
         text,
         image,
+        stroke: n.style.stroke.map(|s| StrokeFacts {
+            color: s.color.rgba,
+            width: s.width,
+        }),
+        shadow: n.style.shadow.map(|s| ShadowFacts {
+            color: s.color.rgba,
+            dx: s.dx,
+            dy: s.dy,
+            blur: s.blur,
+        }),
     })
 }
 
@@ -1051,6 +1099,68 @@ pub fn apply_retime_key(
     };
     apply_delete_key(doc, timeline, node_id, prop, from)?;
     apply_set_key(doc, timeline, node_id, prop, to, v, ease)
+}
+
+/// Set one spacing edge numerically: `kind` is "margin" or "padding", `edge`
+/// is top/right/bottom/left. Margins place a node (drag edits them already —
+/// this is the same fact, typed); padding is the room a container keeps
+/// between its edge and its contents, which is how text gets breathing space
+/// inside a band.
+pub fn apply_set_spacing(
+    doc: &mut SceneDoc,
+    id: &str,
+    kind: &str,
+    edge: &str,
+    v: f32,
+) -> Result<(), String> {
+    let n = find_node_mut(&mut doc.root, id).ok_or_else(|| format!("no node {id}"))?;
+    let e = match kind {
+        "margin" => &mut n.layout.margin,
+        "padding" => &mut n.layout.padding,
+        other => return Err(format!("no spacing named {other}")),
+    };
+    match edge {
+        "top" => e.top = v,
+        "right" => e.right = v,
+        "bottom" => e.bottom = v,
+        "left" => e.left = v,
+        other => return Err(format!("no edge named {other}")),
+    }
+    Ok(())
+}
+
+/// Set or clear a node's outline. The stroke draws INSIDE the edge — it never
+/// grows the node past the box layout gave it, so adding one cannot move a
+/// neighbour or change what a clip reveals.
+pub fn apply_set_stroke(
+    doc: &mut SceneDoc,
+    id: &str,
+    stroke: Option<([f32; 4], f32)>,
+) -> Result<(), String> {
+    let n = find_node_mut(&mut doc.root, id).ok_or_else(|| format!("no node {id}"))?;
+    n.style.stroke = stroke.map(|(rgba, width)| pmg_scene::doc::Stroke {
+        color: pmg_scene::doc::Rgba { rgba },
+        width: width.max(0.5),
+    });
+    Ok(())
+}
+
+/// Set or clear a node's drop shadow: a soft lobe of its own silhouette,
+/// offset by `dx, dy`, its edge `blur` design units wide. Drawn under the
+/// node; never part of layout.
+pub fn apply_set_shadow(
+    doc: &mut SceneDoc,
+    id: &str,
+    shadow: Option<([f32; 4], f32, f32, f32)>,
+) -> Result<(), String> {
+    let n = find_node_mut(&mut doc.root, id).ok_or_else(|| format!("no node {id}"))?;
+    n.style.shadow = shadow.map(|(rgba, dx, dy, blur)| pmg_scene::doc::Shadow {
+        color: pmg_scene::doc::Rgba { rgba },
+        dx,
+        dy,
+        blur: blur.max(0.0),
+    });
+    Ok(())
 }
 
 /// Clip a node's contents to its bounds — the mask that makes text "pop out"
@@ -1527,6 +1637,8 @@ mod tests {
             rect: pmg_layout::Rect { x, y, w, h },
             base_transform: Default::default(),
             fill,
+            stroke: None,
+            shadow: None,
             radius,
             opacity: 1.0,
             clip: false,

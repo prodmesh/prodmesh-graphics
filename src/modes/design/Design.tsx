@@ -462,6 +462,33 @@ function SelectedNode({
             </FormGroup>
           </div>
 
+          {/* Spacing, typed. Margin is the same fact a drag edits — where the
+              node sits relative to its flow position; padding is a
+              container's inner breathing room, which is how text stops
+              touching the edge of its band. */}
+          {(['margin', 'padding'] as const).map((kind) =>
+            kind === 'padding' && facts.kind !== 'box' ? null : (
+              <FormGroup key={kind} label={kind === 'margin' ? 'Margin — top right bottom left' : 'Padding — top right bottom left'}>
+                <div className="design-console__edges">
+                  {(['top', 'right', 'bottom', 'left'] as const).map((edge, i) => (
+                    <input
+                      key={`${kind}:${edge}:${facts[kind][i]}`}
+                      type="number"
+                      step={1}
+                      defaultValue={facts[kind][i]}
+                      aria-label={`${kind} ${edge}`}
+                      onBlur={(e) => {
+                        const v = Number(e.target.value)
+                        if (!Number.isFinite(v) || v === facts[kind][i]) return
+                        edit((s) => s.setSpacing(selected, kind, edge, v))
+                      }}
+                    />
+                  ))}
+                </div>
+              </FormGroup>
+            ),
+          )}
+
           {facts.kind === 'box' ? (
             <FormGroup label="Overflow">
               <select
@@ -524,6 +551,135 @@ function SelectedNode({
               Add a fill
             </button>
           )}
+
+          {/* Outline and shadow: box and image nodes, where the rounded-rect
+              silhouette is what they decorate. Text effects are their own
+              rung — glyph outlines need their own rasterization. */}
+          {facts.kind === 'box' || facts.kind === 'image' ? (
+            <>
+              {facts.stroke ? (
+                <>
+                  <div className="design-console__size">
+                    <FormGroup label="Outline">
+                      <input
+                        type="color"
+                        value={rgbToHex(facts.stroke.color)}
+                        aria-label="Outline colour"
+                        onChange={(e) => {
+                          const rgb = hexToRgb(e.target.value)
+                          if (rgb) edit((s) => s.setStroke(selected, rgb[0], rgb[1], rgb[2], facts.stroke!.color[3], facts.stroke!.width))
+                        }}
+                      />
+                    </FormGroup>
+                    <FormGroup label="Outline width">
+                      <input
+                        type="number"
+                        min={0.5}
+                        step={0.5}
+                        key={`sw:${facts.stroke.width}`}
+                        defaultValue={facts.stroke.width}
+                        aria-label="Outline width"
+                        onBlur={(e) => {
+                          const v = Number(e.target.value)
+                          if (Number.isFinite(v) && v > 0 && v !== facts.stroke!.width) {
+                            const c = facts.stroke!.color
+                            edit((s) => s.setStroke(selected, c[0], c[1], c[2], c[3], v))
+                          }
+                        }}
+                      />
+                    </FormGroup>
+                  </div>
+                  <button
+                    type="button"
+                    className="edit-console__addbtn"
+                    onClick={() => edit((s) => s.clearStroke(selected))}
+                  >
+                    Remove the outline
+                  </button>
+                </>
+              ) : (
+                <button
+                  type="button"
+                  className="edit-console__addbtn"
+                  onClick={() => edit((s) => s.setStroke(selected, 1, 1, 1, 1, 2))}
+                >
+                  Add an outline
+                </button>
+              )}
+
+              {facts.shadow ? (
+                <>
+                  <div className="design-console__size">
+                    <FormGroup label="Shadow">
+                      <input
+                        type="color"
+                        value={rgbToHex(facts.shadow.color)}
+                        aria-label="Shadow colour"
+                        onChange={(e) => {
+                          const rgb = hexToRgb(e.target.value)
+                          const sh = facts.shadow!
+                          if (rgb) edit((s) => s.setShadow(selected, rgb[0], rgb[1], rgb[2], sh.color[3], sh.dx, sh.dy, sh.blur))
+                        }}
+                      />
+                    </FormGroup>
+                    <FormGroup label="Shadow opacity %">
+                      <input
+                        type="number"
+                        min={0}
+                        max={100}
+                        key={`sa:${facts.shadow.color[3]}`}
+                        defaultValue={Math.round(facts.shadow.color[3] * 100)}
+                        aria-label="Shadow opacity"
+                        onBlur={(e) => {
+                          const v = Number(e.target.value)
+                          if (!Number.isFinite(v)) return
+                          const sh = facts.shadow!
+                          const c = sh.color
+                          edit((s) => s.setShadow(selected, c[0], c[1], c[2], Math.max(0, Math.min(100, v)) / 100, sh.dx, sh.dy, sh.blur))
+                        }}
+                      />
+                    </FormGroup>
+                  </div>
+                  <div className="design-console__size">
+                    {(['dx', 'dy', 'blur'] as const).map((k) => (
+                      <FormGroup key={k} label={k === 'dx' ? 'Offset X' : k === 'dy' ? 'Offset Y' : 'Softness'}>
+                        <input
+                          type="number"
+                          step={1}
+                          min={k === 'blur' ? 0 : undefined}
+                          key={`${k}:${facts.shadow![k]}`}
+                          defaultValue={facts.shadow![k]}
+                          aria-label={`Shadow ${k}`}
+                          onBlur={(e) => {
+                            const v = Number(e.target.value)
+                            if (!Number.isFinite(v) || v === facts.shadow![k]) return
+                            const sh = { ...facts.shadow!, [k]: v }
+                            const c = sh.color
+                            edit((s) => s.setShadow(selected, c[0], c[1], c[2], c[3], sh.dx, sh.dy, sh.blur))
+                          }}
+                        />
+                      </FormGroup>
+                    ))}
+                  </div>
+                  <button
+                    type="button"
+                    className="edit-console__addbtn"
+                    onClick={() => edit((s) => s.clearShadow(selected))}
+                  >
+                    Remove the shadow
+                  </button>
+                </>
+              ) : (
+                <button
+                  type="button"
+                  className="edit-console__addbtn"
+                  onClick={() => edit((s) => s.setShadow(selected, 0, 0, 0, 0.6, 6, 6, 12))}
+                >
+                  Add a shadow
+                </button>
+              )}
+            </>
+          ) : null}
 
           <div className="design-console__size">
             <FormGroup label="Corner radius">

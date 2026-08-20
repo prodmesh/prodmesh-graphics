@@ -399,11 +399,38 @@ pub struct Style {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub fill: Option<Rgba>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub stroke: Option<Rgba>,
+    pub stroke: Option<Stroke>,
     #[serde(default)]
     pub radius: f32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub shadow: Option<Shadow>,
     #[serde(default = "one")]
     pub opacity: f32,
+}
+
+/// An outline drawn INSIDE the node's edge.
+///
+/// Inside, not centred or outside, deliberately: a stroke must never grow a
+/// node past the box layout gave it — an outline that widens a lower third
+/// changes what the clip reveals and where the safe margins fall, silently.
+/// The spec reserved this shape in §3; the width is in design units.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct Stroke {
+    pub color: Rgba,
+    pub width: f32,
+}
+
+/// A drop shadow behind the node's shape.
+///
+/// `blur` is the softness of the edge in design units — 0 is a hard-edged
+/// copy. The shadow is a lobe of the node's own rounded-rect silhouette,
+/// offset by `dx, dy`; it draws UNDER the node and never affects layout.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct Shadow {
+    pub color: Rgba,
+    pub dx: f32,
+    pub dy: f32,
+    pub blur: f32,
 }
 
 /// Hand-written, NOT derived.
@@ -423,6 +450,7 @@ impl Default for Style {
             fill: None,
             stroke: None,
             radius: 0.0,
+            shadow: None,
             opacity: 1.0,
         }
     }

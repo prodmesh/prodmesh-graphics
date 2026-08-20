@@ -370,6 +370,10 @@
   cursor: pointer;
 }
 
+/* Four edges in one row: top right bottom left, CSS order. */
+.design-console__edges { display: flex; gap: 4px; }
+.design-console__edges input { min-width: 0; flex: 1; }
+
 /* An axis row: the number and its sizing mode side by side. */
 .design-console__axis { display: flex; gap: 6px; }
 .design-console__axis input { min-width: 0; flex: 1; }
