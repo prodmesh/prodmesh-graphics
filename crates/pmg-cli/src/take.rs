@@ -448,7 +448,7 @@ pub fn main(args: &[String]) -> Result<()> {
                     // Landed. Draw the new instance alone — a finished tween
                     // must cost exactly what no tween costs.
                     let f = pmg_render::scene::apply_tracks(to, &values);
-                    r2.render(&device, &queue, to, &f, &view);
+                    r2.render(&device, &queue, to, &f, &view, (w, h));
                 } else {
                     let frames = pmg_render::tween_frames(&inst, to, tw, &values);
                     r2.render_with(
@@ -457,6 +457,7 @@ pub fn main(args: &[String]) -> Result<()> {
                         to,
                         &frames.to,
                         &view,
+                        (w, h),
                         pmg_render::Load::Clear,
                     );
                     renderer.render_with(
@@ -465,13 +466,14 @@ pub fn main(args: &[String]) -> Result<()> {
                         &inst,
                         &frames.from,
                         &view,
+                        (w, h),
                         pmg_render::Load::Over,
                     );
                 }
             }
             _ => {
                 let frame_nodes = pmg_render::scene::apply_tracks(&inst, &values);
-                renderer.render(&device, &queue, &inst, &frame_nodes, &view);
+                renderer.render(&device, &queue, &inst, &frame_nodes, &view, (w, h));
             }
         }
 

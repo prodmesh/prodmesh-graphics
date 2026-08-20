@@ -174,8 +174,8 @@ fn a_second_layer_draws_over_the_first_without_erasing_it() {
     let ur = SceneRenderer::new(&g.device, &g.queue, &ui);
 
     // Bottom layer clears; the one above composites over it.
-    lr.render_with(&g.device, &g.queue, &li, &[], &view, Load::Clear);
-    ur.render_with(&g.device, &g.queue, &ui, &[], &view, Load::Over);
+    lr.render_with(&g.device, &g.queue, &li, &[], &view, (W, H), Load::Clear);
+    ur.render_with(&g.device, &g.queue, &ui, &[], &view, (W, H), Load::Over);
 
     fb.encode(&g.device, &g.queue);
     let px = read_back(&g, fb.output());
@@ -208,8 +208,22 @@ fn drawing_both_with_clear_loses_the_lower_layer() {
     // Composites in linear and encodes on readback, the same as the node.
     let fb = pmg_render::draw::LinearFrame::new(&g.device, W, H);
     let view = fb.view().clone();
-    SceneRenderer::new(&g.device, &g.queue, &li).render(&g.device, &g.queue, &li, &[], &view);
-    SceneRenderer::new(&g.device, &g.queue, &ui).render(&g.device, &g.queue, &ui, &[], &view);
+    SceneRenderer::new(&g.device, &g.queue, &li).render(
+        &g.device,
+        &g.queue,
+        &li,
+        &[],
+        &view,
+        (W, H),
+    );
+    SceneRenderer::new(&g.device, &g.queue, &ui).render(
+        &g.device,
+        &g.queue,
+        &ui,
+        &[],
+        &view,
+        (W, H),
+    );
 
     fb.encode(&g.device, &g.queue);
     let px = read_back(&g, fb.output());
@@ -219,4 +233,91 @@ fn drawing_both_with_clear_loses_the_lower_layer() {
         "the lower layer is gone — this is the bug"
     );
     assert_eq!(alpha_at(&px, 192), 255);
+}
+
+#[test]
+fn a_clipped_node_survives_rendering_at_output_scale() {
+    // The on-air bug this pins: a 720p design on a 1080p output scales its
+    // GEOMETRY implicitly (the vertex shader divides by the canvas), but the
+    // scissor is set in pixels. Left in design units, a clipped band in the
+    // lower half of the design drew entirely outside its own scissor and
+    // vanished from the output — while the designer, rendering 1:1, showed it
+    // perfectly. Same renderer, two answers: the exact disagreement ADR 0001
+    // exists to prevent.
+    let Some(g) = gpu() else {
+        eprintln!("no GPU adapter; skipping");
+        return;
+    };
+
+    // A W×H design whose bar sits at x=160 with CLIP on the bar's parent.
+    let mut doc = bar(160.0, [1.0, 0.0, 0.0, 1.0]);
+    doc.root.children[0].clip = true;
+    let inst = instance(&doc);
+
+    // Rendered onto a target TWICE the design's size.
+    let (tw, th) = (W * 2, H * 2);
+    let fb = pmg_render::draw::LinearFrame::new(&g.device, tw, th);
+    let view = fb.view().clone();
+    SceneRenderer::new(&g.device, &g.queue, &inst).render(
+        &g.device,
+        &g.queue,
+        &inst,
+        &[],
+        &view,
+        (tw, th),
+    );
+    fb.encode(&g.device, &g.queue);
+
+    // Read the double-size target directly.
+    let bpr = tw * 4;
+    let buf = g.device.create_buffer(&wgpu::BufferDescriptor {
+        label: None,
+        size: (bpr * th) as u64,
+        usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+        mapped_at_creation: false,
+    });
+    let mut enc = g.device.create_command_encoder(&Default::default());
+    enc.copy_texture_to_buffer(
+        wgpu::TexelCopyTextureInfo {
+            texture: fb.output(),
+            mip_level: 0,
+            origin: wgpu::Origin3d::ZERO,
+            aspect: wgpu::TextureAspect::All,
+        },
+        wgpu::TexelCopyBufferInfo {
+            buffer: &buf,
+            layout: wgpu::TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some(bpr),
+                rows_per_image: Some(th),
+            },
+        },
+        wgpu::Extent3d {
+            width: tw,
+            height: th,
+            depth_or_array_layers: 1,
+        },
+    );
+    g.queue.submit(Some(enc.finish()));
+    let slice = buf.slice(..);
+    let (tx, rx) = std::sync::mpsc::channel();
+    slice.map_async(wgpu::MapMode::Read, move |r| {
+        let _ = tx.send(r);
+    });
+    g.device.poll(wgpu::PollType::wait_indefinitely()).ok();
+    rx.recv().unwrap().unwrap();
+    let px = slice.get_mapped_range().unwrap().to_vec();
+    buf.unmap();
+
+    let alpha = |x: u32, y: u32| px[((y * tw + x) * 4 + 3) as usize];
+    // The bar (design x 160..224) lands at pixels 320..448 on the 2× target.
+    assert_eq!(
+        alpha(384, th / 2),
+        255,
+        "the clipped bar must survive at output scale"
+    );
+    // And the clip still CLIPS: just past the bar's scaled right edge is
+    // transparent, so the fix did not simply stop scissoring.
+    assert_eq!(alpha(452, th / 2), 0, "outside the scaled clip stays clear");
+    assert_eq!(alpha(316, th / 2), 0, "before the scaled clip stays clear");
 }

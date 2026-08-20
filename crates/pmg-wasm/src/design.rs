@@ -637,7 +637,14 @@ impl Canvas {
         // see what will actually key.
         self.frame.clear(&self.device, &self.queue);
         let nodes = pmg_render::scene::apply_tracks(inst, values);
-        renderer.render(&self.device, &self.queue, inst, &nodes, self.frame.view());
+        renderer.render(
+            &self.device,
+            &self.queue,
+            inst,
+            &nodes,
+            self.frame.view(),
+            (self.width, self.height),
+        );
     }
 
     pub fn begin_readback(&self) {

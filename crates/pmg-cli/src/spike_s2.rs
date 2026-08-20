@@ -183,7 +183,7 @@ fn render_at(
     // node does — including the linear composite and the encode. Measuring a
     // different path would measure a different renderer.
     let fb = pmg_render::draw::LinearFrame::new(&gpu.device, w, h);
-    renderer.render(&gpu.device, &gpu.queue, inst, &frame, fb.view());
+    renderer.render(&gpu.device, &gpu.queue, inst, &frame, fb.view(), (w, h));
     fb.encode(&gpu.device, &gpu.queue);
 
     let bpr = w * 4;

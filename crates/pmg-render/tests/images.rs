@@ -219,7 +219,7 @@ fn render(
     let fb = pmg_render::draw::LinearFrame::new(device, 64, 64);
     let view = fb.view().clone();
     let r = pmg_render::SceneRenderer::new(device, queue, inst);
-    r.render(device, queue, inst, &[], &view);
+    r.render(device, queue, inst, &[], &view, (64, 64));
     fb.encode(device, queue);
 
     let buf = device.create_buffer(&wgpu::BufferDescriptor {

@@ -200,7 +200,15 @@ pub fn draw_frames(
     target: &Target,
     load: pmg_render::Load,
 ) {
-    renderer.render_with(&gpu.device, &gpu.queue, inst, frames, target.view(), load);
+    renderer.render_with(
+        &gpu.device,
+        &gpu.queue,
+        inst,
+        frames,
+        target.view(),
+        (target.width, target.height),
+        load,
+    );
 }
 
 /// A renderer per occupied layer, kept across frames.

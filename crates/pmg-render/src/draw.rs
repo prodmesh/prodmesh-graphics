@@ -638,8 +638,9 @@ impl SceneRenderer {
         inst: &SceneInstance,
         frame: &[FrameNode],
         target: &wgpu::TextureView,
+        target_size: (u32, u32),
     ) {
-        self.render_with(device, queue, inst, frame, target, Load::Clear)
+        self.render_with(device, queue, inst, frame, target, target_size, Load::Clear)
     }
 
     /// Draw one frame, choosing whether to clear the target or composite over
@@ -650,6 +651,13 @@ impl SceneRenderer {
     /// did until layers existed — means the last layer drawn is the only one
     /// visible, and the symptom is a Bug that silently erases the Lower Third
     /// under it rather than any kind of error.
+    /// `target_size` is the render target's size in PIXELS, and it is a
+    /// required argument because assuming it equals the canvas is exactly the
+    /// bug that erased clipped nodes on air: geometry scales to the target
+    /// implicitly through the NDC mapping, but a scissor rect is set in raw
+    /// pixels — left in design units against a 1080p target, a clipped band
+    /// authored at 720p drew entirely outside its own scissor and vanished,
+    /// while the designer (rendering 1:1) showed it perfectly.
     #[allow(clippy::too_many_arguments)]
     pub fn render_with(
         &self,
@@ -658,6 +666,7 @@ impl SceneRenderer {
         inst: &SceneInstance,
         frame: &[FrameNode],
         target: &wgpu::TextureView,
+        target_size: (u32, u32),
         load: Load,
     ) {
         let align = device.limits().min_uniform_buffer_offset_alignment as u64;
@@ -840,7 +849,14 @@ impl SceneRenderer {
             pass.set_vertex_buffer(0, vbuf.slice(..));
 
             // Painter's algorithm, tree order.
-            let (cw, ch) = (inst.canvas_w, inst.canvas_h);
+            let (tw, th) = target_size;
+            // Clip rects are computed in DESIGN units; the scissor is set in
+            // target PIXELS. The geometry crosses that boundary implicitly in
+            // the vertex shader (to_clip divides by the canvas), so the
+            // scissor must cross it explicitly here or the two disagree the
+            // moment the output is not the design's size.
+            let sx = tw as f32 / inst.canvas_w.max(1) as f32;
+            let sy = th as f32 / inst.canvas_h.max(1) as f32;
             let mut scissor_set = false;
             for (i, n) in inst.nodes.iter().enumerate() {
                 let offset = (stride as usize * i) as u32;
@@ -851,10 +867,10 @@ impl SceneRenderer {
                         // rect has collapsed — a zero-width scissor is a
                         // validation error, and a box mid-morph can genuinely
                         // be zero wide.
-                        let x = x0.max(0.0).min(cw as f32) as u32;
-                        let y = y0.max(0.0).min(ch as f32) as u32;
-                        let w = (x1.min(cw as f32) - x0.max(0.0)).max(0.0) as u32;
-                        let h = (y1.min(ch as f32) - y0.max(0.0)).max(0.0) as u32;
+                        let x = (x0 * sx).max(0.0).min(tw as f32) as u32;
+                        let y = (y0 * sy).max(0.0).min(th as f32) as u32;
+                        let w = ((x1 * sx).min(tw as f32) - (x0 * sx).max(0.0)).max(0.0) as u32;
+                        let h = ((y1 * sy).min(th as f32) - (y0 * sy).max(0.0)).max(0.0) as u32;
                         if w == 0 || h == 0 {
                             continue;
                         }
@@ -862,7 +878,7 @@ impl SceneRenderer {
                         scissor_set = true;
                     }
                     None if scissor_set => {
-                        pass.set_scissor_rect(0, 0, cw, ch);
+                        pass.set_scissor_rect(0, 0, tw, th);
                         scissor_set = false;
                     }
                     None => {}
