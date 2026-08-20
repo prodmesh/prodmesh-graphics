@@ -53,6 +53,53 @@ pub struct SceneDoc {
     pub ext: Unknown,
 }
 
+impl SceneDoc {
+    /// The document a designer starts from: a canvas-sized transparent root
+    /// and nothing else. No fonts (a boxes-only document arms without any),
+    /// no fields, no timelines — each is added by the editor that introduces
+    /// the thing needing it.
+    ///
+    /// This lives HERE so the browser never authors scene JSON by hand — a
+    /// second implementation of the format is the thing ADR 0004 exists to
+    /// prevent, and "just an empty one" is how it would start.
+    pub fn blank(id: &str, name: &str, width: u32, height: u32) -> SceneDoc {
+        SceneDoc {
+            format: "pmg.scene".into(),
+            format_version: FormatVersion { major: 1, minor: 0 },
+            min_reader: 1,
+            id: id.to_string(),
+            name: name.to_string(),
+            canvas: Canvas {
+                width,
+                height,
+                safe: None,
+            },
+            fields: vec![],
+            fonts: vec![],
+            assets: vec![],
+            root: Node {
+                id: "root".into(),
+                display_name: Some("Root".into()),
+                kind: NodeKind::Box,
+                layout: Layout {
+                    width: Dimension::Px(width as f32),
+                    height: Dimension::Px(height as f32),
+                    ..Default::default()
+                },
+                transform: Transform2D::default(),
+                style: Style::default(),
+                clip: false,
+                visible_if: None,
+                content: None,
+                children: vec![],
+                unknown: Default::default(),
+            },
+            timelines: vec![],
+            ext: Default::default(),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct FormatVersion {
     pub major: u32,

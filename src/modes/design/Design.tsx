@@ -50,6 +50,7 @@ import {
   Tag,
 } from '../../components/console'
 import {
+  blankDoc,
   compileTemplate,
   fontFacts,
   useDesignCanvas,
@@ -59,6 +60,7 @@ import {
   type Handles,
   type NodeFacts,
 } from './useDesign'
+import { newId } from '../../lib/ids'
 import { MediaBrowser } from './MediaBrowser'
 import { useDocHistory } from './useHistory'
 import { LayerTree } from './LayerTree'
@@ -892,6 +894,93 @@ function FieldsEditor({
  */
 const shortRev = (rev: string) => rev.replace(/^[a-z0-9]+:/, '').slice(0, 8)
 
+/**
+ * Start a template from nothing: a name and a canvas size, and the format
+ * crate builds the document. The size presets are the outputs this system
+ * actually drives — an LED wall is rarely 1080p, which is why this is not a
+ * hidden default.
+ */
+const CANVAS_PRESETS: { label: string; w: number; h: number }[] = [
+  { label: '1920 × 1080', w: 1920, h: 1080 },
+  { label: '1280 × 720', w: 1280, h: 720 },
+  { label: '3840 × 2160', w: 3840, h: 2160 },
+]
+
+function NewTemplate({ onCreate }: { onCreate: (name: string, w: number, h: number) => void }) {
+  const [open, setOpen] = useState(false)
+  const [name, setName] = useState('')
+  const [preset, setPreset] = useState(0)
+  const [custom, setCustom] = useState<{ w: number; h: number }>({ w: 1920, h: 1080 })
+  const isCustom = preset === CANVAS_PRESETS.length
+
+  const create = () => {
+    const size = isCustom ? custom : (CANVAS_PRESETS[preset] ?? CANVAS_PRESETS[0]!)
+    if (!(size.w >= 1 && size.h >= 1)) return
+    onCreate(name.trim() || 'Untitled', Math.round(size.w), Math.round(size.h))
+    setOpen(false)
+    setName('')
+  }
+
+  if (!open) {
+    return (
+      <button type="button" className="design-console__file" onClick={() => setOpen(true)}>
+        <Plus size={14} aria-hidden />
+        <span>New template…</span>
+      </button>
+    )
+  }
+  return (
+    <div className="design-console__new">
+      <input
+        autoFocus
+        placeholder="Name"
+        aria-label="New template name"
+        value={name}
+        onChange={(e) => setName(e.target.value)}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter') create()
+          if (e.key === 'Escape') setOpen(false)
+        }}
+      />
+      <select
+        aria-label="Canvas size"
+        value={preset}
+        onChange={(e) => setPreset(Number(e.target.value))}
+      >
+        {CANVAS_PRESETS.map((p, i) => (
+          <option key={p.label} value={i}>{p.label}</option>
+        ))}
+        <option value={CANVAS_PRESETS.length}>Custom…</option>
+      </select>
+      {isCustom ? (
+        <div className="design-console__new-size">
+          <input
+            type="number"
+            min={1}
+            aria-label="Canvas width"
+            value={custom.w}
+            onChange={(e) => setCustom((c) => ({ ...c, w: Number(e.target.value) }))}
+          />
+          <span>×</span>
+          <input
+            type="number"
+            min={1}
+            aria-label="Canvas height"
+            value={custom.h}
+            onChange={(e) => setCustom((c) => ({ ...c, h: Number(e.target.value) }))}
+          />
+        </div>
+      ) : null}
+      <div className="design-console__new-actions">
+        {/* Secondary, not primary: the console's red means ON AIR, and this
+            makes a document, not a broadcast. */}
+        <Button variant="secondary" onClick={create}>Create</Button>
+        <Button variant="quiet" onClick={() => setOpen(false)}>Cancel</Button>
+      </div>
+    </div>
+  )
+}
+
 export function Design() {
   const { data: templates } = useQuery<{ templates: TemplateSummary[] }>(keys.templates())
   const { data: assets } = useQuery<{ assets: Asset[] }>(keys.assets())
@@ -1156,6 +1245,23 @@ export function Design() {
     }
   }, [load])
 
+  // A blank document, built by the format crate through wasm — starting from
+  // nothing must not require keeping a blank.json on disk somewhere. It exists
+  // only in this session until the first publish, which is what creates it on
+  // the server.
+  const onNewTemplate = useCallback(async (name: string, width: number, height: number) => {
+    if (!confirmLeave()) return
+    setPublishState(null)
+    try {
+      load(await blankDoc(newId(), name, width, height))
+      setSelected(null)
+      setSelNode(null)
+      setData({})
+    } catch (e) {
+      setPublishState(e instanceof Error ? e.message : String(e))
+    }
+  }, [load])
+
   const publish = useCallback(async () => {
     if (!doc) return
     setPublishState('Publishing…')
@@ -1280,6 +1386,7 @@ export function Design() {
         <Panel width="var(--pm-rail-width-edit)" label="Template browser">
           <PanelHeader title="Template Browser" />
           <PanelBody>
+            <NewTemplate onCreate={onNewTemplate} />
             <label className="design-console__file">
               <FileUp size={14} aria-hidden />
               <span>Open a template file…</span>

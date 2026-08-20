@@ -116,6 +116,21 @@ export async function compileTemplate(doc: unknown): Promise<Compiled> {
   return wasm.compile_template(JSON.stringify(doc))
 }
 
+/**
+ * The document a "New template" starts from: a canvas-sized transparent root
+ * and nothing else. Built by the format crate through wasm — the browser never
+ * authors scene JSON, not even an empty one (ADR 0004).
+ */
+export async function blankDoc(
+  id: string,
+  name: string,
+  width: number,
+  height: number,
+): Promise<Record<string, unknown>> {
+  const wasm = await loadWasm()
+  return JSON.parse(wasm.blankDoc(id, name, width, height)) as Record<string, unknown>
+}
+
 /** What one uploaded face is: its content hash, and the name and weight the
  *  file itself states. What a font picker offers must be the file's own name,
  *  not a string somebody typed near it. */

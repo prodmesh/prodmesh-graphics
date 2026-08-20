@@ -235,6 +235,15 @@ mod design_api {
         }
     }
 
+    /// The document a "New template" starts from, as JSON. Built by the format
+    /// crate, never by the browser — an empty document authored in JavaScript
+    /// would be the start of the second implementation ADR 0004 forbids.
+    #[wasm_bindgen(js_name = blankDoc)]
+    pub fn blank_doc(id: String, name: String, width: u32, height: u32) -> String {
+        serde_json::to_string(&pmg_scene::doc::SceneDoc::blank(&id, &name, width, height))
+            .expect("a blank document serializes")
+    }
+
     #[wasm_bindgen]
     pub fn compile_template(doc_json: &str) -> Result<JsValue, JsValue> {
         let c = design::compile(doc_json).map_err(|e| JsValue::from_str(&e))?;

@@ -278,3 +278,15 @@ fn every_node_in_the_fixture_is_visible_by_default() {
         );
     });
 }
+
+#[test]
+fn a_blank_document_compiles_and_declares_nothing() {
+    // The designer's "New template" starts here, so a blank that fails to
+    // publish would be a door that opens onto a wall.
+    let doc = SceneDoc::blank("01TESTBLANKDOCUMENT000001", "Untitled", 1920, 1080);
+    let (_, manifest) = validate::compile(&doc).expect("a blank document publishes");
+    assert!(manifest.fields.is_empty());
+    assert!(manifest.assets.is_empty());
+    assert!(manifest.timelines.is_empty());
+    assert!(manifest.warnings.is_empty(), "{:?}", manifest.warnings);
+}

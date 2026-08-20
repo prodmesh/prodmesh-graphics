@@ -492,6 +492,45 @@
   opacity: 0;
   cursor: pointer;
 }
+/* The collapsed "New template…" reuses the file-row look; as a <button> it
+   needs its border stripped and the row font restated. */
+button.design-console__file {
+  border: 0;
+  width: 100%;
+  font-family: var(--pm-font-ui);
+  text-align: left;
+}
+
+/* ---- New template form ------------------------------------------------- */
+.design-console__new {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px;
+  border-radius: var(--pm-radius-4);
+  background: var(--pm-surface-raised);
+}
+.design-console__new input,
+.design-console__new select {
+  height: 26px;
+  border: 0;
+  outline: none;
+  border-radius: var(--pm-radius-4);
+  background: var(--pm-surface-field);
+  color: var(--pm-text-primary);
+  font-family: var(--pm-font-ui);
+  font-size: 12px;
+  padding: 0 8px;
+}
+.design-console__new-size {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  color: var(--pm-text-muted);
+}
+.design-console__new-size input { width: 72px; }
+.design-console__new-actions { display: flex; gap: 6px; }
+.design-console__new-actions > * { flex: 1; }
 
 .design-console__status {
   margin: 0;
