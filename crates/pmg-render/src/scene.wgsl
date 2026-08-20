@@ -38,6 +38,13 @@ struct Node {
     shadow_color : vec4<f32>,
     // x: stroke width, y/z: shadow dx/dy, w: shadow blur. Design units.
     effect       : vec4<f32>,
+    // Gradient stops, LINEAR straight alpha; unused slots repeat the last.
+    grad         : array<vec4<f32>, 4>,
+    // Stop offsets in 0..1, unused slots repeating the last.
+    grad_at      : vec4<f32>,
+    // x, y: unit direction (y-down). z: stop count; 0 means no gradient and
+    // the fill path is bit-for-bit what it was before gradients existed.
+    grad_dir     : vec4<f32>,
 };
 
 @group(0) @binding(0) var<uniform> u : Node;
@@ -146,9 +153,31 @@ fn fs_box(in : VsOut) -> @location(0) vec4<f32> {
     let fill_cov = clamp(0.5 - (d + w), 0.0, 1.0);
     let stroke_cov = max(edge_cov - fill_cov, 0.0);
 
+    // The fill colour: flat, or a linear gradient across the rect (§3.5).
+    // The gradient line runs through the rect's centre along grad_dir; its
+    // length is the rect's projection onto that line, which is how CSS sizes
+    // one — so 90° spans exactly left edge to right edge. Stops interpolate
+    // in LINEAR light (mixing encoded values grows grey through the middle),
+    // walked with sequential mixes — total for any ascending stop list.
+    var fill_rgba = u.color;
+    if (u.grad_dir.z >= 2.0) {
+        let span = abs(u.rect.z * u.grad_dir.x) + abs(u.rect.w * u.grad_dir.y);
+        let t = clamp(0.5 + dot(in.local, u.grad_dir.xy) / max(span, 1e-6), 0.0, 1.0);
+        var c = u.grad[0];
+        for (var i = 1u; i < 4u; i++) {
+            if (f32(i) < u.grad_dir.z) {
+                let prev = u.grad_at[i - 1u];
+                let next = u.grad_at[i];
+                let f = clamp((t - prev) / max(next - prev, 1e-6), 0.0, 1.0);
+                c = mix(c, u.grad[i], f);
+            }
+        }
+        fill_rgba = c;
+    }
+
     // Premultiplied within the node's own plane first. The bands are
     // disjoint, so addition is composition.
-    let fill_pm = vec4<f32>(u.color.rgb, 1.0) * (u.color.a * fill_cov);
+    let fill_pm = vec4<f32>(fill_rgba.rgb, 1.0) * (fill_rgba.a * fill_cov);
     let stroke_pm = vec4<f32>(u.stroke_color.rgb, 1.0) * (u.stroke_color.a * stroke_cov);
     let front = fill_pm + stroke_pm;
 

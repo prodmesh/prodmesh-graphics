@@ -65,7 +65,7 @@ impl SceneDoc {
     pub fn blank(id: &str, name: &str, width: u32, height: u32) -> SceneDoc {
         SceneDoc {
             format: "pmg.scene".into(),
-            format_version: FormatVersion { major: 1, minor: 0 },
+            format_version: crate::migrate::CURRENT,
             min_reader: 1,
             id: id.to_string(),
             name: name.to_string(),
@@ -445,6 +445,13 @@ pub struct Rgba {
 pub struct Style {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub fill: Option<Rgba>,
+    /// A linear gradient fill, drawn INSTEAD of `fill` by readers that know it
+    /// (format 1.1). `fill` stays beside it as the flat fallback a 1.0 reader
+    /// renders — serde ignores keys it does not know, so an old node shows the
+    /// first stop's colour rather than nothing. Writers keep `fill` equal to
+    /// the first stop for exactly that reason.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub gradient: Option<Gradient>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub stroke: Option<Stroke>,
     #[serde(default)]
@@ -453,6 +460,25 @@ pub struct Style {
     pub shadow: Option<Shadow>,
     #[serde(default = "one")]
     pub opacity: f32,
+}
+
+/// A linear gradient across the node's rect.
+///
+/// The angle is CSS's: 0° points up, degrees turn clockwise — 90° is
+/// left-to-right, 180° top-to-bottom. Designers already know this dial.
+/// Interpolation is in LINEAR light, like all compositing here; interpolating
+/// encoded values is how gradients grow grey bands through the middle.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Gradient {
+    pub angle_deg: f32,
+    /// 2 to 4 stops, `at` ascending in 0..=1. The compiler enforces it.
+    pub stops: Vec<GradientStop>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct GradientStop {
+    pub color: Rgba,
+    pub at: f32,
 }
 
 /// An outline drawn INSIDE the node's edge.
@@ -495,6 +521,7 @@ impl Default for Style {
     fn default() -> Self {
         Self {
             fill: None,
+            gradient: None,
             stroke: None,
             radius: 0.0,
             shadow: None,

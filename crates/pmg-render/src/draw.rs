@@ -35,9 +35,17 @@ struct NodeUniform {
     shadow_color: [f32; 4],
     /// x: stroke width, y/z: shadow dx/dy, w: shadow blur — design units all.
     effect: [f32; 4],
+    /// Gradient stop colours, LINEAR, straight alpha. Unused slots repeat the
+    /// last stop, so the shader's fixed 4-stop walk is total.
+    grad: [[f32; 4]; 4],
+    /// Stop offsets in 0..=1, unused slots repeating the last.
+    grad_at: [f32; 4],
+    /// x, y: unit gradient direction (y-down). z: stop count — 0 means no
+    /// gradient, and the fill path is bit-for-bit what it was without one.
+    grad_dir: [f32; 4],
 }
 
-const UNIFORM_SIZE: u64 = 144;
+const UNIFORM_SIZE: u64 = 240;
 const _: () = assert!(std::mem::size_of::<NodeUniform>() as u64 == UNIFORM_SIZE);
 
 fn uniform_bytes(u: &NodeUniform) -> [u8; UNIFORM_SIZE as usize] {
@@ -79,11 +87,75 @@ fn uniform_bytes(u: &NodeUniform) -> [u8; UNIFORM_SIZE as usize] {
         u.effect[1],
         u.effect[2],
         u.effect[3],
+        u.grad[0][0],
+        u.grad[0][1],
+        u.grad[0][2],
+        u.grad[0][3],
+        u.grad[1][0],
+        u.grad[1][1],
+        u.grad[1][2],
+        u.grad[1][3],
+        u.grad[2][0],
+        u.grad[2][1],
+        u.grad[2][2],
+        u.grad[2][3],
+        u.grad[3][0],
+        u.grad[3][1],
+        u.grad[3][2],
+        u.grad[3][3],
+        u.grad_at[0],
+        u.grad_at[1],
+        u.grad_at[2],
+        u.grad_at[3],
+        u.grad_dir[0],
+        u.grad_dir[1],
+        u.grad_dir[2],
+        u.grad_dir[3],
     ];
     for (i, v) in f.iter().enumerate() {
         buf[i * 4..i * 4 + 4].copy_from_slice(&v.to_le_bytes());
     }
     buf
+}
+
+/// Stop colours for the uniform, unused slots repeating the last stop so the
+/// shader's fixed 4-stop walk needs no bounds logic.
+fn gradient_stops(g: Option<&pmg_scene::doc::Gradient>) -> [[f32; 4]; 4] {
+    let mut out = [[0.0; 4]; 4];
+    if let Some(g) = g {
+        for i in 0..4 {
+            let s = &g.stops[i.min(g.stops.len() - 1)];
+            out[i] = crate::color_to_linear(s.color.rgba);
+        }
+    }
+    out
+}
+
+fn gradient_offsets(g: Option<&pmg_scene::doc::Gradient>) -> [f32; 4] {
+    let mut out = [0.0; 4];
+    if let Some(g) = g {
+        for i in 0..4 {
+            out[i] = g.stops[i.min(g.stops.len() - 1)].at;
+        }
+    }
+    out
+}
+
+/// The gradient's unit direction from its CSS angle — 0° up, clockwise —
+/// in y-down design space, plus the stop count the shader gates on.
+///
+/// sin/cos go through the platform's libm, whose last bit is NOT specified —
+/// exactly the class of divergence rule 1 banishes from shaders, arriving via
+/// the CPU instead. Snapping the result to a 2^-12 grid erases it: both
+/// platforms land within an ulp of the true value, and an ulp (~6e-8) cannot
+/// cross a 2.4e-4 grid step except for angles engineered to sit on a boundary.
+/// The grid costs at most 0.014° of direction, invisible at any canvas size.
+fn gradient_dir(g: Option<&pmg_scene::doc::Gradient>) -> [f32; 4] {
+    let Some(g) = g else { return [0.0; 4] };
+    let rad = (g.angle_deg as f64).to_radians();
+    let snap = |v: f64| ((v * 4096.0).round() / 4096.0) as f32;
+    // CSS 0° points up; y grows down here, so up is -cos.
+    [snap(rad.sin()), snap(-rad.cos()), g.stops.len() as f32, 0.0]
 }
 
 // The affine build, the world composition, and the clip rects live in
@@ -789,6 +861,9 @@ impl SceneRenderer {
                     n.shadow.map(|s| s.dy).unwrap_or(0.0),
                     n.shadow.map(|s| s.blur.max(0.0)).unwrap_or(0.0),
                 ],
+                grad: gradient_stops(n.gradient.as_ref()),
+                grad_at: gradient_offsets(n.gradient.as_ref()),
+                grad_dir: gradient_dir(n.gradient.as_ref()),
             };
             let off = (stride as usize) * i;
             ubytes[off..off + UNIFORM_SIZE as usize].copy_from_slice(&uniform_bytes(&u));
@@ -963,7 +1038,11 @@ impl SceneRenderer {
                         // A box with no fill, stroke, or shadow is a pure
                         // layout container; drawing it would paint an opaque
                         // white rectangle over everything behind it.
-                        if n.fill.is_some() || n.stroke.is_some() || n.shadow.is_some() {
+                        if n.fill.is_some()
+                            || n.gradient.is_some()
+                            || n.stroke.is_some()
+                            || n.shadow.is_some()
+                        {
                             pass.set_pipeline(&self.pipeline_box);
                             pass.set_bind_group(0, &bind, &[offset]);
                             pass.draw(0..6, 0..1);

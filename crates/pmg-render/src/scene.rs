@@ -103,6 +103,9 @@ pub struct RenderNode {
     /// the design rather than to wherever the last frame left it.
     pub base_transform: Transform2D,
     pub fill: Option<Rgba>,
+    /// A linear gradient drawn instead of `fill` (format 1.1). `fill` remains
+    /// the flat colour a 1.0 reader falls back to.
+    pub gradient: Option<pmg_scene::doc::Gradient>,
     /// An outline inside the edge — see [`pmg_scene::doc::Stroke`].
     pub stroke: Option<pmg_scene::doc::Stroke>,
     /// A soft lobe of this node's silhouette, drawn under it.
@@ -449,6 +452,7 @@ fn flatten(
         rect,
         base_transform: node.transform,
         fill: node.style.fill,
+        gradient: node.style.gradient.clone(),
         stroke: node.style.stroke,
         shadow: node.style.shadow,
         radius: node.style.radius,
@@ -752,6 +756,7 @@ mod tests {
                 },
                 base_transform: Transform2D::default(),
                 fill: None,
+                gradient: None,
                 stroke: None,
                 shadow: None,
                 radius: 0.0,
@@ -790,6 +795,7 @@ mod tests {
                 },
                 base_transform: Transform2D::default(),
                 fill: None,
+                gradient: None,
                 stroke: None,
                 shadow: None,
                 radius: 0.0,

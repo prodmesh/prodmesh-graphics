@@ -91,6 +91,7 @@ export type NodeFacts = {
   stroke?: { color: [number, number, number, number]; width: number }
   /** The drop shadow, when there is one. */
   shadow?: { color: [number, number, number, number]; dx: number; dy: number; blur: number }
+  gradient?: { angle: number; stops: [[number, number, number, number], number][] }
 }
 
 export type DragResult = {
@@ -129,6 +130,16 @@ export async function blankDoc(
 ): Promise<Record<string, unknown>> {
   const wasm = await loadWasm()
   return JSON.parse(wasm.blankDoc(id, name, width, height)) as Record<string, unknown>
+}
+
+/**
+ * Walk a document forward to the current format version (spec §9.3). Design
+ * runs this on every open, so the editors always work on a current-shape
+ * document — publishing the result is still the designer's explicit act.
+ */
+export async function migrateDoc(doc: Record<string, unknown>): Promise<Record<string, unknown>> {
+  const wasm = await loadWasm()
+  return JSON.parse(wasm.migrateDoc(JSON.stringify(doc))) as Record<string, unknown>
 }
 
 /** What one uploaded face is: its content hash, and the name and weight the

@@ -527,3 +527,66 @@ fn text_effects_ring_the_glyph_and_shadow_the_outlined_shape() {
     // Far away stays empty.
     assert_eq!(at(200, 200)[3], 0);
 }
+
+#[test]
+fn a_gradient_walks_its_stops_across_the_rect() {
+    let Some(g) = gpu() else {
+        eprintln!("no GPU adapter; skipping");
+        return;
+    };
+
+    // The bar spans x 96..160. A 90° (left-to-right) gradient, red to blue,
+    // with the flat fill kept as the first stop — the 1.0 reader's fallback.
+    let mut doc = bar(96.0, [1.0, 0.0, 0.0, 1.0]);
+    doc.root.children[0].style.gradient = Some(pmg_scene::doc::Gradient {
+        angle_deg: 90.0,
+        stops: vec![
+            pmg_scene::doc::GradientStop {
+                color: pmg_scene::doc::Rgba {
+                    rgba: [1.0, 0.0, 0.0, 1.0],
+                },
+                at: 0.0,
+            },
+            pmg_scene::doc::GradientStop {
+                color: pmg_scene::doc::Rgba {
+                    rgba: [0.0, 0.0, 1.0, 1.0],
+                },
+                at: 1.0,
+            },
+        ],
+    });
+    let inst = instance(&doc);
+
+    let fb = pmg_render::draw::LinearFrame::new(&g.device, W, H);
+    let view = fb.view().clone();
+    SceneRenderer::new(&g.device, &g.queue, &inst).render(
+        &g.device,
+        &g.queue,
+        &inst,
+        &[],
+        &view,
+        (W, H),
+    );
+    fb.encode(&g.device, &g.queue);
+    let px = read_back(&g, fb.output());
+
+    let at = |x: u32| {
+        let i = (((H / 2) * W + x) * 4) as usize;
+        [px[i], px[i + 1], px[i + 2], px[i + 3]]
+    };
+    let left = at(98);
+    let mid = at(128);
+    let right = at(158);
+    assert!(
+        left[0] > 200 && left[2] < 60,
+        "left end is red, got {left:?}"
+    );
+    assert!(
+        right[2] > 200 && right[0] < 60,
+        "right end is blue, got {right:?}"
+    );
+    assert!(
+        mid[0] < left[0] && mid[0] > right[0] && mid[2] > left[2] && mid[2] < right[2],
+        "the middle is on the way from red to blue, got {mid:?}"
+    );
+}

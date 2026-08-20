@@ -464,6 +464,18 @@ pub fn set_stroke(
 }
 
 /// Set or clear a drop shadow: colour, offset, and edge softness.
+/// `stops_json` is `[[[r,g,b,a], at], ...]` — the GradientFacts encoding, so
+/// the picker sends back exactly the shape the facts gave it.
+pub fn set_gradient(
+    armed: &Armed,
+    id: &str,
+    gradient: Option<(f32, Vec<([f32; 4], f32)>)>,
+) -> Result<String, String> {
+    let mut doc = armed.doc.clone();
+    interact::apply_set_gradient(&mut doc, id, gradient)?;
+    edited_json(doc)
+}
+
 pub fn set_shadow(
     armed: &Armed,
     id: &str,

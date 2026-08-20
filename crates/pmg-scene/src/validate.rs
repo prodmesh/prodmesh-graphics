@@ -64,6 +64,34 @@ pub fn validate(doc: &SceneDoc) -> Result<Vec<Warning>, SceneError> {
         }
     });
 
+    // Gradient stop rules are a compile ERROR, not a warning: a designer made
+    // this document in an editor that can fix it now, and a gradient whose
+    // stops are out of order evaluates differently between any two readers
+    // that clamp differently.
+    let mut bad_gradient: Option<(String, String)> = None;
+    doc.root.walk(&mut |n| {
+        if bad_gradient.is_some() {
+            return;
+        }
+        if let Some(g) = &n.style.gradient {
+            let why = if g.stops.len() < 2 || g.stops.len() > 4 {
+                Some(format!("{} stops — it needs 2 to 4", g.stops.len()))
+            } else if g.stops.iter().any(|s| !(0.0..=1.0).contains(&s.at)) {
+                Some("a stop outside 0..=1".to_string())
+            } else if g.stops.windows(2).any(|w| w[1].at < w[0].at) {
+                Some("stops out of order".to_string())
+            } else {
+                None
+            };
+            if let Some(why) = why {
+                bad_gradient = Some((n.id.clone(), why));
+            }
+        }
+    });
+    if let Some((node, why)) = bad_gradient {
+        return Err(SceneError::BadGradient { node, why });
+    }
+
     let fields: BTreeSet<&str> = doc.fields.iter().map(|f| f.key.as_str()).collect();
 
     // Bindings and visible_if may only reference declared fields. Evaluation is

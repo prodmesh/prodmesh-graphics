@@ -338,6 +338,15 @@
 .opt__head:hover { color: var(--pm-text-primary); }
 .opt__body { display: flex; flex-direction: column; gap: 8px; }
 
+.design-console__gradstop {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  color: var(--pm-text-muted);
+}
+.design-console__gradstop input[type='number'] { width: 60px; }
+
 /* ---- Revisions — history rows and the update dialog ----------------------- */
 .revs { display: flex; flex-direction: column; gap: 6px; }
 .revs__row {

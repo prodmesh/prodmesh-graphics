@@ -663,6 +663,16 @@ pub struct NodeFacts {
     /// The drop shadow, when there is one.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub shadow: Option<ShadowFacts>,
+    /// The gradient fill, when there is one.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub gradient: Option<GradientFacts>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct GradientFacts {
+    pub angle: f32,
+    /// Straight RGBA plus offset, ascending.
+    pub stops: Vec<([f32; 4], f32)>,
 }
 
 /// What the inspector shows for a clip-playing node.
@@ -797,6 +807,10 @@ pub fn node_facts(doc: &SceneDoc, id: &str) -> Result<NodeFacts, String> {
             dy: s.dy,
             blur: s.blur,
         }),
+        gradient: n.style.gradient.as_ref().map(|g| GradientFacts {
+            angle: g.angle_deg,
+            stops: g.stops.iter().map(|s| (s.color.rgba, s.at)).collect(),
+        }),
     })
 }
 
@@ -806,6 +820,9 @@ pub fn node_facts(doc: &SceneDoc, id: &str) -> Result<NodeFacts, String> {
 pub fn apply_fill(doc: &mut SceneDoc, id: &str, fill: Option<[f32; 4]>) -> Result<(), String> {
     let n = find_node_mut(&mut doc.root, id).ok_or_else(|| format!("no node {id}"))?;
     n.style.fill = fill.map(|rgba| pmg_scene::doc::Rgba { rgba });
+    // Choosing a flat colour IS leaving the gradient — readers draw the
+    // gradient over the fill, so keeping both would make this edit invisible.
+    n.style.gradient = None;
     Ok(())
 }
 
@@ -1203,6 +1220,53 @@ pub fn apply_set_shadow(
         dy,
         blur: blur.max(0.0),
     });
+    Ok(())
+}
+
+/// Set or clear a linear gradient fill.
+///
+/// Setting one also sets `fill` to the FIRST stop's colour — the flat
+/// fallback a 1.0 reader renders instead (the format ignores keys it does not
+/// know) — and stamps the document 1.1, because it now uses a 1.1 field. The
+/// editor that introduces the version is the editor that declares it, same
+/// rule as fields.
+pub fn apply_set_gradient(
+    doc: &mut SceneDoc,
+    id: &str,
+    gradient: Option<(f32, Vec<([f32; 4], f32)>)>,
+) -> Result<(), String> {
+    if let Some((_, stops)) = &gradient {
+        if stops.len() < 2 || stops.len() > 4 {
+            return Err(format!(
+                "a gradient needs 2 to 4 stops, not {}",
+                stops.len()
+            ));
+        }
+        if stops.windows(2).any(|w| w[1].1 < w[0].1) {
+            return Err("gradient stops must be in order".into());
+        }
+        if stops.iter().any(|s| !(0.0..=1.0).contains(&s.1)) {
+            return Err("gradient stops sit between 0 and 100%".into());
+        }
+    }
+    let n = find_node_mut(&mut doc.root, id).ok_or_else(|| format!("no node {id}"))?;
+    match gradient {
+        Some((angle_deg, stops)) => {
+            n.style.fill = Some(pmg_scene::doc::Rgba { rgba: stops[0].0 });
+            n.style.gradient = Some(pmg_scene::doc::Gradient {
+                angle_deg,
+                stops: stops
+                    .into_iter()
+                    .map(|(rgba, at)| pmg_scene::doc::GradientStop {
+                        color: pmg_scene::doc::Rgba { rgba },
+                        at,
+                    })
+                    .collect(),
+            });
+            doc.format_version = pmg_scene::migrate::CURRENT;
+        }
+        None => n.style.gradient = None,
+    }
     Ok(())
 }
 
@@ -1762,6 +1826,7 @@ mod tests {
             rect: pmg_layout::Rect { x, y, w, h },
             base_transform: Default::default(),
             fill,
+            gradient: None,
             stroke: None,
             shadow: None,
             radius,

@@ -22,6 +22,7 @@ pub mod bind;
 pub mod cbor;
 pub mod doc;
 pub mod fixture;
+pub mod migrate;
 pub mod validate;
 
 pub use doc::*;
@@ -56,6 +57,9 @@ pub enum SceneError {
 
     #[error("format is {0:?}, expected \"pmg.scene\"")]
     WrongFormat(String),
+
+    #[error("node {node:?} has a gradient with {why}")]
+    BadGradient { node: String, why: String },
 }
 
 /// Can this reader open the document?

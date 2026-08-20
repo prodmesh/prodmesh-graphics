@@ -244,6 +244,18 @@ mod design_api {
             .expect("a blank document serializes")
     }
 
+    /// Walk a document forward to the current format version (§9.3). Returns
+    /// the migrated JSON; an already-current document round-trips unchanged.
+    /// Design runs this on open, so what the editors touch is always current —
+    /// publishing it is still the designer's explicit act.
+    #[wasm_bindgen(js_name = migrateDoc)]
+    pub fn migrate_doc(doc_json: &str) -> Result<String, JsValue> {
+        let mut doc: pmg_scene::doc::SceneDoc =
+            serde_json::from_str(doc_json).map_err(|e| JsValue::from_str(&format!("{e}")))?;
+        pmg_scene::migrate::migrate(&mut doc).map_err(|e| JsValue::from_str(&format!("{e}")))?;
+        serde_json::to_string(&doc).map_err(|e| JsValue::from_str(&format!("{e}")))
+    }
+
     #[wasm_bindgen]
     pub fn compile_template(doc_json: &str) -> Result<JsValue, JsValue> {
         let c = design::compile(doc_json).map_err(|e| JsValue::from_str(&e))?;
@@ -668,6 +680,26 @@ mod design_api {
         #[wasm_bindgen(js_name = clearShadow)]
         pub fn clear_shadow(&self, id: String) -> Result<String, JsValue> {
             design::set_shadow(&self.armed, &id, None).map_err(|e| JsValue::from_str(&e))
+        }
+
+        /// Set a linear gradient fill. `stops_json` is `[[[r,g,b,a], at], …]`,
+        /// 2 to 4 stops ascending — the same shape the facts report.
+        #[wasm_bindgen(js_name = setGradient)]
+        pub fn set_gradient(
+            &self,
+            id: String,
+            angle_deg: f32,
+            stops_json: String,
+        ) -> Result<String, JsValue> {
+            let stops: Vec<([f32; 4], f32)> = serde_json::from_str(&stops_json)
+                .map_err(|e| JsValue::from_str(&format!("stops: {e}")))?;
+            design::set_gradient(&self.armed, &id, Some((angle_deg, stops)))
+                .map_err(|e| JsValue::from_str(&e))
+        }
+
+        #[wasm_bindgen(js_name = clearGradient)]
+        pub fn clear_gradient(&self, id: String) -> Result<String, JsValue> {
+            design::set_gradient(&self.armed, &id, None).map_err(|e| JsValue::from_str(&e))
         }
 
         /// Clip a node's contents to its bounds — the overflow mask.

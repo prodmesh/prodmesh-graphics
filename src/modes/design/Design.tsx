@@ -53,6 +53,7 @@ import {
   blankDoc,
   compileTemplate,
   fontFacts,
+  migrateDoc,
   useDesignCanvas,
   type DesignSession,
   type DocTimeline,
@@ -139,6 +140,99 @@ function OptionalSection({
       {on ? <div className="opt__body">{children}</div> : null}
       {!on && offNote ? <p className="design-console__dim">{offNote}</p> : null}
     </section>
+  )
+}
+
+type GradStops = [[number, number, number, number], number][]
+
+/**
+ * Angle and stops for a gradient fill. The dial is CSS's — 0° up, clockwise,
+ * 180° top-to-bottom — because that is the dial designers already know. Stops
+ * are 2 to 4; the ends stay put and middles can come and go.
+ */
+function GradientControls({
+  gradient,
+  onCommit,
+}: {
+  gradient: { angle: number; stops: GradStops }
+  onCommit: (angle: number, stops: GradStops) => void
+}) {
+  const { angle, stops } = gradient
+  const withStop = (i: number, next: [[number, number, number, number], number]) => {
+    const s = stops.map((x, j) => (j === i ? next : x)) as GradStops
+    onCommit(angle, s)
+  }
+  return (
+    <>
+      <FormGroup label="Angle °">
+        <input
+          type="number"
+          step={5}
+          key={`ga:${angle}`}
+          defaultValue={angle}
+          aria-label="Gradient angle"
+          onBlur={(e) => {
+            const v = Number(e.target.value)
+            if (Number.isFinite(v) && v !== angle) onCommit(v, stops)
+          }}
+        />
+      </FormGroup>
+      {stops.map(([c, at], i) => (
+        <div key={`${i}:${at}`} className="design-console__gradstop">
+          <input
+            type="color"
+            value={rgbToHex(c)}
+            aria-label={`Stop ${i + 1} colour`}
+            onChange={(e) => {
+              const rgb = hexToRgb(e.target.value)
+              if (rgb) withStop(i, [[rgb[0], rgb[1], rgb[2], c[3]], at])
+            }}
+          />
+          <input
+            type="number"
+            min={0}
+            max={100}
+            key={`gat:${at}`}
+            defaultValue={Math.round(at * 100)}
+            aria-label={`Stop ${i + 1} position %`}
+            disabled={i === 0 || i === stops.length - 1}
+            onBlur={(e) => {
+              const v = Number(e.target.value)
+              if (Number.isFinite(v)) withStop(i, [c, Math.max(0, Math.min(100, v)) / 100])
+            }}
+          />
+          <span>%</span>
+          {i > 0 && i < stops.length - 1 ? (
+            <button
+              type="button"
+              className="edit-console__iconbtn"
+              aria-label={`Remove stop ${i + 1}`}
+              onClick={() => onCommit(angle, stops.filter((_, j) => j !== i) as GradStops)}
+            >
+              <Trash2 size={12} aria-hidden />
+            </button>
+          ) : null}
+        </div>
+      ))}
+      {stops.length < 4 ? (
+        <button
+          type="button"
+          className="edit-console__addbtn"
+          onClick={() => {
+            // A new stop lands midway through the last interval, in the
+            // colour already passing through that point.
+            const a = stops[stops.length - 2]!
+            const b = stops[stops.length - 1]!
+            const at = (a[1] + b[1]) / 2
+            const mid = a[0].map((v, i) => (v + b[0][i]!) / 2) as [number, number, number, number]
+            const s = [...stops.slice(0, -1), [mid, at], stops[stops.length - 1]] as GradStops
+            onCommit(angle, s)
+          }}
+        >
+          <Plus size={12} aria-hidden /> Add a stop
+        </button>
+      ) : null}
+    </>
   )
 }
 
@@ -609,12 +703,40 @@ function SelectedNode({
           ) : (
             <OptionalSection
               label="Fill"
-              on={!!facts.fill}
+              on={!!facts.fill || !!facts.gradient}
               onEnable={() => edit((s) => s.setFill(selected, 1, 1, 1, 1))}
               onDisable={() => edit((s) => s.clearFill(selected))}
               offNote="An unfilled box draws nothing and stops being clickable on the canvas — select it from the layer tree instead."
             >
-              {facts.fill ? (
+              <FormGroup label="Type">
+                <select
+                  value={facts.gradient ? 'gradient' : 'solid'}
+                  aria-label="Fill type"
+                  onChange={(e) => {
+                    if (e.target.value === 'gradient' && !facts.gradient) {
+                      // Default: the current colour fading to its own shadow,
+                      // top to bottom — a band look, not a rainbow.
+                      const c = facts.fill ?? [1, 1, 1, 1]
+                      const dark: [number, number, number, number] = [c[0] * 0.35, c[1] * 0.35, c[2] * 0.35, c[3]]
+                      edit((s) => s.setGradient(selected, 180, JSON.stringify([[c, 0], [dark, 1]])))
+                    } else if (e.target.value === 'solid' && facts.gradient) {
+                      const first = facts.gradient.stops[0]![0]
+                      edit((s) => s.setFill(selected, first[0], first[1], first[2], first[3]))
+                    }
+                  }}
+                >
+                  <option value="solid">Solid colour</option>
+                  <option value="gradient">Gradient</option>
+                </select>
+              </FormGroup>
+              {facts.gradient ? (
+                <GradientControls
+                  gradient={facts.gradient}
+                  onCommit={(angle, stops) =>
+                    edit((s) => s.setGradient(selected, angle, JSON.stringify(stops)))
+                  }
+                />
+              ) : facts.fill ? (
                 <div className="design-console__size">
                   <FormGroup label="Colour">
                     <input
@@ -1334,7 +1456,9 @@ export function Design() {
         return
       }
       const mirror = await (await fetch(`/cas/${t.head.mirror_hash}`)).json()
-      load(mirror as Record<string, unknown>)
+      // Older documents walk forward to the current format on open (§9.3);
+      // publishing the migrated shape is still an explicit act.
+      load(await migrateDoc(mirror as Record<string, unknown>))
       // Empty on purpose: arming falls back to each field's sample from the
       // DOCUMENT, so editing a sample in the fields editor shows on the canvas
       // immediately. A copy taken here would shadow those edits with the
@@ -1457,7 +1581,7 @@ export function Design() {
     setPublishState(null)
     try {
       const json = JSON.parse(await file.text()) as Record<string, unknown>
-      load(json)
+      load(await migrateDoc(json))
       setSelected(null)
       setSelNode(null)
       // Empty on purpose — see openTemplate: samples come from the document.

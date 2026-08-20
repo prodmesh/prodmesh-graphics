@@ -90,6 +90,15 @@ upscale a 1080 raster to 2160; glyph antialiasing gives it away immediately.
   // box-shadow. Text strokes OUTWARD — an inside stroke eats thin letterforms
   // — and its shadow shows through a translucent fill, like CSS text-shadow.
   // Neither effect ever changes layout; both are ink past the geometry.
+  //
+  // `style.gradient` (format 1.1) draws a linear gradient INSTEAD of `fill`:
+  //   { "angle_deg": 180, "stops": [ { "color": {...}, "at": 0.0 }, ... ] }
+  // The angle is CSS's dial — 0° up, clockwise, 90° left-to-right. 2 to 4
+  // stops, `at` ascending in 0..=1, interpolated in LINEAR light (mixing
+  // encoded values grows grey through the middle). The gradient line runs
+  // through the rect's centre and spans its projection, as CSS sizes one.
+  // Writers keep `fill` equal to the first stop: a 1.0 reader ignores the
+  // key it does not know and renders that flat colour instead of nothing.
   "clip": false,
   "visible_if": { /* §5.3 */ },
   "content": { /* kind-specific */ },
@@ -390,6 +399,9 @@ compatibility mechanism here. You find out at 10am Saturday, not at 10:15 Sunday
   `min_reader` unchanged.
 - **`major`** — anything a previous reader would misinterpret. `min_reader` is
   raised.
+
+Current version: **1.1**, which introduced `style.gradient`. A 1.0 reader
+ignores the field and renders the flat `fill` writers keep beside it.
 
 ### 9.3 Migration
 
