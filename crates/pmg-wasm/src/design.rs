@@ -130,22 +130,63 @@ pub fn arm(
         data.insert(k, v);
     }
 
+    // Field-driven media becomes concrete addresses HERE, the same pass the
+    // node runs at its own arm — so what the designer previews and what plays
+    // are the same resolution, not two. On a COPY: `Armed::doc` is what edits
+    // clone from, and resolving it in place would bake a preview's hash into
+    // the authored template on the next edit.
+    let mut armed_doc = doc.clone();
+    pmg_scene::bind::resolve_media_fields(&mut armed_doc, &data);
+
     // Image bytes arrive keyed by HASH — the CAS's name for them — and the
     // document's asset table maps its local keys to hashes, exactly the walk a
     // node makes at arm. Decoding here (pmg-media) keeps the still path
     // identical between the browser and the booth. A key whose bytes have not
     // arrived yet reads as missing: the instance marks itself degraded and the
     // designer sees the magenta placeholder resolve when the fetch lands.
+    /// A 16×9 dark-gray plate: the designer's stand-in for a clip slot.
+    fn dark_plate() -> (u32, u32, std::sync::Arc<Vec<u8>>) {
+        (
+            16,
+            9,
+            std::sync::Arc::new(
+                std::iter::repeat_n([40u8, 40, 40, 255], 16 * 9)
+                    .flatten()
+                    .collect(),
+            ),
+        )
+    }
+
     struct Blobs<'a> {
         doc_assets: Vec<(String, String)>,
         blobs: &'a std::collections::BTreeMap<String, Vec<u8>>,
     }
     impl pmg_render::scene::ImageSource for Blobs<'_> {
         fn image(&mut self, key: &str) -> Option<(u32, u32, std::sync::Arc<Vec<u8>>)> {
-            let hash = &self.doc_assets.iter().find(|(k, _)| k == key)?.1;
-            let bytes = self.blobs.get(hash)?;
-            let d = pmg_media::decode_image(bytes).ok()?;
-            Some((d.width, d.height, std::sync::Arc::new(d.rgba)))
+            // A field-driven slot whose Item has not chosen yet resolves to an
+            // EMPTY key. That is a plate, not a degradation — "part of this
+            // template can't be drawn by this version" would be the wrong
+            // sentence for "nothing picked here yet".
+            if key.is_empty() {
+                return Some(dark_plate());
+            }
+            // A key that IS a content address needs no table: field-driven
+            // media arrives pre-resolved to its hash.
+            let hash = if key.starts_with("blake3:") {
+                key.to_string()
+            } else {
+                self.doc_assets.iter().find(|(k, _)| k == key)?.1.clone()
+            };
+            let bytes = self.blobs.get(&hash)?;
+            match pmg_media::decode_image(bytes) {
+                Ok(d) => Some((d.width, d.height, std::sync::Arc::new(d.rgba))),
+                // Bytes that are not a still are a CLIP the browser cannot
+                // decode — pmg-media's video half is deliberately native-only.
+                // A dark plate is the honest preview: the slot is real, the
+                // motion is the node's job. (Missing bytes stay None, so a
+                // still-fetching asset still reads as degraded.)
+                Err(_) => Some(dark_plate()),
+            }
         }
     }
     let mut images = Blobs {
@@ -158,10 +199,10 @@ pub fn arm(
     };
 
     let measurer = Measurer::new(TextEngine::new(font_db(&doc, faces)?));
-    let solved = pmg_layout::solve(&doc, &data, &measurer).map_err(|e| e.to_string())?;
+    let solved = pmg_layout::solve(&armed_doc, &data, &measurer).map_err(|e| e.to_string())?;
     let mut engine = measurer.into_engine();
     let instance = SceneInstance::build_with(
-        &doc,
+        &armed_doc,
         &solved,
         &mut TextEngineGlyphs::new(&mut engine),
         &mut images,
@@ -486,6 +527,21 @@ pub fn add_image(
     let mut doc = armed.doc.clone();
     let id = interact::apply_add_image(&mut doc, parent, hash)?;
     Ok((id, edited_json(doc)?))
+}
+
+/// Add a full-canvas, field-driven video node; its clip field is declared on
+/// the way in.
+pub fn add_video(armed: &Armed, parent: Option<&str>) -> Result<(String, String), String> {
+    let mut doc = armed.doc.clone();
+    let id = interact::apply_add_video(&mut doc, parent)?;
+    Ok((id, edited_json(doc)?))
+}
+
+/// Loop a clip, or hold its last frame at the end.
+pub fn set_loop(armed: &Armed, id: &str, looping: bool) -> Result<String, String> {
+    let mut doc = armed.doc.clone();
+    interact::apply_set_loop(&mut doc, id, looping)?;
+    edited_json(doc)
 }
 
 /// Give a node an image, or swap the one it has — a box gains a background

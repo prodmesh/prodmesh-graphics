@@ -411,6 +411,43 @@ impl Runtime {
             }
         }
 
+        // Field-driven media: an Item's data may carry content addresses (a
+        // per-Item clip or picture). `resolve_media_fields` turns those into
+        // asset keys that ARE the hash, so they are loaded here keyed by hash —
+        // sniffed and registered exactly like a template's own assets. The
+        // bytes are already staged: the assignment's asset list carries them.
+        for it in &a.items {
+            for v in it.data.values() {
+                let pmg_proto::DataValue::Asset(hash) = v else {
+                    continue;
+                };
+                if self.assigned.images.contains_key(hash) {
+                    continue;
+                }
+                let Ok(path) = self.store.cas.path_of(hash) else {
+                    continue;
+                };
+                if looks_like_an_image(&path) {
+                    let Ok(bytes) = self.store.cas.get(hash) else {
+                        continue;
+                    };
+                    match pmg_media::decode_image(&bytes) {
+                        Ok(d) => {
+                            self.assigned.images.insert(
+                                hash.clone(),
+                                (d.width, d.height, std::sync::Arc::new(d.rgba)),
+                            );
+                        }
+                        Err(e) => tracing::warn!(hash = %hash, error = %e,
+                                                 "could not decode an Item's picture"),
+                    }
+                } else if let Err(e) = self.register_clip(hash, &path) {
+                    tracing::warn!(hash = %hash, error = %e,
+                                   "an Item's media is neither an image nor a playable clip");
+                }
+            }
+        }
+
         self.assigned.items.clear();
         let mut items = Vec::new();
         for it in &a.items {

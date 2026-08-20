@@ -133,6 +133,14 @@ binds (`width: "Content"` in a row), and *reveals* with a transform and a clip.
 "content": { "kind": "video", "asset_key": "sting", "fit": "contain",
              "loop": false, "audio": { "layer_gain_db": 0.0 } }
 
+// image / video, FIELD-DRIVEN: the media comes from this field's value in the
+// Item's data — a content hash — and `asset_key` is ignored. One template,
+// and every Item picks its own picture or clip. The field must be declared
+// (§2) with the matching type; an Item that has not chosen renders the slot
+// as degraded, honestly, rather than blank.
+"content": { "kind": "video", "field": "clip", "asset_key": "", "fit": "cover",
+             "loop": false }
+
 // shape
 "content": { "kind": "shape", "shape": "rect" }   // rect | ellipse | path
 ```

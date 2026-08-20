@@ -141,10 +141,19 @@ export function build({ nodeId = null, outputId = 'out-0', mode = '1920x1080', l
         .all(...revs)
     : []
 
-  // Assets the templates declare. The SceneDoc itself is fetched by its
-  // template_rev, which IS its content address — so it needs no separate entry.
+  // Assets the templates declare, PLUS content addresses carried in Item data
+  // — a field-driven clip or picture is the Item's choice, so its hash lives
+  // in the data rather than the manifest, and the node must stage it all the
+  // same. The SceneDoc itself is fetched by its template_rev, which IS its
+  // content address — so it needs no separate entry.
   const assets = [
-    ...new Set(templates.flatMap((t) => JSON.parse(t.manifest).assets ?? [])),
+    ...new Set([
+      ...templates.flatMap((t) => JSON.parse(t.manifest).assets ?? []),
+      ...items
+        .filter((i) => mine.has(i.id))
+        .flatMap((i) => Object.values(JSON.parse(i.data ?? '{}')))
+        .filter((v) => typeof v === 'string' && /^blake3:[0-9a-f]{64}$/.test(v)),
+    ]),
   ].toSorted()
 
   const payload = {

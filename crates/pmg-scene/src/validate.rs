@@ -84,6 +84,15 @@ pub fn validate(doc: &SceneDoc) -> Result<Vec<Warning>, SceneError> {
                 bad_field = Some(v.field.clone());
             }
         }
+        // Field-driven media reference fields the same way bindings do, and an
+        // undeclared one is the same typo caught at the same moment.
+        if let Some(Content::Image { field: Some(k), .. } | Content::Video { field: Some(k), .. }) =
+            &n.content
+        {
+            if !fields.contains(k.as_str()) && bad_field.is_none() {
+                bad_field = Some(k.clone());
+            }
+        }
     });
     if let Some(f) = bad_field {
         return Err(SceneError::UnknownField(f));

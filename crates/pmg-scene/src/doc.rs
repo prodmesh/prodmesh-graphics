@@ -479,6 +479,12 @@ pub enum Content {
         asset_key: String,
         #[serde(default)]
         fit: Fit,
+        /// When set, the picture comes from THIS FIELD's value — a content
+        /// hash in the Item's data — and `asset_key` is ignored. This is what
+        /// makes one template serve every Item: the template says "a picture
+        /// goes here", the Item says which one.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        field: Option<String>,
     },
     /// A clip, sharing `fit` with [`Content::Image`] because on the GPU it is an
     /// image whose texture changes — the only difference the format needs to
@@ -494,6 +500,11 @@ pub enum Content {
         /// make the graphic vanish mid-shot without anyone taking it out.
         #[serde(default, rename = "loop")]
         looping: bool,
+        /// When set, the clip comes from THIS FIELD's value — a content hash
+        /// in the Item's data — and `asset_key` is ignored. One "Full-frame
+        /// video" template, and every Item picks its own clip as data.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        field: Option<String>,
     },
     Shape {
         shape: String,

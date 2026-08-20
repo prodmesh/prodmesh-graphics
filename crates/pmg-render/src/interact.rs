@@ -654,12 +654,24 @@ pub struct NodeFacts {
     /// node, padding keeps contents off a container's edge.
     pub margin: [f32; 4],
     pub padding: [f32; 4],
+    /// Present exactly when the node plays a clip.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub video: Option<VideoFacts>,
     /// The outline, when there is one: encoded straight RGBA plus width.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub stroke: Option<StrokeFacts>,
     /// The drop shadow, when there is one.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub shadow: Option<ShadowFacts>,
+}
+
+/// What the inspector shows for a clip-playing node.
+#[derive(Debug, Clone, Serialize)]
+pub struct VideoFacts {
+    /// The field whose value picks the clip, when field-driven.
+    pub field: Option<String>,
+    pub fit: String,
+    pub looping: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -722,7 +734,7 @@ pub fn node_facts(doc: &SceneDoc, id: &str) -> Result<NodeFacts, String> {
         _ => None,
     };
     let image = match &n.content {
-        Some(pmg_scene::doc::Content::Image { asset_key, fit }) => Some(ImageFacts {
+        Some(pmg_scene::doc::Content::Image { asset_key, fit, .. }) => Some(ImageFacts {
             asset_key: asset_key.clone(),
             hash: doc
                 .assets
@@ -730,6 +742,19 @@ pub fn node_facts(doc: &SceneDoc, id: &str) -> Result<NodeFacts, String> {
                 .find(|a| &a.key == asset_key)
                 .map(|a| a.hash.clone()),
             fit: format!("{fit:?}").to_lowercase(),
+        }),
+        _ => None,
+    };
+    let video = match &n.content {
+        Some(pmg_scene::doc::Content::Video {
+            fit,
+            looping,
+            field,
+            ..
+        }) => Some(VideoFacts {
+            field: field.clone(),
+            fit: format!("{fit:?}").to_lowercase(),
+            looping: *looping,
         }),
         _ => None,
     };
@@ -761,6 +786,7 @@ pub fn node_facts(doc: &SceneDoc, id: &str) -> Result<NodeFacts, String> {
         ],
         text,
         image,
+        video,
         stroke: n.style.stroke.map(|s| StrokeFacts {
             color: s.color.rgba,
             width: s.width,
@@ -1207,6 +1233,10 @@ fn field_users(n: &Node, key: &str, out: &mut Vec<String>) {
                 .iter()
                 .any(|k| k.as_str() == key)
         }
+        Some(
+            pmg_scene::doc::Content::Image { field: Some(f), .. }
+            | pmg_scene::doc::Content::Video { field: Some(f), .. },
+        ) => f == key,
         _ => false,
     } || n.visible_if.as_ref().is_some_and(|v| v.field == key);
     if uses {
@@ -1341,11 +1371,88 @@ pub fn apply_add_image(
         content: Some(Content::Image {
             asset_key: key,
             fit: Fit::Cover,
+            field: None,
         }),
         children: vec![],
         unknown: Default::default(),
     });
     Ok(id)
+}
+
+/// Add a video node under `parent` (the root when `None`) and return its id.
+///
+/// It arrives FULL-CANVAS and field-driven: a fresh video-type field is
+/// declared (`clip`, then `clip-N`) and the node plays whatever content
+/// address the Item's data puts there. This is the "one template, every
+/// clip" shape — the template says a video goes here, the Item says which.
+/// On the designer's canvas it shows as a dark plate: the browser cannot
+/// decode broadcast codecs, and pretending otherwise would preview a lie.
+pub fn apply_add_video(doc: &mut SceneDoc, parent: Option<&str>) -> Result<String, String> {
+    use pmg_scene::doc::{Content, Field, FieldType, Fit, NodeKind};
+
+    let field_key = (0..)
+        .map(|n| {
+            if n == 0 {
+                "clip".to_string()
+            } else {
+                format!("clip-{n}")
+            }
+        })
+        .find(|k| !doc.fields.iter().any(|f| &f.key == k))
+        .expect("the integers do not run out");
+    doc.fields.push(Field {
+        key: field_key.clone(),
+        ty: FieldType::Video,
+        label: field_key.clone(),
+        required: false,
+        max_len: None,
+        sample: None,
+    });
+
+    let id = fresh_id(doc, "video");
+    let (cw, ch) = (doc.canvas.width as f32, doc.canvas.height as f32);
+    let parent_id = parent.unwrap_or(&doc.root.id).to_string();
+    let p =
+        find_node_mut(&mut doc.root, &parent_id).ok_or_else(|| format!("no node {parent_id}"))?;
+    p.children.push(Node {
+        id: id.clone(),
+        display_name: None,
+        kind: NodeKind::Video,
+        layout: pmg_scene::doc::Layout {
+            width: Dimension::Px(cw),
+            height: Dimension::Px(ch),
+            position: Position::Absolute,
+            ..Default::default()
+        },
+        transform: Default::default(),
+        style: Default::default(),
+        clip: false,
+        visible_if: None,
+        content: Some(Content::Video {
+            asset_key: String::new(),
+            fit: Fit::Cover,
+            looping: false,
+            field: Some(field_key),
+        }),
+        children: vec![],
+        unknown: Default::default(),
+    });
+    Ok(id)
+}
+
+/// Loop a clip, or hold its last frame at the end — holding is the default,
+/// because going transparent mid-shot is a graphic vanishing without anyone
+/// taking it out.
+pub fn apply_set_loop(doc: &mut SceneDoc, id: &str, looping: bool) -> Result<(), String> {
+    use pmg_scene::doc::Content;
+    let n = find_node_mut(&mut doc.root, id).ok_or_else(|| format!("no node {id}"))?;
+    match &mut n.content {
+        Some(Content::Video { looping: l, .. }) => {
+            *l = looping;
+            Ok(())
+        }
+        _ => Err(format!("{id} has no clip to loop")),
+    }
 }
 
 /// Give a node an image, or swap the one it has.
@@ -1368,6 +1475,7 @@ pub fn apply_set_image(doc: &mut SceneDoc, id: &str, hash: &str) -> Result<(), S
             n.content = Some(Content::Image {
                 asset_key: key,
                 fit: Fit::Cover,
+                field: None,
             });
             Ok(())
         }
@@ -2273,5 +2381,70 @@ mod tests {
         apply_delete_field(&mut doc, "speaker").unwrap();
         assert!(doc.fields.is_empty());
         assert!(apply_delete_field(&mut doc, "speaker").is_err());
+    }
+
+    #[test]
+    fn video_fields_declare_resolve_and_loop() {
+        let mut doc: SceneDoc = serde_json::from_value(serde_json::json!({
+            "format": "pmg.scene",
+            "format_version": {"major": 1, "minor": 0},
+            "min_reader": 1,
+            "id": "t", "name": "t",
+            "canvas": {"width": 400, "height": 300},
+            "fields": [], "fonts": [], "assets": [],
+            "root": {
+                "id": "root", "kind": "box", "layout": {}, "transform": {}, "style": {},
+                "children": []
+            },
+            "timelines": []
+        }))
+        .expect("fixture doc parses");
+
+        // A video node arrives full-canvas, field-driven, with its field
+        // declared — one template, every clip.
+        let id = apply_add_video(&mut doc, None).unwrap();
+        assert_eq!(id, "video-1");
+        assert_eq!(doc.fields.len(), 1);
+        assert_eq!(doc.fields[0].key, "clip");
+        let facts = node_facts(&doc, &id).unwrap();
+        let v = facts.video.expect("a video node has video facts");
+        assert_eq!(v.field.as_deref(), Some("clip"));
+        assert_eq!(v.fit, "cover");
+        assert!(!v.looping);
+
+        apply_set_loop(&mut doc, &id, true).unwrap();
+        assert!(node_facts(&doc, &id).unwrap().video.unwrap().looping);
+        assert!(apply_set_loop(&mut doc, "root", true).is_err());
+
+        // The field is protected while the node references it, by name.
+        let err = apply_delete_field(&mut doc, "clip").unwrap_err();
+        assert!(err.contains(&id));
+
+        // Resolution: the Item's data (or the sample) becomes the asset key.
+        let hash = "blake3:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc";
+        let mut data = pmg_scene::bind::Data::new();
+        data.insert("clip".into(), hash.into());
+        let mut armed = doc.clone();
+        pmg_scene::bind::resolve_media_fields(&mut armed, &data);
+        let Some(pmg_scene::doc::Content::Video { asset_key, .. }) =
+            &find_node(&armed.root, &id).unwrap().content
+        else {
+            panic!("still a video")
+        };
+        assert_eq!(asset_key, hash);
+
+        // No data and no sample: the key resolves to nothing, which renders
+        // as DEGRADED — the honest answer for an Item that has not chosen.
+        let mut bare = doc.clone();
+        pmg_scene::bind::resolve_media_fields(&mut bare, &Default::default());
+        let Some(pmg_scene::doc::Content::Video { asset_key, .. }) =
+            &find_node(&bare.root, &id).unwrap().content
+        else {
+            panic!()
+        };
+        assert!(asset_key.is_empty());
+
+        // And the whole document still compiles with the video field declared.
+        assert!(pmg_scene::validate::compile(&doc).is_ok());
     }
 }

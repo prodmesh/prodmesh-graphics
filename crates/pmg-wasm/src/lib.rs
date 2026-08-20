@@ -716,6 +716,24 @@ mod design_api {
                 .map_err(|e| JsValue::from_str(&e.to_string()))
         }
 
+        /// Add a full-canvas, field-driven video node. Returns `{ id, doc }`;
+        /// the clip field is declared on the way in.
+        #[wasm_bindgen(js_name = addVideo)]
+        pub fn add_video(&self, parent: Option<String>) -> Result<String, JsValue> {
+            let (id, doc) = design::add_video(&self.armed, parent.as_deref())
+                .map_err(|e| JsValue::from_str(&e))?;
+            let doc: serde_json::Value =
+                serde_json::from_str(&doc).map_err(|e| JsValue::from_str(&e.to_string()))?;
+            serde_json::to_string(&serde_json::json!({ "id": id, "doc": doc }))
+                .map_err(|e| JsValue::from_str(&e.to_string()))
+        }
+
+        /// Loop a clip, or hold its last frame at the end.
+        #[wasm_bindgen(js_name = setLoop)]
+        pub fn set_loop(&self, id: String, looping: bool) -> Result<String, JsValue> {
+            design::set_loop(&self.armed, &id, looping).map_err(|e| JsValue::from_str(&e))
+        }
+
         /// Give a node an image or swap the one it has — a box gains a
         /// background picture, an image node changes what it shows.
         #[wasm_bindgen(js_name = setImage)]

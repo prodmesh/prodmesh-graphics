@@ -762,6 +762,12 @@ impl LayerEngine {
             }
         }
 
+        // Field-driven media becomes concrete addresses on a COPY, the same
+        // pass the designer runs at its arm — one resolution, two surfaces.
+        let mut doc = doc.clone();
+        pmg_scene::bind::resolve_media_fields(&mut doc, &bound);
+        let doc = &doc;
+
         let engine = lib.text_engine().map_err(|_| RejectReason::NotReady)?;
         let measurer = Measurer::new(engine);
         let solved = pmg_layout::solve(doc, &bound, &measurer)

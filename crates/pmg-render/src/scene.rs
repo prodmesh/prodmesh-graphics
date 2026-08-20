@@ -362,7 +362,7 @@ fn flatten(
                 _ => RenderContent::Text(Vec::new()),
             }
         }
-        (true, Some(Content::Image { asset_key, fit })) => {
+        (true, Some(Content::Image { asset_key, fit, .. })) => {
             match images.image(asset_key) {
                 Some((w, h, rgba)) => {
                     let idx = inst.images.len();
@@ -391,6 +391,7 @@ fn flatten(
                 asset_key,
                 fit,
                 looping,
+                ..
             }),
         ) => {
             // The source hands back the clip's FIRST frame, at the clip's size.

@@ -911,7 +911,12 @@ function FieldInput({
 
   return (
     <FormGroup label={label}>
-      {field.type === 'bool' ? (
+      {field.type === 'image' || field.type === 'video' ? (
+        // The Item's own media, picked from what this server holds. The value
+        // is the content address — the same identity the node stages by, so
+        // choosing here IS choosing what plays.
+        <MediaPicker kind={field.type} value={value} onChange={onChange} />
+      ) : field.type === 'bool' ? (
         <input type="checkbox" checked={value === 'true'} onChange={(e) => onChange(String(e.target.checked))} />
       ) : field.type === 'enum' ? (
         <select value={value} onChange={(e) => onChange(e.target.value)}>
@@ -929,6 +934,34 @@ function FieldInput({
         />
       )}
     </FormGroup>
+  )
+}
+
+/** A dropdown of this server's media assets of one kind, valued by hash. */
+function MediaPicker({
+  kind,
+  value,
+  onChange,
+}: {
+  kind: 'image' | 'video'
+  value: string
+  onChange: (v: string) => void
+}) {
+  const { data } = useQuery<{ assets: { hash: string; size: number; kind: string }[] }>(keys.assets())
+  const options = (data?.assets ?? []).filter((a) => a.kind === kind)
+  const short = (h: string) => h.replace(/^[a-z0-9]+:/, '').slice(0, 8)
+  return (
+    <select value={value} onChange={(e) => onChange(e.target.value)}>
+      <option value="">—</option>
+      {value && !options.some((a) => a.hash === value) ? (
+        <option value={value}>{short(value)} — not on this server</option>
+      ) : null}
+      {options.map((a) => (
+        <option key={a.hash} value={a.hash}>
+          {short(a.hash)} · {Math.max(1, Math.round(a.size / 1024))} KB
+        </option>
+      ))}
+    </select>
   )
 }
 

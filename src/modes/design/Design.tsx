@@ -32,7 +32,7 @@
  */
 
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { AlertTriangle, FileUp, FolderOpen, Image as ImageIcon, Plus, Redo2, Trash2, Type, Undo2, Upload } from 'lucide-react'
+import { AlertTriangle, Clapperboard, FileUp, FolderOpen, Image as ImageIcon, Plus, Redo2, Trash2, Type, Undo2, Upload } from 'lucide-react'
 import { useQuery, invalidate } from '../../lib/useQuery'
 import { keys } from '../../lib/keys'
 import { ApiError, get, post } from '../../lib/api'
@@ -307,6 +307,45 @@ function SelectedNode({
             >
               Add a background image
             </button>
+          ) : null}
+
+          {facts.video ? (
+            <>
+              {/* A clip slot. The FIELD is the whole point: the template says
+                  a video goes here, and every Item picks its own clip in Edit.
+                  The canvas shows a dark plate — the browser cannot decode
+                  broadcast codecs, and the motion is the node's job. */}
+              <div className="design-console__size">
+                <FormGroup label="Clip comes from field">
+                  <input
+                    value={facts.video.field ? '${' + facts.video.field + '}' : '— fixed asset —'}
+                    readOnly
+                    aria-label="Video field"
+                  />
+                </FormGroup>
+                <FormGroup label="Fit">
+                  <select
+                    value={facts.video.fit}
+                    aria-label="Video fit"
+                    onChange={(e) => edit((s) => s.setFit(selected, e.target.value))}
+                  >
+                    <option value="cover">Scale to fill — crops</option>
+                    <option value="contain">Scale to fit — letterboxes</option>
+                    <option value="stretch">Stretch — distorts</option>
+                  </select>
+                </FormGroup>
+              </div>
+              <FormGroup label="At the end">
+                <select
+                  value={facts.video.looping ? 'loop' : 'hold'}
+                  aria-label="Video end behaviour"
+                  onChange={(e) => edit((s) => s.setLoop(selected, e.target.value === 'loop'))}
+                >
+                  <option value="hold">Hold the last frame</option>
+                  <option value="loop">Loop</option>
+                </select>
+              </FormGroup>
+            </>
           ) : null}
 
           {facts.text ? (
@@ -1171,7 +1210,7 @@ export function Design() {
   /** Add a node — into the selection when there is one, else the canvas root —
    *  and select what was just made, so the next act is styling it. */
   const addNode = useCallback(
-    (what: 'box' | 'text' | 'image') => {
+    (what: 'box' | 'text' | 'image' | 'video') => {
       const s = session.current
       if (!s) return
       try {
@@ -1180,7 +1219,9 @@ export function Design() {
             ? s.addBox(selNode ?? undefined)
             : what === 'text'
               ? s.addText(selNode ?? undefined)
-              : s.addImage(selNode ?? undefined, imageAssets[0]!.hash)
+              : what === 'video'
+                ? s.addVideo(selNode ?? undefined)
+                : s.addImage(selNode ?? undefined, imageAssets[0]!.hash)
         const r = JSON.parse(raw) as { id: string; doc: Record<string, unknown> }
         edit(r.doc)
         setSelNode(r.id)
@@ -1225,6 +1266,9 @@ export function Design() {
             onClick={() => addNode('image')}
           >
             <ImageIcon size={14} aria-hidden /> Add an image
+          </Button>
+          <Button variant="secondary" disabled={status !== 'ready'} onClick={() => addNode('video')}>
+            <Clapperboard size={14} aria-hidden /> Add a video
           </Button>
           <Button variant="secondary" onClick={() => setMediaOpen(true)}>
             <FolderOpen size={14} aria-hidden /> Media Browser

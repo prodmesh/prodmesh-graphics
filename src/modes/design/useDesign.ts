@@ -85,6 +85,8 @@ export type NodeFacts = {
   text?: { expr: string; family: string; weight: number; size: number; align: string }
   /** Present exactly when the node draws a picture. */
   image?: { asset_key: string; hash: string | null; fit: string }
+  /** Present exactly when the node plays a clip. */
+  video?: { field: string | null; fit: string; looping: boolean }
   /** The outline, when there is one: encoded straight RGBA plus width. */
   stroke?: { color: [number, number, number, number]; width: number }
   /** The drop shadow, when there is one. */

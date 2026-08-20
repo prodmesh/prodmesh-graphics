@@ -91,6 +91,62 @@ pub fn referenced_fields(expr: &str) -> Vec<String> {
 /// **False means removed from layout, not merely hidden** — which is what
 /// collapses a lower third to one line when there is no title. Total, like
 /// everything else here: an unknown field is treated as empty.
+/// Resolve field-driven media to concrete content addresses, in place.
+///
+/// An image or video node whose content names a `field` gets its `asset_key`
+/// REPLACED with the field's value — the Item's chosen hash — falling back to
+/// the field's sample so the designer previews something. After this pass the
+/// renderer's asset lookup needs no notion of fields: a key that starts with
+/// `blake3:` IS the address, and every `ImageSource` resolves it directly.
+///
+/// Called at ARM, by every path that arms — the browser designer, the playout
+/// node, the CLI harness — because a resolution done in two of three places is
+/// a graphic that previews and then does not play.
+pub fn resolve_media_fields(doc: &mut crate::doc::SceneDoc, data: &Data) {
+    fn value_for(doc_fields: &[crate::doc::Field], data: &Data, key: &str) -> Option<String> {
+        let v = data
+            .get(key)
+            .cloned()
+            .or_else(|| {
+                doc_fields
+                    .iter()
+                    .find(|f| f.key == key)
+                    .and_then(|f| f.sample.clone())
+            })
+            .unwrap_or_default();
+        if v.starts_with("blake3:") {
+            Some(v)
+        } else {
+            None
+        }
+    }
+    fn walk(n: &mut crate::doc::Node, fields: &[crate::doc::Field], data: &Data) {
+        match &mut n.content {
+            Some(crate::doc::Content::Image {
+                asset_key,
+                field: Some(k),
+                ..
+            })
+            | Some(crate::doc::Content::Video {
+                asset_key,
+                field: Some(k),
+                ..
+            }) => {
+                // An empty value leaves an unresolvable key, which the
+                // renderer reports as DEGRADED — the honest answer for an
+                // Item that has not picked its picture yet.
+                *asset_key = value_for(fields, data, k).unwrap_or_default();
+            }
+            _ => {}
+        }
+        for c in &mut n.children {
+            walk(c, fields, data);
+        }
+    }
+    let fields = doc.fields.clone();
+    walk(&mut doc.root, &fields, data);
+}
+
 pub fn visible(cond: &VisibleIf, data: &Data) -> bool {
     let raw = data.get(&cond.field).map(String::as_str).unwrap_or("");
     match &cond.op {
