@@ -443,3 +443,106 @@ test('a blank destination stages no template', async () => {
     'a blank destination alone pulls no template into the assignment',
   )
 })
+
+// ---------------------------------------------------------------------------
+// Revisions and "update Items" (the M5 revision UI's server half)
+// ---------------------------------------------------------------------------
+
+/** A later revision of the fixture template, inserted directly — the endpoint
+ *  under test reads manifests, never scene bytes, so the row is enough. */
+function insertRevision(rev, manifestPatch = {}) {
+  const m = { ...manifest(), template_rev: rev, ...manifestPatch }
+  const d = db.handle()
+  d.prepare(
+    `INSERT INTO template_revisions (template_rev, template_id, name, min_reader, manifest, published_at)
+     VALUES (?, ?, ?, ?, ?, ?)`,
+  ).run(rev, m.template_id, m.name, m.min_reader, JSON.stringify(m), Date.now())
+  d.prepare('UPDATE templates SET head_rev = ? WHERE id = ?').run(rev, m.template_id)
+  return m
+}
+
+test('update-items moves this template’s pins and leaves other templates’ alone', async () => {
+  const { m } = await publishFixture()
+  const made = await req('POST', '/api/items', {
+    template_id: m.template_id,
+    label: 'Pastor Dan',
+    data: { name: 'Pastor Dan Whitfield' },
+    destination: { output: 'lt', layer: 'Graphics' },
+  })
+  assert.equal(made.status, 201)
+
+  // A second destination pinned to a DIFFERENT template — the full-screen
+  // variant of the same words. Updating the lower third must not touch it.
+  const d = db.handle()
+  const otherRev = `blake3:${'a'.repeat(64)}`
+  d.prepare(`INSERT INTO templates (id, name, created_at, updated_at, head_rev) VALUES ('tpl-other', 'Full screen', 0, 0, ?)`).run(otherRev)
+  d.prepare(
+    `INSERT INTO template_revisions (template_rev, template_id, name, min_reader, manifest, published_at)
+     VALUES (?, 'tpl-other', 'Full screen', 1, ?, 0)`,
+  ).run(otherRev, JSON.stringify({ ...manifest(), template_id: 'tpl-other', template_rev: otherRev }))
+  d.prepare(
+    `INSERT INTO item_destinations (item_id, ordinal, node_id, output, layer, template_rev, mode, blank)
+     VALUES (?, 1, NULL, 'fs', 'Graphics', ?, 'on_request', 0)`,
+  ).run(made.json.id, otherRev)
+
+  const newRev = `blake3:${'b'.repeat(64)}`
+  insertRevision(newRev)
+
+  const r = await req('POST', `/api/templates/${m.template_id}/update-items`, {})
+  assert.equal(r.status, 200)
+  assert.equal(r.json.to, newRev)
+  assert.equal(r.json.updated.length, 1)
+  assert.equal(r.json.refused.length, 0)
+
+  const after = await req('GET', `/api/items/${made.json.id}`)
+  assert.equal(after.json.template_rev, newRev, 'the item follows this template forward')
+  const dests = Object.fromEntries(after.json.destinations.map((x) => [x.output, x.template_rev]))
+  assert.equal(dests.lt, newRev, 'this template’s destination moved')
+  assert.equal(dests.fs, otherRev, 'the other template’s destination did NOT — that is the whole point')
+})
+
+test('an item that cannot fill the new revision is refused by name and stays put', async () => {
+  const { m } = await publishFixture()
+  const made = await req('POST', '/api/items', {
+    template_id: m.template_id,
+    label: 'Pastor Dan',
+    data: { name: 'Pastor Dan Whitfield' },
+    destination: { output: 'lt', layer: 'Graphics' },
+  })
+
+  const newRev = `blake3:${'c'.repeat(64)}`
+  insertRevision(newRev, {
+    fields: [...manifest().fields, { key: 'campus', type: 'text', label: 'Campus', required: true }],
+  })
+
+  const r = await req('POST', `/api/templates/${m.template_id}/update-items`, {})
+  assert.equal(r.status, 200)
+  assert.equal(r.json.updated.length, 0)
+  assert.equal(r.json.refused.length, 1)
+  assert.match(r.json.refused[0].problem, /Campus is required/)
+
+  const after = await req('GET', `/api/items/${made.json.id}`)
+  assert.equal(after.json.template_rev, m.template_rev, 'refused means UNTOUCHED, still rendering')
+})
+
+test('the revisions listing carries manifests and who is pinned where', async () => {
+  const { m } = await publishFixture()
+  await req('POST', '/api/items', {
+    template_id: m.template_id,
+    label: 'Pastor Dan',
+    data: { name: 'Pastor Dan Whitfield' },
+    destination: { output: 'lt', layer: 'Graphics' },
+  })
+  const newRev = `blake3:${'d'.repeat(64)}`
+  insertRevision(newRev)
+
+  const r = await req('GET', `/api/templates/${m.template_id}/revisions`)
+  assert.equal(r.json.revisions.length, 2)
+  const head = r.json.revisions.find((x) => x.template_rev === newRev)
+  const old = r.json.revisions.find((x) => x.template_rev === m.template_rev)
+  // The manifest rides along so the client can diff without a server diff format.
+  assert.equal(head.manifest.fields.length, 2)
+  assert.equal(old.items.length, 1)
+  assert.equal(old.items[0].label, 'Pastor Dan')
+  assert.equal(head.items.length, 0, 'nobody is on head yet')
+})

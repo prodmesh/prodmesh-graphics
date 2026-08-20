@@ -297,6 +297,40 @@
   color: var(--pm-text-primary);
 }
 .mdb__name > span:first-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* ---- Revisions — history rows and the update dialog ----------------------- */
+.revs { display: flex; flex-direction: column; gap: 6px; }
+.revs__row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 11px;
+}
+.revs__rev { font-family: var(--pm-font-mono); color: var(--pm-text-secondary); }
+.revs__date { color: var(--pm-text-muted); }
+.revs__count { margin-left: auto; color: var(--pm-text-muted); font-size: 10px; }
+.revs__stale { margin: 2px 0 0; font-size: 11px; color: var(--pm-meter-hot); }
+.revs__group { display: flex; flex-direction: column; gap: 4px; margin-bottom: 12px; }
+.revs__items { margin: 0; font-size: 11px; color: var(--pm-text-secondary); }
+.revs__diff {
+  margin: 0;
+  padding-left: 16px;
+  font-size: 11px;
+  color: var(--pm-text-muted);
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.revs__result { display: flex; flex-direction: column; gap: 4px; margin-top: 8px; }
+.revs__ok { margin: 0; font-size: 11px; color: var(--pm-state-ready); }
+.revs__refused { margin: 0; font-size: 11px; color: var(--pm-meter-hot); }
+.revs__foot {
+  display: flex;
+  gap: 8px;
+  padding: 10px 16px;
+  border-top: 1px solid var(--pm-border-hairline);
+}
+.revs__foot > :first-child { flex: 1; }
+
 .mdb__meta {
   font-family: var(--pm-font-mono);
   font-size: 10px;

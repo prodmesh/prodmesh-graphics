@@ -51,12 +51,27 @@ router.get('/api/templates/:id', (req, res) => {
 })
 
 router.get('/api/templates/:id/revisions', (req, res) => {
-  const rows = handle()
+  const db = handle()
+  const pinned = db.prepare(
+    `SELECT DISTINCT id, label FROM items
+      WHERE template_rev = @rev
+         OR id IN (SELECT item_id FROM item_destinations WHERE template_rev = @rev)`,
+  )
+  const rows = db
     .prepare(
-      `SELECT template_rev, name, min_reader, published_at, published_by
+      `SELECT template_rev, name, min_reader, manifest, published_at, published_by
          FROM template_revisions WHERE template_id = ? ORDER BY published_at DESC`,
     )
     .all(req.params.id)
+    // The manifest rides along so a client can DIFF two revisions — fields,
+    // timelines, assets — without the server growing a diff format of its
+    // own. Items pinned here, by their own rev or by any destination's, are
+    // what "update Items" would move.
+    .map((r) => ({
+      ...r,
+      manifest: JSON.parse(r.manifest),
+      items: pinned.all({ rev: r.template_rev }),
+    }))
   res.json({ revisions: rows })
 })
 

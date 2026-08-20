@@ -247,3 +247,87 @@ router.delete('/api/items/:id', mayEdit, (req, res) => {
   reofferAll()
   res.status(204).end()
 })
+
+/**
+ * `POST /api/templates/:id/update-items` — move every Item pinned to an older
+ * revision of THIS template onto `to` (default: head).
+ *
+ * Lives in the items router because it is an item mutation wearing a template
+ * URL, and the validation it must reuse lives here.
+ *
+ * # Only this template's pins move
+ *
+ * An Item's destinations can pin DIFFERENT templates — the same words go to a
+ * lower third on lt, a full-screen variant on fs, a wall look on wall. Bumping
+ * every destination to `to` would quietly re-point the full-screen feed at the
+ * lower-third template; it validates (the fields are a subset) and renders the
+ * wrong graphic on Sunday. Exactly that mistake was made by hand, twice, in
+ * rehearsal — this endpoint exists so it cannot happen again.
+ *
+ * # Per-item verdicts, not all-or-nothing
+ *
+ * Twenty lyric slides update; the one that fills a field the new revision
+ * dropped is REFUSED with a sentence and stays pinned where it renders.
+ * Failing all twenty because of it would turn a safe operation into an
+ * either/or nobody needs; updating it anyway would break a graphic silently.
+ */
+router.post('/api/templates/:id/update-items', mayEdit, (req, res) => {
+  const db = handle()
+  const t = db.prepare('SELECT * FROM templates WHERE id = ?').get(req.params.id)
+  if (!t) return fail(res, 404, 'not_found', 'There is no template with that id.')
+  const to = req.body?.to ?? t.head_rev
+  const target = revision(db, to)
+  if (!target || target.template_id !== t.id) {
+    return fail(res, 422, 'validation_failed', 'That revision does not belong to this template.')
+  }
+
+  // Which template a pinned revision belongs to, cached — the loop below asks
+  // per destination.
+  const ownerOf = new Map()
+  const owner = (rev) => {
+    if (!ownerOf.has(rev)) {
+      ownerOf.set(
+        rev,
+        db.prepare('SELECT template_id FROM template_revisions WHERE template_rev = ?').get(rev)
+          ?.template_id ?? null,
+      )
+    }
+    return ownerOf.get(rev)
+  }
+
+  const candidates = db
+    .prepare(
+      `SELECT DISTINCT i.* FROM items i
+        LEFT JOIN item_destinations d ON d.item_id = i.id
+        WHERE (i.template_id = @tid AND i.template_rev != @to)
+           OR (d.template_rev != @to AND d.template_rev IN
+                (SELECT template_rev FROM template_revisions WHERE template_id = @tid))`,
+    )
+    .all({ tid: t.id, to })
+
+  const updated = []
+  const refused = []
+  for (const cur of candidates) {
+    const data = JSON.parse(cur.data)
+    const dests = destinationsOf(db, cur.id).map((d) => ({
+      ...d,
+      blank: d.blank ? 1 : 0,
+      template_rev: owner(d.template_rev) === t.id ? to : d.template_rev,
+    }))
+    const problems = validateDestinations(db, dests, data)
+    if (problems.length) {
+      refused.push({ id: cur.id, label: cur.label, problem: problems[0] })
+      continue
+    }
+    const rev = cur.template_id === t.id ? to : cur.template_rev
+    db.prepare('UPDATE items SET template_rev = ?, updated_at = ? WHERE id = ?').run(
+      rev,
+      Date.now(),
+      cur.id,
+    )
+    writeDestinations(db, cur.id, dests)
+    updated.push({ id: cur.id, label: cur.label })
+  }
+  if (updated.length) reofferAll()
+  res.json({ to, updated, refused })
+})

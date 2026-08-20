@@ -895,6 +895,197 @@ function FieldsEditor({
  */
 const shortRev = (rev: string) => rev.replace(/^[a-z0-9]+:/, '').slice(0, 8)
 
+// ---------------------------------------------------------------------------
+// Revisions — who is pinned where, and moving them forward with a real diff.
+
+type RevisionField = { key: string; label?: string; required?: boolean; type?: string }
+type Revision = {
+  template_rev: string
+  name: string
+  min_reader: number
+  manifest: {
+    name: string
+    min_reader: number
+    fields: RevisionField[]
+    timelines: string[]
+    assets?: string[]
+  }
+  published_at: number
+  published_by: string | null
+  items: { id: string; label: string }[]
+}
+
+/**
+ * What moving an Item from one revision to another actually changes, as
+ * sentences. Manifest-level on purpose: the manifest is the contract an Item
+ * binds against — fields, cue timelines, media — and the server validated it
+ * at publish. A pixel diff would need renders; this is the diff that predicts
+ * whether the Item still WORKS.
+ */
+function manifestDiff(from: Revision['manifest'], to: Revision['manifest']): string[] {
+  const lines: string[] = []
+  const ff = new Map(from.fields.map((f) => [f.key, f]))
+  const tf = new Map(to.fields.map((f) => [f.key, f]))
+  for (const [k, f] of tf) {
+    if (!ff.has(k)) lines.push(`Adds field “${f.label ?? k}”${f.required ? ' — required, so empty Items will be refused' : ''}`)
+  }
+  for (const [k, f] of ff) {
+    if (!tf.has(k)) lines.push(`Removes field “${f.label ?? k}” — its data stays on the Item but no longer renders`)
+  }
+  for (const [k, f] of tf) {
+    const o = ff.get(k)
+    if (o && (o.required !== f.required || (o.label ?? k) !== (f.label ?? k) || o.type !== f.type)) {
+      lines.push(`Changes field “${f.label ?? k}”`)
+    }
+  }
+  const ot = new Set(from.timelines)
+  const nt = new Set(to.timelines)
+  for (const t of to.timelines) if (!ot.has(t)) lines.push(`Adds timeline “${t}” — a new cue button in Show`)
+  for (const t of from.timelines) if (!nt.has(t)) lines.push(`Removes timeline “${t}” — its cue button goes away`)
+  const oa = new Set(from.assets ?? [])
+  const na = new Set(to.assets ?? [])
+  const addedA = [...na].filter((h) => !oa.has(h)).length
+  const droppedA = [...oa].filter((h) => !na.has(h)).length
+  if (addedA || droppedA) {
+    lines.push(`Changes media: ${addedA} added, ${droppedA} no longer used — nodes stage the difference`)
+  }
+  if (to.min_reader > from.min_reader) lines.push(`Needs newer nodes — reader ${to.min_reader} or later`)
+  if (to.name !== from.name) lines.push(`Renames the template to “${to.name}”`)
+  if (!lines.length) lines.push('Same fields, timelines, and media — only the look changed.')
+  return lines
+}
+
+const revDate = (ms: number) =>
+  new Date(ms).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })
+
+/**
+ * The revision history for the open template, and the one action it exists
+ * for: moving Items pinned to older revisions onto head — with the diff shown
+ * BEFORE the button, and per-Item refusals shown after, by name.
+ */
+function Revisions({ docId, headRev }: { docId: string; headRev: string }) {
+  const { data } = useQuery<{ revisions: Revision[] }>(keys.templateRevisions(docId))
+  const [open, setOpen] = useState(false)
+  const [busy, setBusy] = useState(false)
+  const [result, setResult] = useState<{ updated: { label: string }[]; refused: { label: string; problem: string }[] } | null>(null)
+
+  const revisions = data?.revisions ?? []
+  const head = revisions.find((r) => r.template_rev === headRev)
+  const stale = revisions.filter((r) => r.template_rev !== headRev && r.items.length > 0)
+  const staleItems = new Set(stale.flatMap((r) => r.items.map((i) => i.id)))
+  // An Item can appear under an old revision AND under head (one destination
+  // moved, another not); it still needs the update.
+  for (const i of head?.items ?? []) if (!stale.some((r) => r.items.some((x) => x.id === i.id))) staleItems.delete(i.id)
+
+  const update = async () => {
+    setBusy(true)
+    setResult(null)
+    try {
+      const r = await post<{ updated: { id: string; label: string }[]; refused: { id: string; label: string; problem: string }[] }>(
+        `/api/templates/${docId}/update-items`,
+        {},
+      )
+      setResult(r)
+      invalidate(keys.items())
+      invalidate(keys.templateRevisions(docId))
+    } catch (e) {
+      setResult({ updated: [], refused: [{ label: 'Update', problem: e instanceof ApiError ? e.message : String(e) }] })
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  if (!revisions.length) return null
+  return (
+    <>
+      <GroupHeader label="Revisions" trailing={`${revisions.length}`} />
+      <div className="revs">
+        {revisions.slice(0, 5).map((r) => (
+          <div key={r.template_rev} className="revs__row">
+            <span className="revs__rev">{shortRev(r.template_rev)}</span>
+            <span className="revs__date">{revDate(r.published_at)}</span>
+            {r.template_rev === headRev ? <Tag tone="raised" size={10}>newest</Tag> : null}
+            <span className="revs__count">
+              {r.items.length ? (r.items.length === 1 ? '1 Item' : `${r.items.length} Items`) : ''}
+            </span>
+          </div>
+        ))}
+        {revisions.length > 5 ? (
+          <p className="design-console__dim">and {revisions.length - 5} older</p>
+        ) : null}
+        {stale.length && head ? (
+          <>
+            <p className="revs__stale">
+              {staleItems.size === 1 ? '1 Item renders an older revision.' : `${staleItems.size} Items render older revisions.`}
+            </p>
+            <Button variant="secondary" block onClick={() => { setResult(null); setOpen(true) }}>
+              Update Items to the newest revision…
+            </Button>
+          </>
+        ) : null}
+      </div>
+
+      {open && head ? (
+        <div className="mdb" role="dialog" aria-modal="true" aria-label="Update Items" onClick={() => setOpen(false)}>
+          <div className="mdb__panel" onClick={(e) => e.stopPropagation()}>
+            <header className="mdb__header">
+              <span className="mdb__title">Update Items to {shortRev(headRev)}</span>
+            </header>
+            <div className="mdb__body">
+              {stale.map((r) => (
+                <div key={r.template_rev} className="revs__group">
+                  <GroupHeader
+                    label={`${shortRev(r.template_rev)} → ${shortRev(headRev)}`}
+                    trailing={r.items.length === 1 ? '1 Item' : `${r.items.length} Items`}
+                  />
+                  <p className="revs__items">
+                    {r.items.slice(0, 6).map((i) => i.label).join(' · ')}
+                    {r.items.length > 6 ? ` · and ${r.items.length - 6} more` : ''}
+                  </p>
+                  <ul className="revs__diff">
+                    {manifestDiff(r.manifest, head.manifest).map((line) => (
+                      <li key={line}>{line}</li>
+                    ))}
+                  </ul>
+                </div>
+              ))}
+              <p className="design-console__dim">
+                Anything on air keeps playing the revision it was taken with; the update applies
+                from the next take.
+              </p>
+              {result ? (
+                <div className="revs__result" role="status">
+                  {result.updated.length ? (
+                    <p className="revs__ok">
+                      {result.updated.length === 1
+                        ? 'Moved 1 Item.'
+                        : `Moved ${result.updated.length} Items.`}
+                    </p>
+                  ) : null}
+                  {result.refused.map((f) => (
+                    <p key={f.label} className="revs__refused">
+                      {f.label} was not moved: {f.problem}
+                    </p>
+                  ))}
+                  {!result.updated.length && !result.refused.length ? (
+                    <p className="revs__ok">Everything is already on the newest revision.</p>
+                  ) : null}
+                </div>
+              ) : null}
+            </div>
+            <footer className="revs__foot">
+              <Button variant="secondary" disabled={busy} onClick={() => void update()}>
+                {busy ? 'Updating…' : `Update ${staleItems.size === 1 ? '1 Item' : `${staleItems.size} Items`}`}
+              </Button>
+              <Button variant="quiet" onClick={() => setOpen(false)}>Close</Button>
+            </footer>
+          </div>
+        </div>
+      ) : null}
+    </>
+  )
+}
+
 /**
  * Start a template from nothing: a name and a canvas size, and the format
  * crate builds the document. The size presets are the outputs this system
@@ -1524,6 +1715,11 @@ export function Design() {
                   value={usedBy === 1 ? '1 Item' : `${usedBy} Items`}
                   tone={usedBy ? 'armed' : 'plain'}
                 />
+
+                {(() => {
+                  const headRev = docId ? list.find((t) => t.id === docId)?.head_rev : null
+                  return docId && headRev ? <Revisions docId={docId} headRev={headRev} /> : null
+                })()}
 
                 {selNode ? (
                   <SelectedNode
