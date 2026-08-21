@@ -275,7 +275,11 @@ dropped — one of three, the other two closed on 2026-08-20:
 
 **Ships**
 - Multi-screen destinations (the ProPresenter-subsumption groundwork from
-  `docs/VISION.md`).
+  `docs/VISION.md`). **Half of this already landed**: ADR 0018 gave an Item N
+  destinations, each with its own pinned revision and its own down-behaviour,
+  and Edit authors them. What is left is the **screen** — a named place,
+  configured once, that an Item targets instead of a raw node/output/layer
+  triple, so a wall that moves to another node does not rewrite every Item.
 - Timers and utility data sources — the P1 input types.
 - Export and import bundles, with the `include_fonts` licensing flag.
 - Licensing hooks.

@@ -5,7 +5,13 @@ change that makes something real — not afterwards.
 
 `docs/ROADMAP.md` is where we are going. This is where we are.
 
-**Last updated: 2026-08-17 · M0 and M1 complete · **M2 complete**: layers, playlists and a rundown, adoption, auth, SDI output, preview — and S8 gating it.**
+**Last updated: 2026-08-20 · M0–M4 complete · **M5 complete** except template variants, which is named and deferred rather than dropped (`docs/ROADMAP.md`). M6 begins.**
+
+M5's own bar is met: the parity corpus is 106 real templates and primitives, and
+native and browser agree across all of them. The three features the format
+described but nothing carried out — gradients, masks, hand-drawn easing curves —
+are carried out. What M5 leaves open is written down where the next person will
+look, not carried in someone's head.
 
 ---
 
