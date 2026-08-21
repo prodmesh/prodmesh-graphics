@@ -26,6 +26,7 @@ import { validateItemData } from '../manifest.js'
 import { newId } from '../ids.js'
 import { requirePermission } from '../auth.js'
 import { reofferAll } from '../nodeLink.js'
+import * as screens from '../screens.js'
 
 const mayEdit = requirePermission('graphics.rundown.edit')
 
@@ -56,13 +57,15 @@ function revision(db, rev) {
  * and an LED wall, each with its own template.
  */
 function destinationsOf(db, itemId) {
-  return db
+  const rows = db
     .prepare(
-      `SELECT ordinal, node_id, output, layer, template_rev, mode, blank
+      `SELECT ordinal, node_id, output, layer, template_rev, mode, blank, screen_id
          FROM item_destinations WHERE item_id = ? ORDER BY ordinal`,
     )
     .all(itemId)
-    .map((d) => ({ ...d, blank: !!d.blank }))
+  // Resolved, and carrying the screen's NAME: an Item's destination list should
+  // read "LED Wall" to whoever opens it, not `booth-1 / wall / Graphics`.
+  return screens.resolveAll(rows).map((d) => ({ ...d, blank: !!d.blank }))
 }
 
 /**
@@ -77,17 +80,29 @@ function normaliseDestinations(body, fallbackRev) {
     ? body.destinations
     : [{ ...body.destination, template_rev: body.template_rev }]
 
-  return list.map((d, i) => ({
-    ordinal: i,
-    node_id: d.node_id ?? d.node ?? null,
-    output: String(d.output ?? 'out-0'),
-    layer: String(d.layer ?? 'Lower Third'),
-    template_rev: d.template_rev ?? fallbackRev,
-    mode: d.mode === 'on_request' ? 'on_request' : 'auto',
-    // A blank destination renders nothing HERE, deliberately — clearing that
-    // feed is part of what taking this Item means.
-    blank: d.blank ? 1 : 0,
-  }))
+  return list.map((d, i) => {
+    // A destination may name a SCREEN instead of the wiring (ADR 0023). The
+    // triple is still written beside it: it is what resolution falls back to
+    // for a row orphaned by database surgery, so a graphic goes where it used
+    // to go rather than nowhere.
+    const screen = d.screen_id ? screens.get(d.screen_id) : null
+    return {
+      ordinal: i,
+      screen_id: screen ? screen.id : null,
+      node_id: screen ? (screen.node_id ?? null) : (d.node_id ?? d.node ?? null),
+      output: String(screen ? screen.output : (d.output ?? 'out-0')),
+      layer: String(screen ? screen.layer : (d.layer ?? 'Lower Third')),
+      // The screen supplies the DEFAULT treatment; the Item still pins the
+      // revision, or a publish would silently change every graphic that goes
+      // there. An explicit `template_rev` in the request still wins — that is
+      // how the revision UI moves an Item forward.
+      template_rev: d.template_rev ?? screens.defaultRevFor(d.screen_id) ?? fallbackRev,
+      mode: d.mode === 'on_request' ? 'on_request' : 'auto',
+      // A blank destination renders nothing HERE, deliberately — clearing that
+      // feed is part of what taking this Item means.
+      blank: d.blank ? 1 : 0,
+    }
+  })
 }
 
 /**
@@ -118,11 +133,11 @@ function validateDestinations(db, dests, data) {
 function writeDestinations(db, itemId, dests) {
   db.prepare('DELETE FROM item_destinations WHERE item_id = ?').run(itemId)
   const ins = db.prepare(
-    `INSERT INTO item_destinations (item_id, ordinal, node_id, output, layer, template_rev, mode, blank)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+    `INSERT INTO item_destinations (item_id, ordinal, node_id, output, layer, template_rev, mode, blank, screen_id)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   )
   for (const d of dests) {
-    ins.run(itemId, d.ordinal, d.node_id, d.output, d.layer, d.template_rev, d.mode, d.blank)
+    ins.run(itemId, d.ordinal, d.node_id, d.output, d.layer, d.template_rev, d.mode, d.blank, d.screen_id ?? null)
   }
 }
 

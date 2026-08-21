@@ -401,6 +401,41 @@ const MIGRATIONS = [
       INSERT INTO theme_hashes (hash, theme_id) SELECT head_hash, id FROM themes;
     `)
   },
+
+  // 13 — screens: a named place in the building (ADR 0023).
+  //
+  // The wiring moves out of every Item and into one row an operator can edit.
+  // `template_id`, deliberately NOT `template_rev`: the screen supplies the
+  // default treatment and the ITEM still pins the revision at save time, or a
+  // publish would silently change every graphic that goes there — which is the
+  // exact failure pinning exists to prevent.
+  //
+  // `item_destinations.screen_id` is added beside the existing triple rather
+  // than replacing it. The triple stays as the resolution FALLBACK for a row
+  // orphaned by database surgery, so a graphic goes where it used to go rather
+  // than nowhere; deleting a screen Items point at is refused in the route.
+  (d) => {
+    d.exec(`
+      CREATE TABLE screens (
+        id          TEXT PRIMARY KEY,
+        name        TEXT NOT NULL,
+        -- NULL means "whichever node has this output", the same answer
+        -- item_destinations already gives and the honest one with one node.
+        node_id     TEXT,
+        output      TEXT NOT NULL,
+        layer       TEXT NOT NULL,
+        -- The default treatment for graphics going here. NULL means the Item's
+        -- own template, which is what every existing destination does today.
+        template_id TEXT REFERENCES templates(id),
+        created_at  INTEGER NOT NULL,
+        updated_at  INTEGER NOT NULL
+      );
+      CREATE UNIQUE INDEX screens_by_name ON screens(name);
+
+      ALTER TABLE item_destinations ADD COLUMN screen_id TEXT REFERENCES screens(id);
+      CREATE INDEX item_destinations_by_screen ON item_destinations(screen_id);
+    `)
+  },
 ]
 
 /**

@@ -107,3 +107,24 @@
   font-size: 12px;
   padding: 0 10px;
 }
+
+/* ---- Screens ---------------------------------------------------------------
+   The named places graphics go (ADR 0023) — the first thing in Configure that
+   is about the room rather than about a machine. */
+
+.cfg-console__note {
+  margin: 0 0 8px;
+  font-size: 11px;
+  line-height: 1.5;
+  color: var(--pm-text-muted);
+}
+.cfg-console__screen { padding: 8px 0; box-shadow: var(--pm-hairline-bottom, none); }
+.cfg-console__screen-row {
+  display: flex;
+  align-items: flex-end;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+.cfg-console__screen-row > .c-formgroup { min-width: 140px; }
+.cfg-console__screen-add { display: flex; align-items: center; gap: 8px; padding-top: 8px; }
+.cfg-console__screen-add input { width: 200px; }

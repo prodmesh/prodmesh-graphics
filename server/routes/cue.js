@@ -24,6 +24,7 @@
 
 import express from 'express'
 import { handle } from '../db.js'
+import * as screens from '../screens.js'
 import * as link from '../nodeLink.js'
 import { append } from '../cueLog.js'
 import { requirePermission } from '../auth.js'
@@ -62,12 +63,17 @@ function destinationsFor(itemId, nodeId) {
       .all(nodeId ?? '')
       .map((o) => o.output_id),
   )
-  return handle()
+  const rows = handle()
     .prepare(
-      `SELECT node_id, output, layer, template_rev, mode, blank
+      `SELECT node_id, output, layer, template_rev, mode, blank, screen_id
          FROM item_destinations WHERE item_id = ? ORDER BY ordinal`,
     )
     .all(itemId)
+  // Through the screen, if it names one — the same resolution the assignment
+  // build does, from the same function, because staging a graphic for one place
+  // and firing it at another is the failure two copies of this would produce.
+  return screens
+    .resolveAll(rows)
     .filter((d) => !d.node_id || !nodeId || d.node_id === nodeId)
     // An unconfigured node has no rows in `outputs` yet and still has to work,
     // so an empty set means "cannot rule anything out" rather than "nothing".

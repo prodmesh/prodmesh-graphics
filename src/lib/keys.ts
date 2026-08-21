@@ -28,6 +28,8 @@ export const keys = {
   ingestJob: (id: string) => `/api/ingest/${id}`,
 
   nodes: () => '/api/nodes',
+  /** The named places graphics go (ADR 0023). */
+  screens: () => '/api/screens',
   node: (id: string) => `/api/nodes/${id}`,
   outputs: (nodeId: string) => `/api/nodes/${nodeId}/outputs`,
 

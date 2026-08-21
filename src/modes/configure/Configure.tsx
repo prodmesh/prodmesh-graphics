@@ -21,10 +21,10 @@
  */
 
 import { useCallback, useState } from 'react'
-import { Check, ChevronDown, ChevronUp, Plus, X } from 'lucide-react'
+import { Check, ChevronDown, ChevronUp, Plus, Trash2, X } from 'lucide-react'
 import { useQuery, invalidate } from '../../lib/useQuery'
 import { keys } from '../../lib/keys'
-import { ApiError, post, put } from '../../lib/api'
+import { ApiError, del, patch, post, put } from '../../lib/api'
 import {
   Button,
   FormGroup,
@@ -60,6 +60,16 @@ type Capabilities = {
 
 type FullNode = NodeSummary & { adopted: boolean; capabilities: Capabilities | null }
 
+/** A named place graphics go (ADR 0023). */
+type Screen = {
+  id: string
+  name: string
+  node_id: string | null
+  output: string
+  layer: string
+  template_id: string | null
+}
+
 export function Configure() {
   const { data } = useQuery<{ nodes: FullNode[] }>(keys.nodes())
   const nodes = data?.nodes ?? []
@@ -89,6 +99,8 @@ export function Configure() {
           </section>
         ) : null}
 
+        <Screens nodes={adopted} />
+
         <section className="cfg-console__section" aria-label="Playout nodes">
           <GroupHeader label="Playout nodes" />
           {adopted.length === 0 ? (
@@ -106,6 +118,166 @@ export function Configure() {
         </section>
       </div>
     </div>
+  )
+}
+
+/**
+ * Screens — the named places graphics go (ADR 0023).
+ *
+ * The first thing in Configure that is about the ROOM rather than about a
+ * machine. Naming a place here means an Item can say "LED Wall" instead of
+ * `booth-1 / wall / Graphics`, and moving that wall later is one edit here
+ * rather than one per Item.
+ */
+function Screens({ nodes }: { nodes: FullNode[] }) {
+  const { data } = useQuery<{ screens: Screen[] }>(keys.screens())
+  const screens = data?.screens ?? []
+  const { data: templateData } = useQuery<{ templates: { id: string; name: string }[] }>(
+    keys.templates(),
+  )
+  const templates = templateData?.templates ?? []
+  const [name, setName] = useState('')
+  const [problem, setProblem] = useState<string | null>(null)
+
+  // Every output any adopted node REPORTS — the node's own account of itself,
+  // never our idea of it — so a screen is built from what the plant actually
+  // has rather than from something typed.
+  const outputs = nodes.flatMap((n) =>
+    (n.state?.outputs ?? []).map((o) => ({
+      node_id: n.node_id,
+      // The node's NAME for the label — "booth-1", not a 26-character id. The
+      // whole point of a screen is that it reads as a place.
+      node_name: n.name || n.node_id,
+      output_id: o.id,
+      layers: o.layers.map((l) => l.name),
+    })),
+  )
+
+  const run = async (fn: () => Promise<unknown>) => {
+    setProblem(null)
+    try {
+      await fn()
+      invalidate(keys.screens())
+    } catch (e) {
+      setProblem(e instanceof Error ? e.message : String(e))
+    }
+  }
+
+  return (
+    <section className="cfg-console__section" aria-label="Screens">
+      <GroupHeader label="Screens" trailing={`${screens.length}`} />
+      <p className="cfg-console__note">
+        A place in the building, named once. Items go to a screen rather than to an output, so
+        moving one is a single edit here.
+      </p>
+
+      {screens.map((s) => (
+        <div key={s.id} className="cfg-console__screen">
+          <div className="cfg-console__screen-row">
+            <FormGroup label="Name">
+              <input
+                key={`n:${s.id}:${s.name}`}
+                defaultValue={s.name}
+                aria-label={`Screen ${s.name} name`}
+                onBlur={(e) => {
+                  if (e.target.value.trim() && e.target.value !== s.name) {
+                    void run(() => patch(`/api/screens/${s.id}`, { name: e.target.value.trim() }))
+                  }
+                }}
+              />
+            </FormGroup>
+            <FormGroup label="Output">
+              <select
+                value={`${s.node_id ?? ''}|${s.output}`}
+                aria-label={`Screen ${s.name} output`}
+                onChange={(e) => {
+                  const [node_id, output] = e.target.value.split('|')
+                  void run(() => patch(`/api/screens/${s.id}`, { node_id: node_id || null, output }))
+                }}
+              >
+                {outputs.map((o) => (
+                  <option key={`${o.node_id}|${o.output_id}`} value={`${o.node_id}|${o.output_id}`}>
+                    {o.output_id} · {o.node_name}
+                  </option>
+                ))}
+                {!outputs.some((o) => o.output_id === s.output) ? (
+                  <option value={`${s.node_id ?? ''}|${s.output}`}>
+                    {s.output} — no node reports this
+                  </option>
+                ) : null}
+              </select>
+            </FormGroup>
+            <FormGroup label="Layer">
+              <select
+                value={s.layer}
+                aria-label={`Screen ${s.name} layer`}
+                onChange={(e) => void run(() => patch(`/api/screens/${s.id}`, { layer: e.target.value }))}
+              >
+                {(outputs.find((o) => o.output_id === s.output)?.layers ?? [s.layer]).map((l) => (
+                  <option key={l} value={l}>{l}</option>
+                ))}
+              </select>
+            </FormGroup>
+            <FormGroup label="Usually rendered by">
+              {/* The TEMPLATE, never a revision: the Item pins the revision when
+                  it is saved, or publishing would silently change every graphic
+                  that goes here (ADR 0023). */}
+              <select
+                value={s.template_id ?? ''}
+                aria-label={`Screen ${s.name} template`}
+                onChange={(e) =>
+                  void run(() =>
+                    patch(`/api/screens/${s.id}`, { template_id: e.target.value || null }),
+                  )
+                }
+              >
+                <option value="">The Item&rsquo;s own template</option>
+                {templates.map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}
+              </select>
+            </FormGroup>
+            <button
+              type="button"
+              className="edit-console__iconbtn"
+              aria-label={`Delete screen ${s.name}`}
+              onClick={() => void run(() => del(`/api/screens/${s.id}`))}
+            >
+              <Trash2 size={13} aria-hidden />
+            </button>
+          </div>
+        </div>
+      ))}
+
+      {problem ? <p className="tl__problem" role="alert">{problem}</p> : null}
+
+      <div className="cfg-console__screen-add">
+        <input
+          placeholder="name, e.g. LED Wall"
+          aria-label="New screen name"
+          value={name}
+          onChange={(e) => setName(e.target.value)}
+        />
+        <button
+          type="button"
+          className="edit-console__addbtn"
+          disabled={!name.trim() || outputs.length === 0}
+          title={outputs.length === 0 ? 'Adopt a node first — a screen is one of its outputs' : undefined}
+          onClick={() => {
+            const first = outputs[0]!
+            void run(async () => {
+              await post(keys.screens(), {
+                name: name.trim(),
+                node_id: first.node_id,
+                output: first.output_id,
+                layer: first.layers[0] ?? 'Graphics',
+              })
+              setName('')
+            })
+          }}
+        >
+          <Plus size={12} aria-hidden /> Add a screen
+        </button>
+      </div>
+    </section>
   )
 }
 

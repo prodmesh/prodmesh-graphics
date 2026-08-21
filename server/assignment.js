@@ -23,6 +23,7 @@
 
 import { createHash } from 'node:crypto'
 import { handle } from './db.js'
+import * as screens from './screens.js'
 
 /**
  * The stack a node gets before anyone has configured it.
@@ -120,12 +121,14 @@ export function build({ nodeId = null, outputId = 'out-0', mode = '1920x1080', l
   // naming no node belongs to whoever has that output, which with one node is
   // every destination and is the honest answer before Configure can name them.
   const outputIds = new Set(outputs.map((o) => o.id))
-  const allDests = db
-    .prepare(
-      `SELECT item_id, ordinal, node_id, output, layer, template_rev, mode, blank
-         FROM item_destinations ORDER BY item_id, ordinal`,
-    )
-    .all()
+  const allDests = screens.resolveAll(
+    db
+      .prepare(
+        `SELECT item_id, ordinal, node_id, output, layer, template_rev, mode, blank, screen_id
+           FROM item_destinations ORDER BY item_id, ordinal`,
+      )
+      .all(),
+  )
   const mine = new Map()
   for (const d of allDests) {
     if (d.node_id && nodeId && d.node_id !== nodeId) continue

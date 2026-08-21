@@ -603,11 +603,13 @@ function Destinations({
   value,
   templates,
   outputs,
+  screens,
   onChange,
 }: {
   value: DestinationDraft[]
   templates: TemplateSummary[]
   outputs: { output_id: string; layers: string[] }[]
+  screens: Screen[]
   onChange: (next: DestinationDraft[]) => void
 }) {
   const set = (i: number, patchd: Partial<DestinationDraft>) =>
@@ -640,25 +642,65 @@ function Destinations({
         return (
           <div key={i} className="edit-console__dest-card">
             <div className="edit-console__dest-row">
-              <FormGroup label="Output">
-                <select value={d.output} onChange={(e) => set(i, { output: e.target.value, layer: '' })}>
-                  <option value="">Whichever node has it</option>
-                  {outputs.map((o) => (
-                    <option key={o.output_id} value={o.output_id}>{o.output_id}</option>
-                  ))}
+              <FormGroup label="Goes to">
+                {/* The place, not the plumbing (ADR 0023). Picking a screen
+                    means this Item follows it: moving the wall to another node
+                    is one edit in Configure, not one per Item. */}
+                <select
+                  value={d.screen_id}
+                  aria-label={`Destination ${i + 1} screen`}
+                  onChange={(e) => {
+                    const sc = screens.find((s) => s.id === e.target.value)
+                    set(i, {
+                      screen_id: e.target.value,
+                      // A screen with a treatment supplies it; the Item can
+                      // still override, which is why this sets rather than
+                      // locks.
+                      ...(sc?.template_id ? { template_id: sc.template_id } : {}),
+                    })
+                  }}
+                >
+                  <option value="">An output on this node</option>
+                  {screens.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
                 </select>
               </FormGroup>
-              <FormGroup label="Layer">
-                {/* By NAME. An index silently re-points at a different graphic
-                    the moment someone reorders the stack. */}
-                <select value={d.layer} onChange={(e) => set(i, { layer: e.target.value })}>
-                  <option value="">Choose a layer</option>
-                  {layers.map((l) => <option key={l} value={l}>{l}</option>)}
-                  {d.layer && !layers.includes(d.layer) ? (
-                    <option value={d.layer}>{d.layer} (not on this output)</option>
-                  ) : null}
-                </select>
-              </FormGroup>
+              {d.screen_id ? (
+                <FormGroup label="Which is">
+                  {/* Readable, not editable: the wiring belongs to the screen.
+                      Shown anyway, because an operator debugging a feed needs
+                      to see where it actually goes. */}
+                  <p className="edit-console__dim">
+                    {(() => {
+                      const sc = screens.find((s) => s.id === d.screen_id)
+                      if (!sc) return 'a screen this server no longer has'
+                      const where = sc.node_name ? ` on ${sc.node_name}` : ''
+                      return `${sc.output} · ${sc.layer}${where}`
+                    })()}
+                  </p>
+                </FormGroup>
+              ) : (
+                <>
+                  <FormGroup label="Output">
+                    <select value={d.output} onChange={(e) => set(i, { output: e.target.value, layer: '' })}>
+                      <option value="">Whichever node has it</option>
+                      {outputs.map((o) => (
+                        <option key={o.output_id} value={o.output_id}>{o.output_id}</option>
+                      ))}
+                    </select>
+                  </FormGroup>
+                  <FormGroup label="Layer">
+                    {/* By NAME. An index silently re-points at a different graphic
+                        the moment someone reorders the stack. */}
+                    <select value={d.layer} onChange={(e) => set(i, { layer: e.target.value })}>
+                      <option value="">Choose a layer</option>
+                      {layers.map((l) => <option key={l} value={l}>{l}</option>)}
+                      {d.layer && !layers.includes(d.layer) ? (
+                        <option value={d.layer}>{d.layer} (not on this output)</option>
+                      ) : null}
+                    </select>
+                  </FormGroup>
+                </>
+              )}
               {value.length > 1 ? (
                 <button
                   type="button"
@@ -718,6 +760,8 @@ function Destinations({
 }
 
 type DestinationDraft = {
+  /** A named place (ADR 0023). Empty means the wiring below is the answer. */
+  screen_id: string
   output: string
   layer: string
   template_id: string
@@ -725,7 +769,20 @@ type DestinationDraft = {
   blank: boolean
 }
 
+/** A place in the building, as Configure named it. */
+type Screen = {
+  id: string
+  name: string
+  node_id: string | null
+  /** The node's own name, filled in here — an operator should never meet an id. */
+  node_name?: string | null
+  output: string
+  layer: string
+  template_id: string | null
+}
+
 const blankDest = (templates: TemplateSummary[]): DestinationDraft => ({
+  screen_id: '',
   output: '',
   layer: 'Lower Third',
   template_id: templates[0]?.id ?? '',
@@ -751,6 +808,7 @@ function ItemEditor({
     const existing = item?.destinations ?? []
     if (existing.length) {
       return existing.map((d) => ({
+        screen_id: d.screen_id ?? '',
         output: d.output ?? '',
         layer: d.layer ?? '',
         template_id:
@@ -763,6 +821,7 @@ function ItemEditor({
       }))
     }
     return [{
+      screen_id: '',
       output: item?.destination?.output ?? '',
       layer: item?.destination?.layer ?? 'Lower Third',
       template_id: item?.template_id ?? templates[0]?.id ?? '',
@@ -796,12 +855,21 @@ function ItemEditor({
   // typed, because a layer name that does not exist on the output is a cue the
   // node will refuse — and finding that out at the take is the whole failure
   // this list prevents.
-  const { data: nodes } = useQuery<{ nodes: { node_id: string }[] }>(keys.nodes())
+  const { data: nodes } = useQuery<{ nodes: { node_id: string; name?: string }[] }>(keys.nodes())
   const nodeId = nodes?.nodes?.[0]?.node_id ?? null
   const { data: outs } = useQuery<{ outputs: { output_id: string; layers: string[] }[] }>(
     nodeId ? keys.outputs(nodeId) : null,
   )
   const outputs = outs?.outputs ?? []
+  // The places graphics go (ADR 0023). An install with none configured still
+  // works: the destination editor falls back to naming an output directly.
+  const { data: screenData } = useQuery<{ screens: Screen[] }>(keys.screens())
+  // Carrying the node's NAME, because a destination card that says
+  // "on C7A9A9ACFB4CACE6F520D7AB0B" has given up on being read.
+  const screens = (screenData?.screens ?? []).map((s) => ({
+    ...s,
+    node_name: nodes?.nodes?.find((n) => n.node_id === s.node_id)?.name ?? s.node_id,
+  }))
 
   const [problems, setProblems] = useState<string[]>([])
   const [saving, setSaving] = useState(false)
@@ -830,8 +898,11 @@ function ItemEditor({
         // it was built against — publishing a new one must not silently change
         // what an existing Item renders.
         destinations: dests.map((d) => ({
-          output: d.output || undefined,
-          layer: d.layer || undefined,
+          // A screen answers where it goes; the server resolves it, and the
+          // wiring it resolves to is written beside it as the fallback.
+          screen_id: d.screen_id || undefined,
+          output: d.screen_id ? undefined : d.output || undefined,
+          layer: d.screen_id ? undefined : d.layer || undefined,
           template_rev: templates.find((t) => t.id === d.template_id)?.head_rev ?? undefined,
           mode: d.mode,
           blank: d.blank,
@@ -881,6 +952,7 @@ function ItemEditor({
         value={dests}
         templates={templates}
         outputs={outputs}
+        screens={screens}
         onChange={setDests}
       />
 

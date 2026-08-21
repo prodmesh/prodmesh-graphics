@@ -274,12 +274,12 @@ dropped — one of three, the other two closed on 2026-08-20:
 ## M6 — Productization seams
 
 **Ships**
-- Multi-screen destinations (the ProPresenter-subsumption groundwork from
-  `docs/VISION.md`). **Half of this already landed**: ADR 0018 gave an Item N
-  destinations, each with its own pinned revision and its own down-behaviour,
-  and Edit authors them. What is left is the **screen** — a named place,
+- ~~Multi-screen destinations~~ **done 2026-08-21.** ADR 0018 gave an Item N
+  destinations; ADR 0023 gave those destinations a **screen** — a named place,
   configured once, that an Item targets instead of a raw node/output/layer
-  triple, so a wall that moves to another node does not rewrite every Item.
+  triple. Moving a wall to another node is one edit in Configure and rewrites
+  no Items. The screen supplies the default treatment and the Item still pins
+  the revision, so a publish is not a live change to everything on that screen.
 - Timers and utility data sources — the P1 input types.
 - Export and import bundles, with the `include_fonts` licensing flag.
 - Licensing hooks.

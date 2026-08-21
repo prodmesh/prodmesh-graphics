@@ -172,7 +172,10 @@ async function publishFixture() {
 
 beforeEach(() => {
   const d = db.handle()
-  d.exec('DELETE FROM items; DELETE FROM templates; DELETE FROM template_revisions;')
+  // Order matters, and the foreign keys are the point: destinations cascade
+  // from items, screens are referenced BY destinations and reference templates
+  // themselves. Items, then screens, then templates.
+  d.exec('DELETE FROM items; DELETE FROM screens; DELETE FROM templates; DELETE FROM template_revisions;')
 })
 
 test('publishing stores the scene opaquely and the manifest as the record', async () => {
@@ -267,6 +270,135 @@ test('an image field must point at an asset the server actually holds', async ()
     /does not have/,
   )
   assert.deepEqual(manifestMod.validateItemData(m, { photo: absent }, { hasAsset: () => true }), [])
+})
+
+// ---------------------------------------------------------------------------
+// Screens (ADR 0023)
+//
+// A named place in the building. The point of every test here is that the
+// wiring lives in ONE row: moving a wall must not mean editing every Item, and
+// the screen supplying a treatment must not mean a publish silently changing
+// what is already on air.
+// ---------------------------------------------------------------------------
+
+async function makeScreen(patch = {}) {
+  const r = await req('POST', '/api/screens', {
+    name: 'LED Wall',
+    output: 'wall',
+    layer: 'Graphics',
+    ...patch,
+  })
+  assert.equal(r.status, 201, JSON.stringify(r.json))
+  return r.json
+}
+
+test('an Item can name a screen instead of the wiring, and reads back as the place', async () => {
+  const { m } = await publishFixture()
+  const screen = await makeScreen()
+  const created = await req('POST', '/api/items', {
+    label: 'Verse',
+    template_id: m.template_id,
+    data: { name: 'Pastor Dan', title: 'Lead Pastor' },
+    destinations: [{ screen_id: screen.id }],
+  })
+  assert.equal(created.status, 201, JSON.stringify(created.json))
+
+  const got = await req('GET', `/api/items/${created.json.id}`)
+  const d = got.json.destinations[0]
+  assert.equal(d.screen_id, screen.id)
+  assert.equal(d.screen_name, 'LED Wall', 'an operator reads the place, not the plumbing')
+  assert.equal(d.output, 'wall')
+  assert.equal(d.layer, 'Graphics')
+})
+
+test('moving a screen moves every Item that points at it, with no Item edited', async () => {
+  const { m } = await publishFixture()
+  const screen = await makeScreen({ name: 'Moving Wall' })
+  const created = await req('POST', '/api/items', {
+    label: 'Verse',
+    template_id: m.template_id,
+    data: { name: 'Pastor Dan', title: 'Lead Pastor' },
+    destinations: [{ screen_id: screen.id }],
+  })
+
+  // The wall moves to another node and another output. One edit.
+  const moved = await req('PATCH', `/api/screens/${screen.id}`, {
+    node_id: 'booth-2',
+    output: 'sdi-2',
+  })
+  assert.equal(moved.status, 200, JSON.stringify(moved.json))
+
+  const got = await req('GET', `/api/items/${created.json.id}`)
+  const d = got.json.destinations[0]
+  assert.equal(d.output, 'sdi-2', 'the Item follows the screen')
+  assert.equal(d.node_id, 'booth-2')
+})
+
+test('a screen supplies the default treatment, and the Item still PINS the revision', async () => {
+  const { m } = await publishFixture()
+  const first = m.template_rev
+  const screen = await makeScreen({ name: 'Treated Wall', template_id: m.template_id })
+
+  const created = await req('POST', '/api/items', {
+    label: 'Verse',
+    template_id: m.template_id,
+    data: { name: 'Pastor Dan', title: 'Lead Pastor' },
+    destinations: [{ screen_id: screen.id }],
+  })
+  assert.equal(created.json.destinations[0].template_rev, first, 'pinned from the screen’s template')
+
+  // Publishing a new revision of that template must NOT change what is already
+  // on air — the whole reason a screen names a template and not a revision.
+  const next = insertRevision('blake3:' + 'e'.repeat(64))
+  assert.notEqual(next.template_rev, first)
+  const got = await req('GET', `/api/items/${created.json.id}`)
+  assert.equal(
+    got.json.destinations[0].template_rev,
+    first,
+    'a publish is not a live change to every graphic on that screen',
+  )
+})
+
+test('deleting a screen Items point at is refused, and the Items are named', async () => {
+  const { m } = await publishFixture()
+  const screen = await makeScreen({ name: 'Busy Wall' })
+  await req('POST', '/api/items', {
+    label: 'Announcement',
+    template_id: m.template_id,
+    data: { name: 'Pastor Dan', title: 'Lead Pastor' },
+    destinations: [{ screen_id: screen.id }],
+  })
+
+  const gone = await req('DELETE', `/api/screens/${screen.id}`)
+  assert.equal(gone.status, 409)
+  assert.match(gone.json.label, /Announcement/, 'the refusal names what is in the way')
+  // And it reads as English. "1 Item go" is the kind of thing that makes an
+  // operator trust the rest of the sentence less.
+  assert.match(gone.json.label, /goes\./, `singular verb: ${gone.json.label}`)
+
+  // And an unused one goes without argument.
+  const spare = await makeScreen({ name: 'Spare Wall' })
+  assert.equal((await req('DELETE', `/api/screens/${spare.id}`)).status, 204)
+})
+
+test('two screens cannot share a name — it is what an operator picks from a list', async () => {
+  await makeScreen({ name: 'Lobby' })
+  const again = await req('POST', '/api/screens', { name: 'Lobby', output: 'x', layer: 'y' })
+  assert.equal(again.status, 409)
+})
+
+test('the wiring stays legal: a destination with no screen still works', async () => {
+  const { m } = await publishFixture()
+  const created = await req('POST', '/api/items', {
+    label: 'Direct',
+    template_id: m.template_id,
+    data: { name: 'Pastor Dan', title: 'Lead Pastor' },
+    destinations: [{ output: 'out-0', layer: 'Lower Third' }],
+  })
+  assert.equal(created.status, 201, JSON.stringify(created.json))
+  const d = (await req('GET', `/api/items/${created.json.id}`)).json.destinations[0]
+  assert.equal(d.screen_id, null)
+  assert.equal(d.output, 'out-0')
 })
 
 // ---------------------------------------------------------------------------

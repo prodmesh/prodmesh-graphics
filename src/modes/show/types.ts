@@ -21,6 +21,10 @@ export type ItemDestination = {
   node_id: string | null
   output: string
   layer: string
+  /** The named place this resolved through, when it named one (ADR 0023). */
+  screen_id?: string | null
+  /** The screen's name, so a destination list reads as places not plumbing. */
+  screen_name?: string | null
   template_rev: string
   /** `auto` fires with the take; `on_request` waits to be asked for. */
   mode: string
