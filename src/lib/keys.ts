@@ -30,6 +30,8 @@ export const keys = {
   nodes: () => '/api/nodes',
   /** The named places graphics go (ADR 0023). */
   screens: () => '/api/screens',
+  users: () => '/api/users',
+  stations: () => '/api/stations',
   node: (id: string) => `/api/nodes/${id}`,
   outputs: (nodeId: string) => `/api/nodes/${nodeId}/outputs`,
 

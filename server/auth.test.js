@@ -71,6 +71,28 @@ test('creating the first user closes it', async () => {
   assert.match(r.json.label, /Sign in/)
 })
 
+test('the FIRST user gets the wildcard, or securing the server locks it', async () => {
+  // Creating the first user turns enforcement on for good. A first user with
+  // no group would turn it on and hold nothing — unable to create a group,
+  // grant a permission, or add anybody else, with no way back that does not
+  // involve a text editor and the database file.
+  const first = store.createUser({ username: 'dan', pin: '1234' })
+  assert.equal(first.granted_admin, true, 'and it says so rather than being a surprise')
+  assert.ok(store.permissionsOf(first.id).has('graphics.users.manage'))
+
+  // The SECOND user gets exactly what they were given, which is nothing.
+  const second = store.createUser({ username: 'sam', pin: '4321' })
+  assert.equal(second.granted_admin, false)
+  assert.equal(store.permissionsOf(second.id).size, 0)
+
+  // And a first user who WAS given a group keeps only that group.
+  db._reset()
+  const g = store.createGroup('Operators', ['graphics.operate'])
+  const only = store.createUser({ username: 'kim', pin: '9876', groups: [g.id] })
+  assert.equal(only.granted_admin, false)
+  assert.equal(store.permissionsOf(only.id).has('graphics.users.manage'), false)
+})
+
 test('a logged-in user without the permission gets 403 and is told which', async () => {
   const g = store.createGroup('Operators', ['graphics.operate'])
   store.createUser({ username: 'sam', pin: '4321', groups: [g.id] })

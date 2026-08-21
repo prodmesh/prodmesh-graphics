@@ -322,6 +322,11 @@ function onHello(ws, hello) {
   // The address the node dialled us FROM, which is the address a browser on
   // the same network can reach it at.
   s.address = remoteAddressOf(ws)
+  // Reported, not assumed. A node started with --api-port elsewhere used to be
+  // unreachable from anything the server drew, and the preview link pointed at
+  // a port that might be switched off.
+  s.apiPort = hello.api_port ?? 8520
+  s.previewPort = hello.preview_port ?? PREVIEW_PORT
   s.bootId = hello.boot_id
   s.name = hello.name || s.nodeId
   s.version = hello.version
@@ -629,9 +634,19 @@ export function list() {
     last_seen: s.lastSeen,
     capabilities: s.capabilities,
     state: s.state,
+    // The address the node dialled us FROM, shown plainly. It used to exist
+    // only inside `preview_url`, which meant an operator debugging a node
+    // could not read its IP off the screen it was already looking at.
+    address: s.address ?? null,
+    api_port: s.apiPort ?? null,
     // Null until the node has connected at least once — there is nowhere to
-    // point at before then.
-    preview_url: s.address ? `http://${s.address}:${PREVIEW_PORT}/` : null,
+    // point at before then. Built from the port the NODE reported, so a
+    // preview that was switched off does not get a link that 404s.
+    preview_url:
+      s.address && s.previewPort ? `http://${s.address}:${s.previewPort}/` : null,
+    // The surface that still works when THIS link does not (ADR 0014) — which
+    // is exactly when somebody needs it.
+    status_url: s.address && s.apiPort ? `http://${s.address}:${s.apiPort}/status` : null,
   }))
 }
 

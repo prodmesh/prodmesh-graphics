@@ -77,10 +77,31 @@ export function createGroup(name, permissions, id = newId()) {
   return { id, name, permissions }
 }
 
+/**
+ * Create a user.
+ *
+ * **The first user gets the wildcard**, and that is a safety rule rather than a
+ * convenience. Creating the first user turns enforcement on for good; a first
+ * user with no group would turn it on and hold nothing — unable to create a
+ * group, grant a permission, or add anybody else. The server would be locked
+ * out of its own administration by the act of being secured, with no way back
+ * that does not involve a text editor and the database file.
+ *
+ * So the account that turns permissions on is the account that can still
+ * administer them. Every appliance's first run works this way, and the caller
+ * is told it happened rather than left to discover it.
+ */
 export function createUser({ username, pin, groups = [], display_name = null }) {
   const db = handle()
   const { salt, hash } = hashPin(pin)
   const id = newId()
+  const first = unconfigured()
+  let grantedAdmin = false
+  if (first && groups.length === 0) {
+    const existing = db.prepare("SELECT id FROM groups WHERE name = 'Administrators'").get()
+    groups = [existing?.id ?? createGroup('Administrators', ['*']).id]
+    grantedAdmin = true
+  }
   db.transaction(() => {
     db.prepare(
       `INSERT INTO users (id, username, display_name, pin_salt, pin_hash, created_at)
@@ -89,7 +110,7 @@ export function createUser({ username, pin, groups = [], display_name = null }) 
     const ins = db.prepare('INSERT INTO user_groups (user_id, group_id) VALUES (?, ?)')
     for (const g of groups) ins.run(id, g)
   })()
-  return { id, username, display_name, groups }
+  return { id, username, display_name, groups, granted_admin: grantedAdmin }
 }
 
 /** Every permission a user holds, as the union of their groups. */

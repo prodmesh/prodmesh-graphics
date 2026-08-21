@@ -77,6 +77,12 @@ export type NodeSummary = {
    * cannot delay a cue (ADR 0007).
    */
   preview_url?: string | null
+  /** The address the node dialled the server from — its IP, shown plainly. */
+  address?: string | null
+  /** Its own control API port, as the node reported it. */
+  api_port?: number | null
+  /** Its own status page — the surface that works when the server does not. */
+  status_url?: string | null
 }
 
 export type SyncState = { present: boolean; locked: boolean; format: string }

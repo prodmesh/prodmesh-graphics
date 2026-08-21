@@ -171,6 +171,23 @@ pub struct Hello {
     pub assignment_gen: Option<u64>,
     pub last_applied_seq: u64,
     pub capabilities: Capabilities,
+    /// The node's OWN control API — the surface that still works when this
+    /// link does not. Reported rather than assumed: a node started with
+    /// `--api-port` elsewhere was unreachable from anything the server drew,
+    /// and "the default, probably" is not an address to hand an operator who
+    /// is already debugging.
+    #[serde(default = "default_api_port")]
+    pub api_port: u16,
+    /// Where its preview channel listens. 0 means it has none.
+    #[serde(default = "default_preview_port")]
+    pub preview_port: u16,
+}
+
+fn default_api_port() -> u16 {
+    8520
+}
+fn default_preview_port() -> u16 {
+    8521
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]

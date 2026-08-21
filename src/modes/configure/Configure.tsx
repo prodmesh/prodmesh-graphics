@@ -29,6 +29,7 @@ import {
   Button,
   FormGroup,
   GroupHeader,
+  KeyValueRow,
   NodeCard,
   StatusPill,
   Tag,
@@ -56,9 +57,14 @@ type Capabilities = {
   gpu?: { adapter: string; backend: string } | null
   max_layers?: number
   scene_reader_major?: number
+  decoders?: string[]
 }
 
 type FullNode = NodeSummary & { adopted: boolean; capabilities: Capabilities | null }
+
+type User = { id: string; username: string; display_name: string | null; created_at: number }
+type Group = { id: string; name: string; permissions: string | string[] }
+type Station = { id: string; name: string; trusted: boolean }
 
 /** A named place graphics go (ADR 0023). */
 type Screen = {
@@ -70,17 +76,34 @@ type Screen = {
   template_id: string | null
 }
 
+/**
+ * Configure's sections.
+ *
+ * A rail rather than another row of tabs: every other mode already has one —
+ * Playlists in Edit, the rundown in Show — so this is the pattern the console
+ * already has rather than a second kind of navigation. It also has somewhere
+ * to grow: audio routing and preferences are coming, and a single scrolling
+ * page was already long with three sections on it.
+ */
+const SECTIONS = [
+  { id: 'nodes', label: 'Playout nodes' },
+  { id: 'screens', label: 'Screens' },
+  { id: 'users', label: 'Users & stations' },
+] as const
+type SectionId = (typeof SECTIONS)[number]['id']
+
 export function Configure() {
   const { data } = useQuery<{ nodes: FullNode[] }>(keys.nodes())
   const nodes = data?.nodes ?? []
   const adopted = nodes.filter((n) => n.adopted)
   const strangers = nodes.filter((n) => !n.adopted)
+  const [section, setSection] = useState<SectionId>('nodes')
 
   return (
     <div className="cfg-console">
       <div className="console__toolbar">
         <div className="console__toolbar-group">
-          <Tag pill tone="raised">Playout nodes</Tag>
+          <Tag pill tone="raised">{SECTIONS.find((s) => s.id === section)?.label}</Tag>
           <span className="console__toolbar-note">
             A node finds this server on the network by itself, and can always be given an address
             by hand — --server &lt;host:port&gt;.
@@ -89,35 +112,228 @@ export function Configure() {
         <Tag size={10}>{`${adopted.length} adopted`}</Tag>
       </div>
 
-      <div className="mode-scroll cfg-console__scroll">
-        {strangers.length > 0 ? (
-          <section className="cfg-console__section" aria-label="New nodes">
-            <GroupHeader label="New nodes" trailing={`${strangers.length}`} />
-            {strangers.map((n) => (
-              <Stranger key={n.node_id} node={n} />
-            ))}
-          </section>
-        ) : null}
+      <div className="cfg-console__panels">
+        <nav className="cfg-console__rail" aria-label="Configure sections">
+          {SECTIONS.map((s) => (
+            <button
+              key={s.id}
+              type="button"
+              aria-current={section === s.id ? 'page' : undefined}
+              className={section === s.id ? 'cfg-console__railitem cfg-console__railitem--on' : 'cfg-console__railitem'}
+              onClick={() => setSection(s.id)}
+            >
+              {s.label}
+              {s.id === 'nodes' && strangers.length ? (
+                // A node waiting to be adopted is the one thing here that needs
+                // answering rather than browsing.
+                <Tag size={10} tone="armed">{`${strangers.length} new`}</Tag>
+              ) : null}
+            </button>
+          ))}
+        </nav>
 
-        <Screens nodes={adopted} />
+        <div className="mode-scroll cfg-console__scroll">
+          {section === 'nodes' ? (
+            <>
+              {strangers.length > 0 ? (
+                <section className="cfg-console__section" aria-label="New nodes">
+                  <GroupHeader label="New nodes" trailing={`${strangers.length}`} />
+                  {strangers.map((n) => (
+                    <Stranger key={n.node_id} node={n} />
+                  ))}
+                </section>
+              ) : null}
 
-        <section className="cfg-console__section" aria-label="Playout nodes">
-          <GroupHeader label="Playout nodes" />
-          {adopted.length === 0 ? (
-            <div className="mode__stub">
-              <p>No playout node has been adopted yet.</p>
-              <p>
-                Start a node and point it at this server. It finds this server on the network by
-                itself, and you can always give it an address by hand —{' '}
-                <code>--server &lt;host:port&gt;</code>.
-              </p>
-            </div>
+              <section className="cfg-console__section" aria-label="Playout nodes">
+                <GroupHeader label="Playout nodes" />
+                {adopted.length === 0 ? (
+                  <div className="mode__stub">
+                    <p>No playout node has been adopted yet.</p>
+                    <p>
+                      Start a node and point it at this server. It finds this server on the network
+                      by itself, and you can always give it an address by hand —{' '}
+                      <code>--server &lt;host:port&gt;</code>.
+                    </p>
+                  </div>
+                ) : (
+                  adopted.map((n) => <AdoptedNode key={n.node_id} node={n} />)
+                )}
+              </section>
+            </>
+          ) : section === 'screens' ? (
+            <Screens nodes={adopted} />
           ) : (
-            adopted.map((n) => <AdoptedNode key={n.node_id} node={n} />)
+            <Users />
           )}
-        </section>
+        </div>
       </div>
     </div>
+  )
+}
+
+/**
+ * Users, groups, and stations (ADR 0013).
+ *
+ * The footer has been telling operators to "add a user in Configure" since M2,
+ * and there was no such page — a sentence pointing at a door that did not
+ * exist. The server side has been complete the whole time.
+ *
+ * A server with no users is OPEN, deliberately: a booth that cannot put a
+ * graphic up because nobody can remember a PIN is worse than one anybody on the
+ * LAN can drive. Adding the first user is what turns permissions on, and this
+ * page says so rather than letting it be a surprise.
+ */
+function Users() {
+  const { data, error } = useQuery<{ users: User[]; groups: Group[] }>(keys.users())
+  const { data: stationData } = useQuery<{ stations: Station[] }>(keys.stations())
+  const users = data?.users ?? []
+  const groups = data?.groups ?? []
+  const stations = stationData?.stations ?? []
+
+  const [username, setUsername] = useState('')
+  const [pin, setPin] = useState('')
+  const [group, setGroup] = useState('')
+  const [problem, setProblem] = useState<string | null>(null)
+  const [note, setNote] = useState<string | null>(null)
+
+  const run = async (fn: () => Promise<unknown>) => {
+    setProblem(null)
+    try {
+      await fn()
+      invalidate(keys.users())
+      invalidate(keys.stations())
+    } catch (e) {
+      setProblem(e instanceof Error ? e.message : String(e))
+    }
+  }
+
+  // A 403 here is not a broken page: it is this server telling you that
+  // somebody else already turned permissions on and you are not one of them.
+  if (error) {
+    return (
+      <section className="cfg-console__section" aria-label="Users">
+        <GroupHeader label="Users & stations" />
+        <div className="mode__stub">
+          <p>This server will not show you its users.</p>
+          <p>Sign in as someone who holds <code>graphics.users.manage</code>.</p>
+        </div>
+      </section>
+    )
+  }
+
+  return (
+    <>
+      <section className="cfg-console__section" aria-label="Users">
+        <GroupHeader label="Users" trailing={`${users.length}`} />
+        <p className="cfg-console__note">
+          {users.length === 0
+            ? 'No users yet, so anyone on this network can operate this server. Adding the first user turns permissions on, and makes that user an Administrator — otherwise securing the server would lock everybody out of it.'
+            : 'Permissions are on. A station with nobody signed in can do only what it is trusted to do.'}
+        </p>
+
+        {users.map((u) => (
+          <div key={u.id} className="cfg-console__userrow">
+            <span className="cfg-console__username">{u.display_name || u.username}</span>
+            <span className="cfg-console__userid">{u.username}</span>
+          </div>
+        ))}
+
+        <div className="cfg-console__screen-row">
+          <FormGroup label="Username">
+            <input value={username} aria-label="New username" onChange={(e) => setUsername(e.target.value)} />
+          </FormGroup>
+          <FormGroup label="PIN — four digits or more">
+            <input
+              type="password"
+              value={pin}
+              aria-label="New user PIN"
+              onChange={(e) => setPin(e.target.value)}
+            />
+          </FormGroup>
+          <FormGroup label="Group">
+            <select value={group} aria-label="New user group" onChange={(e) => setGroup(e.target.value)}>
+              <option value="">No group — can sign in and nothing else</option>
+              {groups.map((g) => <option key={g.id} value={g.id}>{g.name}</option>)}
+            </select>
+          </FormGroup>
+          <Button
+            variant="secondary"
+            disabled={!username.trim() || pin.length < 4}
+            onClick={() =>
+              void run(async () => {
+                const made = await post<{ granted_admin?: boolean }>(keys.users(), {
+                  username: username.trim(),
+                  pin,
+                  groups: group ? [group] : [],
+                })
+                // The first user is made an administrator so that securing the
+                // server does not lock it. Said out loud, because a permission
+                // nobody knows was granted is a permission nobody audits.
+                setNote(
+                  made?.granted_admin
+                    ? `${username.trim()} is an Administrator — the account that turns permissions on has to be able to manage them. Permissions are now ON.`
+                    : null,
+                )
+                setUsername('')
+                setPin('')
+              })
+            }
+          >
+            Add user
+          </Button>
+        </div>
+        {problem ? <p className="tl__problem" role="alert">{problem}</p> : null}
+        {note ? <p className="cfg-console__note" role="status">{note}</p> : null}
+      </section>
+
+      <section className="cfg-console__section" aria-label="Groups">
+        <GroupHeader label="Groups" trailing={`${groups.length}`} />
+        <p className="cfg-console__note">
+          What a group may do. <code>*</code> is everything, and is what an administrator holds.
+        </p>
+        {groups.map((g) => (
+          <div key={g.id} className="cfg-console__userrow">
+            <span className="cfg-console__username">{g.name}</span>
+            <span className="cfg-console__userid">
+              {(() => {
+                const perms: string[] = Array.isArray(g.permissions)
+                  ? g.permissions
+                  : JSON.parse(String(g.permissions ?? '[]'))
+                return perms.includes('*') ? 'everything' : perms.join(' · ') || 'nothing yet'
+              })()}
+            </span>
+          </div>
+        ))}
+      </section>
+
+      <section className="cfg-console__section" aria-label="Stations">
+        <GroupHeader label="Stations" trailing={`${stations.length}`} />
+        <p className="cfg-console__note">
+          A TRUSTED station can operate with nobody signed in — the booth machine that has to work
+          when the volunteer who knows the PIN is not there. Every one of them is listed here on
+          purpose: the blast radius of that has to be visible rather than scattered.
+        </p>
+        {stations.map((st) => (
+          <div key={st.id} className="cfg-console__userrow">
+            <span className="cfg-console__username">{st.name}</span>
+            <label className="cfg-console__trust">
+              <input
+                type="checkbox"
+                checked={st.trusted}
+                aria-label={`Station ${st.name} trusted`}
+                onChange={(e) =>
+                  void run(() => put(`/api/stations/${st.id}/trust`, { trusted: e.target.checked }))
+                }
+              />
+              Trusted
+            </label>
+          </div>
+        ))}
+        {stations.length === 0 ? (
+          <p className="cfg-console__note">No station has registered yet.</p>
+        ) : null}
+      </section>
+    </>
   )
 }
 
@@ -345,6 +561,75 @@ function AdoptedNode({ node }: { node: FullNode }) {
           { label: 'Max layers', value: String(caps?.max_layers ?? '?'), accent: true },
         ]}
       />
+
+      {/* What somebody needs when it is going wrong: where the node is, what
+          it is running, whether it has the content we think it has, and how
+          many frames it has been late for. Every number here was already
+          reported and none of it was shown. */}
+      <details className="cfg-console__diag">
+        <summary>Diagnostics</summary>
+        <div className="cfg-console__diaggrid">
+          <KeyValueRow label="Address" value={node.address ?? 'not connected yet'} tone="plain" />
+          <KeyValueRow
+            label="Node id"
+            value={node.node_id}
+            tone="plain"
+          />
+          <KeyValueRow
+            label="Assignment"
+            value={
+              node.assignment_gen == null
+                ? 'nothing acked yet'
+                : `gen ${node.assignment_gen} acked`
+            }
+            tone="plain"
+          />
+          <KeyValueRow
+            label="Last seen"
+            value={node.last_seen ? new Date(node.last_seen).toLocaleTimeString() : 'never'}
+            tone="plain"
+          />
+          <KeyValueRow
+            label="Scene reader"
+            value={caps?.scene_reader_major ? `v${caps.scene_reader_major}` : 'not reported'}
+            tone="plain"
+          />
+          <KeyValueRow
+            label="Decoders"
+            value={caps?.decoders?.length ? caps.decoders.join(', ') : 'not reported'}
+            tone="plain"
+          />
+        </div>
+
+        {liveOutputs.length ? (
+          <div className="cfg-console__diaggrid">
+            {liveOutputs.map((o) => (
+              <KeyValueRow
+                key={o.id}
+                label={`${o.id} — frames`}
+                // A late frame is the number that matters here, so it is the
+                // one that gets the accent the moment there is one.
+                value={`${o.fps?.toFixed(2) ?? '?'} fps · ${o.late_frames ?? 0} late`}
+                tone={o.late_frames ? 'armed' : 'plain'}
+              />
+            ))}
+          </div>
+        ) : null}
+
+        <p className="cfg-console__note">
+          {node.status_url ? (
+            <>
+              The node answers for itself at{' '}
+              <a href={node.status_url} target="_blank" rel="noreferrer">
+                {node.status_url}
+              </a>{' '}
+              — that page works when THIS server does not, which is usually when you want it.
+            </>
+          ) : (
+            'This node has not connected yet, so there is nowhere to point at.'
+          )}
+        </p>
+      </details>
 
       {liveOutputs.some((o) => o.sync) ? (
         <div className="cfg-console__refs">

@@ -80,6 +80,10 @@ pub struct Config {
     pub name: String,
     pub version: String,
     pub capabilities: pmg_proto::Capabilities,
+    /// This node's own control API and preview ports, so the server can point
+    /// an operator at them instead of guessing the defaults.
+    pub api_port: u16,
+    pub preview_port: u16,
 }
 
 pub fn now_ms() -> u64 {
@@ -131,6 +135,8 @@ fn session(cfg: &Config, tx: &Sender<FromLink>, rx: &Receiver<ToLink>) -> Result
             assignment_gen: None,
             last_applied_seq: 0,
             capabilities: cfg.capabilities.clone(),
+            api_port: cfg.api_port,
+            preview_port: cfg.preview_port,
         }),
     )?;
 

@@ -8,7 +8,49 @@
   display: flex;
   flex-direction: column;
 }
-.cfg-console__scroll { display: flex; flex-direction: column; gap: 20px; max-width: 980px; }
+/* Rail beside the panel, the way Edit and Show are laid out — Configure grew a
+   third section and is about to grow audio routing and preferences. */
+.cfg-console__panels {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  gap: 0;
+}
+.cfg-console__rail {
+  width: 190px;
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 12px 8px;
+  box-sizing: border-box;
+  border-right: 1px solid var(--pm-border-hairline);
+  overflow-y: auto;
+}
+.cfg-console__railitem {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  text-align: left;
+  padding: 8px 10px;
+  border: 0;
+  border-radius: var(--pm-radius-4);
+  background: transparent;
+  color: var(--pm-text-secondary);
+  font-family: var(--pm-font-ui);
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.cfg-console__railitem:hover { background: var(--pm-surface-field); color: var(--pm-text-primary); }
+.cfg-console__railitem--on {
+  background: var(--pm-surface-field);
+  color: var(--pm-text-primary);
+  box-shadow: var(--pm-hairline);
+}
+
+.cfg-console__scroll { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 20px; max-width: 980px; }
 .cfg-console__section { display: flex; flex-direction: column; gap: 8px; }
 
 .cfg-console__dim { margin: 0; font-size: 11px; line-height: 1.6; color: var(--pm-text-muted); }
@@ -128,3 +170,44 @@
 .cfg-console__screen-row > .c-formgroup { min-width: 140px; }
 .cfg-console__screen-add { display: flex; align-items: center; gap: 8px; padding-top: 8px; }
 .cfg-console__screen-add input { width: 200px; }
+
+/* ---- Diagnostics, users, stations ------------------------------------------
+   Everything here was already reported by a node or already stored by the
+   server, and none of it was on a screen. */
+
+.cfg-console__diag { font-size: 11px; }
+.cfg-console__diag > summary {
+  cursor: pointer;
+  color: var(--pm-text-muted);
+  font-family: var(--pm-font-ui);
+  font-weight: 600;
+  letter-spacing: var(--pm-tracking-caps);
+  text-transform: uppercase;
+  font-size: 10px;
+  padding: 6px 0;
+}
+.cfg-console__diaggrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: 0 20px;
+  padding-bottom: 6px;
+}
+.cfg-console__diag a { color: var(--pm-state-armed); }
+
+.cfg-console__userrow {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 6px 0;
+  box-shadow: var(--pm-hairline-bottom, none);
+}
+.cfg-console__username { font-size: 12px; font-weight: 600; color: var(--pm-text-primary); }
+.cfg-console__userid { font-family: var(--pm-font-mono); font-size: 11px; color: var(--pm-text-muted); }
+.cfg-console__trust {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  color: var(--pm-text-secondary);
+}

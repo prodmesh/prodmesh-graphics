@@ -351,6 +351,10 @@ fn main() -> Result<()> {
         );
     }
 
+    // Captured before the specs are handed to the runtime — the server is told
+    // where this node's preview listens, and the first output is the pointer.
+    let first_preview_port = outputs.first().map(|o| o.preview_port).unwrap_or(0);
+
     let opts = runtime::Options {
         outputs,
         server_http: http_base(&server),
@@ -397,6 +401,11 @@ fn main() -> Result<()> {
         name: identity.name.clone(),
         version: env!("CARGO_PKG_VERSION").to_string(),
         capabilities: capabilities(&rt),
+        api_port: node_port,
+        // The FIRST output's preview port. With several outputs each has its
+        // own, and the node's status page is where a person finds the rest —
+        // one number in a header is a pointer, not an inventory.
+        preview_port: first_preview_port,
     };
     // GPI, OSC and MIDI — the surfaces that terminate HERE (ADR 0014).
     //

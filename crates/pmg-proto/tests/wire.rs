@@ -36,6 +36,8 @@ fn sample_hello() -> Hello {
         version: "0.1.0".into(),
         assignment_gen: Some(41),
         last_applied_seq: 8812,
+        api_port: 8520,
+        preview_port: 8521,
         capabilities: Capabilities {
             outputs: vec![OutputCapability {
                 device: "DeckLink Quad 2 (0)".into(),
