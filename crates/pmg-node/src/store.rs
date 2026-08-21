@@ -98,6 +98,52 @@ impl Store {
         }
         Ok(())
     }
+
+    fn outputs_path(&self) -> std::path::PathBuf {
+        self.dir.join("outputs.json")
+    }
+
+    /// This node's OWN output configuration (ADR 0024).
+    ///
+    /// JSON rather than CBOR, unlike the assignment: an assignment is machine
+    /// content and this is a small file a person may have to read, or fix,
+    /// over SSH on a morning when the browser is not the answer.
+    ///
+    /// `None` means the node has never been configured, and the command-line
+    /// flags are the seed.
+    pub fn load_outputs(&self) -> Option<Vec<pmg_proto::OutputConfig>> {
+        let text = std::fs::read_to_string(self.outputs_path()).ok()?;
+        match serde_json::from_str(&text) {
+            Ok(v) => Some(v),
+            Err(e) => {
+                // Same bargain the assignment makes: coming up with nothing and
+                // asking the server is recoverable; refusing to boot is not.
+                tracing::warn!(error = %e, "outputs.json is unreadable; falling back to flags");
+                None
+            }
+        }
+    }
+
+    /// Write the output configuration durably, with the same fsync ordering the
+    /// assignment uses — a node that acked a configuration and forgot it would
+    /// come up wrong after a power cut, which is the case this file exists for.
+    pub fn save_outputs(&self, outputs: &[pmg_proto::OutputConfig]) -> Result<()> {
+        let text = serde_json::to_string_pretty(outputs)?;
+        let dest = self.outputs_path();
+        let tmp = dest.with_extension("json.tmp");
+        {
+            use std::io::Write;
+            let mut f = std::fs::File::create(&tmp)?;
+            f.write_all(text.as_bytes())?;
+            f.write_all(b"\n")?;
+            f.sync_all()?;
+        }
+        std::fs::rename(&tmp, &dest)?;
+        if let Ok(d) = std::fs::File::open(&self.dir) {
+            let _ = d.sync_all();
+        }
+        Ok(())
+    }
 }
 
 fn hostname() -> Option<String> {

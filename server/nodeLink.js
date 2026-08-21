@@ -26,6 +26,7 @@ import { randomUUID } from 'node:crypto'
 import { publish, registerTopic } from './streamHub.js'
 import * as wire from './wire.js'
 import { build as buildAssignment } from './assignment.js'
+import { desiredOutputs } from './routes/nodeOutputs.js'
 import { handle } from './db.js'
 
 /** The node's MJPEG preview port. Family 85xx: control 8519, node 8520. */
@@ -191,34 +192,46 @@ function send(s, msg) {
 }
 
 /**
- * Record the outputs a node reports, for a node nobody has configured yet.
+ * Record the outputs a node reports.
  *
- * Only when it has none. Configure is authoritative once an operator has been
- * there — overwriting their layer stack every time a node reconnects would
- * undo their work on a reboot, which is worse than the problem this solves.
+ * **Only ones the server has never seen.** Configure is authoritative for an
+ * output that already exists — overwriting an operator's layer stack every time
+ * a node reconnects would undo their work on a reboot. But an output that is
+ * NEW has no work to undo, and not learning it was a silent trap: a node
+ * reconfigured to add an output (ADR 0024) reported it, the server never
+ * recorded it, and every destination naming it was quietly filtered out of
+ * every cue — a take that went nowhere with nothing to say about why.
  */
 function seedOutputs(s) {
   const outs = s.state?.outputs ?? []
   if (!outs.length) return
   const db = handle()
-  const have = db.prepare('SELECT COUNT(*) n FROM outputs WHERE node_id = ?').get(s.nodeId)
-  if (have.n) return
+  const known = new Set(
+    db
+      .prepare('SELECT output_id FROM outputs WHERE node_id = ?')
+      .all(s.nodeId)
+      .map((r) => r.output_id),
+  )
 
   const ins = db.prepare(
     `INSERT OR IGNORE INTO outputs (node_id, output_id, mode, layers, updated_at)
      VALUES (?, ?, ?, ?, ?)`,
   )
   const now = Date.now()
+  const learned = []
   for (const o of outs) {
+    if (known.has(o.id)) continue
     // The layer NAMES, in the node's order, because layer order is compositing
     // order and the node is the one that knows it.
     const layers = (o.layers ?? []).map((l) => l.name)
     if (!layers.length) continue
     ins.run(s.nodeId, o.id, o.mode ?? '1920x1080', JSON.stringify(layers), now)
+    learned.push(o.id)
   }
+  if (!learned.length) return
   // Said out loud, because it is a configuration decision the server made and
   // no operator did.
-  console.log(`link: learned ${s.name}'s outputs — ${outs.map((o) => o.id).join(', ')}`)
+  console.log(`link: learned ${s.name}'s outputs — ${learned.join(', ')}`)
 }
 
 /** Publish the snapshot topics this node feeds. All conflate safely. */
@@ -368,6 +381,12 @@ function onHello(ws, hello) {
       // round trip and no transfer — which is the whole reason the offer
       // carries a digest instead of the body.
       offerAssignment(hello.node_id, buildAssignment({ nodeId: hello.node_id }))
+      // And what an operator asked this node to drive (ADR 0024). Re-sent on
+      // every connect, because a node reconfigured while it was off has no
+      // other way to learn — and because a node whose own file already agrees
+      // applies nothing and says so.
+      const desired = desiredOutputs(hello.node_id)
+      if (desired.length) setOutputs(hello.node_id, desired)
     } else {
       console.log(`link: ${hello.name} (${hello.node_id}) is waiting to be adopted`)
     }
@@ -411,6 +430,14 @@ function onFrame(ws, buf, bound) {
       // reconstruct this without us — which is the whole autonomy invariant.
       if (body.gen === s.gen) s.ackedGen = body.gen
       republish(s)
+      break
+
+    case 'OutputsAck':
+      // What it applied, not what it was asked for.
+      s.outputsAck = body
+      if (body.problems?.length) {
+        console.error(`link: ${s.name} could not apply outputs:`, body.problems.join('; '))
+      }
       break
 
     case 'StateReport':
@@ -562,6 +589,32 @@ export function offerAssignment(nodeId, assignment) {
  * Resolves `{ result, reason, fired_at_frame, at_utc }`, where result is
  * `applied` | `deduped` | `superseded` | `rejected` | `not_acked` | `offline`.
  */
+/**
+ * Ask a node to reconfigure its outputs (ADR 0024).
+ *
+ * The node persists before it acks and answers with what it ACTUALLY applied,
+ * so a device that will not open comes back as a problem rather than as
+ * silence. `gen` counts up per node, which is how an ack is matched to the
+ * request it answers.
+ */
+export function setOutputs(nodeId, outputs, { force = false } = {}) {
+  const s = find(nodeId)
+  if (!s) return null
+  s.outputsGen = (s.outputsGen ?? 0) + 1
+  const ok = send(s, {
+    SetOutputs: { gen: s.outputsGen, outputs, force },
+  })
+  // An offline node is not a failure: the configuration is stored, and it is
+  // re-sent the moment the node connects. That is the whole reason the server
+  // keeps a copy of something the node owns.
+  return { gen: s.outputsGen, sent: ok }
+}
+
+/** The last thing a node said about its outputs, or null. */
+export function outputsAck(nodeId) {
+  return find(nodeId)?.outputsAck ?? null
+}
+
 export function cue(nodeId, { cue_id, op, deadline_ms, at = null }) {
   const s = find(nodeId)
   if (!s) {
@@ -647,6 +700,9 @@ export function list() {
     // The surface that still works when THIS link does not (ADR 0014) — which
     // is exactly when somebody needs it.
     status_url: s.address && s.apiPort ? `http://${s.address}:${s.apiPort}/status` : null,
+    // What the node said about the last output configuration it was asked for
+    // — including what it refused and what would not open (ADR 0024).
+    outputs_ack: s.outputsAck ?? null,
   }))
 }
 

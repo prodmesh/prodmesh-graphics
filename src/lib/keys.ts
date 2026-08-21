@@ -34,6 +34,8 @@ export const keys = {
   stations: () => '/api/stations',
   node: (id: string) => `/api/nodes/${id}`,
   outputs: (nodeId: string) => `/api/nodes/${nodeId}/outputs`,
+  /** A node's output HARDWARE — which device, which mode (ADR 0024). */
+  outputConfig: (nodeId: string) => `/api/nodes/${nodeId}/output-config`,
 
   /** Gap recovery for the take log — the pull half of the ADR 0008 bridge. */
   cueLogSince: (showId: string, since: number) =>

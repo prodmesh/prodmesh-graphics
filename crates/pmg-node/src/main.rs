@@ -351,6 +351,45 @@ fn main() -> Result<()> {
         );
     }
 
+    // The node's OWN output configuration wins (ADR 0024).
+    //
+    // `--output` flags are the SEED for a node that has never been configured:
+    // a fresh install, or a developer driving a slice. Once a file exists the
+    // flags are ignored, because a flag that silently overrode saved
+    // configuration on every boot would make the saved configuration a lie —
+    // and the whole point is that a node comes up the way it was configured,
+    // with or without a server.
+    let outputs = match store.load_outputs() {
+        Some(saved) if !saved.is_empty() => {
+            tracing::info!(
+                outputs = saved.len(),
+                "outputs from this node's own configuration"
+            );
+            saved
+                .iter()
+                .map(|c| {
+                    let existing = outputs.iter().find(|o| o.id == c.id);
+                    runtime::spec_from_config(c, existing)
+                })
+                .collect()
+        }
+        _ => {
+            // First run. Write what we were started with, so the next boot has
+            // a configuration to read and the server has something to edit.
+            let seed: Vec<pmg_proto::OutputConfig> =
+                outputs.iter().map(runtime::config_from_spec).collect();
+            if let Err(e) = store.save_outputs(&seed) {
+                tracing::warn!(error = %e, "could not seed outputs.json");
+            } else {
+                tracing::info!(
+                    outputs = seed.len(),
+                    "seeded outputs.json from the command line"
+                );
+            }
+            outputs
+        }
+    };
+
     // Captured before the specs are handed to the runtime — the server is told
     // where this node's preview listens, and the first output is the pointer.
     let first_preview_port = outputs.first().map(|o| o.preview_port).unwrap_or(0);

@@ -518,24 +518,12 @@ impl Runtime {
         );
 
         let engine = self.engine.clone();
-        let stop = Arc::new(std::sync::atomic::AtomicBool::new(false));
-        let mut handles = Vec::new();
-
+        // One stop flag per GROUP, not one for the whole run. Reconfiguring the
+        // wall must not interrupt the key feed, and a group is exactly the set
+        // of outputs that share a clock and a thread (ADR 0011, ADR 0024).
+        let mut running: BTreeMap<String, RunningGroup> = BTreeMap::new();
         for (name, specs) in groups {
-            let engine = engine.clone();
-            let stop = stop.clone();
-            let group_name = name.clone();
-            handles.push(
-                std::thread::Builder::new()
-                    .name(format!("pmg-out-{name}"))
-                    .spawn(move || {
-                        if let Err(e) = render_group(&group_name, &specs, engine, stop) {
-                            // A dead output must be loud. It is also not a
-                            // reason to take the others down.
-                            tracing::error!(group = %group_name, error = %e, "render group stopped");
-                        }
-                    })?,
-            );
+            running.insert(name.clone(), spawn_group(&name, &specs, engine.clone())?);
         }
 
         let mut last_state = Instant::now();
@@ -670,6 +658,19 @@ impl Runtime {
                         let _ = tx.send(ToLink::State(self.engine.lock().unwrap().state_report()));
                     }
                 }
+                // Reconfiguring outputs is handled HERE rather than in
+                // `handle`, because the render groups live on this stack —
+                // applying one means stopping a thread and starting another
+                // (ADR 0024).
+                Ok(FromLink::SetOutputs {
+                    gen,
+                    outputs,
+                    force,
+                }) => {
+                    let ack = self.apply_outputs(&mut running, gen, outputs, force);
+                    let _ = tx.send(ToLink::OutputsApplied(ack));
+                    let _ = tx.send(ToLink::State(self.engine.lock().unwrap().state_report()));
+                }
                 Ok(other) => self.handle(other, &tx),
                 Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
                 Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break,
@@ -681,9 +682,9 @@ impl Runtime {
             }
         }
 
-        stop.store(true, std::sync::atomic::Ordering::Relaxed);
-        for h in handles {
-            let _ = h.join();
+        for (_, g) in running {
+            g.stop.store(true, std::sync::atomic::Ordering::Relaxed);
+            let _ = g.handle.join();
         }
         Ok(())
     }
@@ -694,8 +695,111 @@ impl Runtime {
     /// interleaved with them IN ORDER (ADR 0017). Handling them out of order
     /// would let a take be applied against an assignment it was not written
     /// for, which is a far worse bug than the one superseding solves.
+    /// Apply a new output configuration (ADR 0024).
+    ///
+    /// Three rules, in order:
+    ///
+    /// 1. **An output with something ON AIR is not reconfigured** unless the
+    ///    request says `force`. Closing a device takes the graphic with it, and
+    ///    an operator who means that should have said so.
+    /// 2. **Persist before applying.** The same ordering an assignment uses: a
+    ///    node that applied a configuration it had not saved would come up
+    ///    wrong after a power cut, which is the case the file exists for.
+    /// 3. **Report what was APPLIED.** A group whose device will not open is
+    ///    named in `problems`, and the node keeps running whatever else it can
+    ///    — a node that accepts a broken configuration and goes dark is the
+    ///    failure this path exists to avoid.
+    fn apply_outputs(
+        &mut self,
+        running: &mut BTreeMap<String, RunningGroup>,
+        gen: u64,
+        wanted: Vec<pmg_proto::OutputConfig>,
+        force: bool,
+    ) -> pmg_proto::OutputsAck {
+        let mut ack = pmg_proto::OutputsAck {
+            gen,
+            ..Default::default()
+        };
+
+        // What is on air right now, by output id.
+        let on_air: std::collections::BTreeSet<String> = {
+            let e = self.engine.lock().unwrap();
+            e.outputs
+                .iter()
+                .filter(|o| o.layers.iter().any(|l| l.occupant.is_some()))
+                .map(|o| o.id.clone())
+                .collect()
+        };
+
+        let plan = plan_outputs(&self.opts.outputs, &wanted, &on_air, force);
+        ack.refused_on_air = plan.refused_on_air.clone();
+        let next = plan.next;
+        let changed_groups = plan.changed_groups;
+
+        // Persist what will actually be RUNNING, not what was asked for.
+        //
+        // A refused output keeps its old configuration, and the file has to say
+        // so: saving the request instead would leave a change nobody applied
+        // waiting to surprise somebody at the next boot — which is the silent
+        // behaviour this whole path exists to end. A refused change is dropped,
+        // and the operator retries with `force` if they mean it.
+        let persist: Vec<pmg_proto::OutputConfig> = next.iter().map(config_from_spec).collect();
+        if let Err(e) = self.store.save_outputs(&persist) {
+            ack.problems
+                .push(format!("could not save the configuration: {e}"));
+            return ack;
+        }
+        self.opts.outputs = next.clone();
+
+        // Rebuild only the groups that changed.
+        let mut by_group: BTreeMap<String, Vec<OutputSpec>> = BTreeMap::new();
+        for o in &next {
+            by_group.entry(o.group.clone()).or_default().push(o.clone());
+        }
+        for g in &changed_groups {
+            if let Some(old) = running.remove(g) {
+                old.stop.store(true, std::sync::atomic::Ordering::Relaxed);
+                let _ = old.handle.join();
+            }
+            let Some(specs) = by_group.get(g) else {
+                continue; // the group is empty now, and stopping it was the job
+            };
+            match spawn_group(g, specs, self.engine.clone()) {
+                Ok(rg) => {
+                    running.insert(g.clone(), rg);
+                }
+                Err(e) => ack
+                    .problems
+                    .push(format!("group {g} could not be started: {e}")),
+            }
+        }
+
+        // The layer engine is told about the outputs it now has. Layers and
+        // colour still come from the assignment — this only adds or removes the
+        // outputs themselves (ADR 0024).
+        {
+            let mut e = self.engine.lock().unwrap();
+            let fps = next.first().map(|o| o.fps).unwrap_or((60000, 1001));
+            e.redeclare_outputs(
+                &next
+                    .iter()
+                    .map(|o| (o.id.clone(), o.layers.clone()))
+                    .collect::<Vec<_>>(),
+                fps,
+            );
+        }
+
+        // What it APPLIED. The contract this type states, and for a moment it
+        // echoed the request instead — which would have shown an operator their
+        // refused rename as though it had taken.
+        ack.applied = persist;
+        ack
+    }
+
     fn handle(&mut self, m: FromLink, tx: &Sender<ToLink>) {
         match m {
+            // Handled in `run`, where the render groups live.
+            FromLink::SetOutputs { .. } => {}
             FromLink::Connected { epoch } => {
                 self.engine.lock().unwrap().set_epoch(epoch);
                 let _ = tx.send(ToLink::State(self.engine.lock().unwrap().state_report()));
@@ -939,6 +1043,203 @@ fn advance_clips(
 /// outputs should be showing — an `Arc<SceneInstance>` plus this frame's
 /// timeline values — and then draws with the lock released. Holding it across a
 /// draw would serialise every group into one thread wearing several hats.
+/// One wire-level `OutputConfig` as the runtime's own `OutputSpec`.
+///
+/// LAYERS are carried across from whatever the output already had, because they
+/// belong to the assignment and not to this message — hardware and content are
+/// configured separately (ADR 0024). A brand-new output starts with the
+/// conventional single stack so it is usable before a server says anything.
+pub fn spec_from_config(
+    cfg: &pmg_proto::OutputConfig,
+    existing: Option<&OutputSpec>,
+) -> OutputSpec {
+    OutputSpec {
+        id: cfg.id.clone(),
+        layers: existing
+            .map(|e| e.layers.clone())
+            .unwrap_or_else(|| vec!["Graphics".to_string()]),
+        fps: (cfg.fps_num.max(1), cfg.fps_den.max(1)),
+        width: cfg.width.max(1),
+        height: cfg.height.max(1),
+        backend: cfg.backend.clone(),
+        ndi_name: if cfg.ndi_name.is_empty() {
+            format!("ProdMesh Graphics {}", cfg.id)
+        } else {
+            cfg.ndi_name.clone()
+        },
+        decklink_device: cfg.device as usize,
+        decklink_key_device: cfg.key_device.map(|d| d as usize),
+        decklink_mode: cfg.mode.clone(),
+        preview_port: cfg.preview_port,
+        group: if cfg.group.is_empty() {
+            "default".to_string()
+        } else {
+            cfg.group.clone()
+        },
+        audio_channels: cfg.audio_channels,
+        // A test instrument, never configuration.
+        inject_stall_at_s: existing.and_then(|e| e.inject_stall_at_s),
+        preview_mjpeg: existing.is_some_and(|e| e.preview_mjpeg),
+    }
+}
+
+/// Does this output still open the same hardware the same way?
+///
+/// Only these fields mean closing a device and opening it again. Layers and
+/// colour change without interrupting a frame, which is why they travel in the
+/// assignment and are not compared here.
+///
+/// **Compared per backend**, because a field one backend has never heard of
+/// must not interrupt it. An NDI sender was being torn down and rebuilt because
+/// a DeckLink display-mode string differed — a frame of black on the wall, for
+/// a value that output does not read.
+fn same_hardware(a: &OutputSpec, b: &OutputSpec) -> bool {
+    let common = a.backend == b.backend
+        && a.preview_port == b.preview_port
+        && a.group == b.group
+        && a.audio_channels == b.audio_channels
+        && a.fps == b.fps
+        && a.width == b.width
+        && a.height == b.height;
+    if !common {
+        return false;
+    }
+    match a.backend.as_str() {
+        "ndi" => a.ndi_name == b.ndi_name,
+        "decklink" => {
+            a.decklink_device == b.decklink_device
+                && a.decklink_key_device == b.decklink_key_device
+                && a.decklink_mode == b.decklink_mode
+        }
+        // `window` and `headless` have nothing else to open.
+        _ => true,
+    }
+}
+
+/// An `OutputSpec` as the wire describes it — the inverse of
+/// [`spec_from_config`], used to seed a node's file from the flags it was
+/// started with.
+pub fn config_from_spec(o: &OutputSpec) -> pmg_proto::OutputConfig {
+    pmg_proto::OutputConfig {
+        id: o.id.clone(),
+        backend: o.backend.clone(),
+        ndi_name: o.ndi_name.clone(),
+        device: o.decklink_device as u32,
+        key_device: o.decklink_key_device.map(|d| d as u32),
+        mode: o.decklink_mode.clone(),
+        width: o.width,
+        height: o.height,
+        fps_num: o.fps.0,
+        fps_den: o.fps.1,
+        audio_channels: o.audio_channels,
+        preview_port: o.preview_port,
+        group: o.group.clone(),
+    }
+}
+
+/// What a reconfiguration would do, decided before anything is torn down.
+pub struct OutputPlan {
+    /// The specs the node should be running afterwards.
+    pub next: Vec<OutputSpec>,
+    /// The render groups that have to be stopped and started again.
+    pub changed_groups: std::collections::BTreeSet<String>,
+    /// Outputs left alone because something is on air on them.
+    pub refused_on_air: Vec<String>,
+}
+
+/// Work out what changes, and what that interrupts (ADR 0024).
+///
+/// Pure, and separate from applying it, because these are the rules — an
+/// output with a graphic on it is not reconfigured without `force`; only the
+/// groups that actually change are interrupted; an output that leaves takes its
+/// old group down with it — and rules are worth testing without spawning a
+/// render thread to do it.
+pub fn plan_outputs(
+    current: &[OutputSpec],
+    wanted: &[pmg_proto::OutputConfig],
+    on_air: &std::collections::BTreeSet<String>,
+    force: bool,
+) -> OutputPlan {
+    let by_id: BTreeMap<&str, &OutputSpec> = current.iter().map(|o| (o.id.as_str(), o)).collect();
+    let mut plan = OutputPlan {
+        next: Vec::new(),
+        changed_groups: std::collections::BTreeSet::new(),
+        refused_on_air: Vec::new(),
+    };
+
+    for cfg in wanted {
+        let existing = by_id.get(cfg.id.as_str()).copied();
+        let spec = spec_from_config(cfg, existing);
+        if existing.is_some_and(|e| same_hardware(e, &spec)) {
+            // Nothing that means closing a device. Layers and colour still
+            // arrive by assignment, without interrupting a frame.
+            plan.next.push(spec);
+            continue;
+        }
+        if on_air.contains(&cfg.id) && !force {
+            plan.refused_on_air.push(cfg.id.clone());
+            // Keep what is running, precisely because something is on it.
+            if let Some(e) = existing {
+                plan.next.push(e.clone());
+            }
+            continue;
+        }
+        plan.changed_groups.insert(spec.group.clone());
+        if let Some(e) = existing {
+            // The group it is LEAVING is rebuilt too, or the old thread keeps
+            // driving a device the new one wants.
+            plan.changed_groups.insert(e.group.clone());
+        }
+        plan.next.push(spec);
+    }
+
+    // An output that is gone takes its group down with it.
+    for o in current {
+        if wanted.iter().any(|c| c.id == o.id) {
+            continue;
+        }
+        if on_air.contains(&o.id) && !force {
+            plan.refused_on_air.push(o.id.clone());
+            plan.next.push(o.clone());
+            continue;
+        }
+        plan.changed_groups.insert(o.group.clone());
+    }
+
+    plan
+}
+
+/// A render group that is currently running: its stop flag and its thread.
+///
+/// Kept per group so one can be torn down and rebuilt while the others keep
+/// their frames. Reconfiguring an output means closing a device and opening it
+/// again, and that interruption should reach exactly the outputs it has to.
+struct RunningGroup {
+    stop: Arc<std::sync::atomic::AtomicBool>,
+    handle: std::thread::JoinHandle<()>,
+}
+
+fn spawn_group(
+    name: &str,
+    specs: &[OutputSpec],
+    engine: Arc<Mutex<LayerEngine>>,
+) -> Result<RunningGroup> {
+    let stop = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let group_name = name.to_string();
+    let specs = specs.to_vec();
+    let s = stop.clone();
+    let handle = std::thread::Builder::new()
+        .name(format!("pmg-out-{name}"))
+        .spawn(move || {
+            if let Err(e) = render_group(&group_name, &specs, engine, s) {
+                // A dead output must be loud. It is also not a reason to take
+                // the others down.
+                tracing::error!(group = %group_name, error = %e, "render group stopped");
+            }
+        })?;
+    Ok(RunningGroup { stop, handle })
+}
+
 fn render_group(
     group: &str,
     specs: &[OutputSpec],

@@ -171,6 +171,260 @@ export function Configure() {
   )
 }
 
+/** The modes an operator can pick, and the raster each one implies. */
+const MODES: { name: string; width: number; height: number; fps_num: number; fps_den: number }[] = [
+  { name: '1080p59.94', width: 1920, height: 1080, fps_num: 60000, fps_den: 1001 },
+  { name: '1080p50', width: 1920, height: 1080, fps_num: 50, fps_den: 1 },
+  { name: '1080p30', width: 1920, height: 1080, fps_num: 30, fps_den: 1 },
+  { name: '1080p25', width: 1920, height: 1080, fps_num: 25, fps_den: 1 },
+  { name: '1080i59.94', width: 1920, height: 1080, fps_num: 30000, fps_den: 1001 },
+  { name: '720p59.94', width: 1280, height: 720, fps_num: 60000, fps_den: 1001 },
+  { name: '2160p29.97', width: 3840, height: 2160, fps_num: 30000, fps_den: 1001 },
+]
+
+type OutputConfig = {
+  id: string
+  backend: string
+  ndi_name?: string
+  device?: number
+  key_device?: number | null
+  mode?: string
+  width?: number
+  height?: number
+  fps_num?: number
+  fps_den?: number
+  audio_channels?: number
+  preview_port?: number
+  group?: string
+}
+
+type OutputsAck = {
+  gen: number
+  applied: OutputConfig[]
+  problems?: string[]
+  refused_on_air?: string[]
+}
+
+/**
+ * A node's output HARDWARE (ADR 0024).
+ *
+ * Until this existed, changing NDI to DeckLink meant editing a shell command
+ * and restarting the process. The devices come from the node's OWN capability
+ * report, so this offers what the machine actually has rather than what someone
+ * typed.
+ *
+ * Saving closes a device and opens it again — for the outputs that changed, and
+ * only those. An output with a graphic on it is refused unless the operator
+ * says to interrupt it.
+ */
+function OutputHardware({ node }: { node: FullNode }) {
+  const { data } = useQuery<{ outputs: OutputConfig[]; ack: OutputsAck | null }>(
+    keys.outputConfig(node.node_id),
+  )
+  // What the NODE says it is running, which is the truth if the two differ.
+  const live: OutputConfig[] = (node.state?.outputs ?? []).map((o) => ({
+    id: o.id,
+    backend: 'ndi',
+  }))
+  const [draft, setDraft] = useState<OutputConfig[] | null>(null)
+  const [problem, setProblem] = useState<string | null>(null)
+  const [note, setNote] = useState<string | null>(null)
+  const rows = draft ?? (data?.outputs?.length ? data.outputs : live)
+  const devices = node.capabilities?.outputs ?? []
+
+  const set = (i: number, changes: Partial<OutputConfig>) =>
+    setDraft(rows.map((o, n) => (n === i ? { ...o, ...changes } : o)))
+
+  const save = async (force: boolean) => {
+    setProblem(null)
+    setNote(null)
+    try {
+      const r = await put<{ delivered: boolean }>(keys.outputConfig(node.node_id), {
+        outputs: rows,
+        force,
+      })
+      setDraft(null)
+      invalidate(keys.outputConfig(node.node_id))
+      invalidate(keys.nodes())
+      setNote(
+        r.delivered
+          ? 'Sent. The node applies it and answers with what it actually did.'
+          : 'Saved. This node is offline, so it will be applied when it connects.',
+      )
+    } catch (e) {
+      setProblem(e instanceof Error ? e.message : String(e))
+    }
+  }
+
+  const ack = data?.ack
+  return (
+    <details className="cfg-console__diag">
+      <summary>Output hardware</summary>
+
+      {rows.map((o, i) => (
+        <div key={`${o.id}:${i}`} className="cfg-console__screen-row">
+          <FormGroup label="Id">
+            <input
+              value={o.id}
+              aria-label={`Output ${i + 1} id`}
+              onChange={(e) => set(i, { id: e.target.value })}
+            />
+          </FormGroup>
+          <FormGroup label="Sends by">
+            <select
+              value={o.backend}
+              aria-label={`Output ${o.id} backend`}
+              onChange={(e) => set(i, { backend: e.target.value })}
+            >
+              <option value="ndi">NDI</option>
+              <option value="decklink">SDI — DeckLink</option>
+              <option value="window">A window on this machine</option>
+              <option value="headless">Nothing — render and time only</option>
+            </select>
+          </FormGroup>
+
+          {o.backend === 'ndi' ? (
+            <FormGroup label="Seen on the network as">
+              <input
+                value={o.ndi_name ?? ''}
+                aria-label={`Output ${o.id} NDI name`}
+                onChange={(e) => set(i, { ndi_name: e.target.value })}
+              />
+            </FormGroup>
+          ) : null}
+
+          {o.backend === 'decklink' ? (
+            <>
+              <FormGroup label="Fill">
+                {/* From the node's own capability report — what the machine
+                    actually has, not what somebody typed. */}
+                <select
+                  value={String(o.device ?? 0)}
+                  aria-label={`Output ${o.id} device`}
+                  onChange={(e) => set(i, { device: Number(e.target.value) })}
+                >
+                  {devices.length === 0 ? <option value="0">no card reported</option> : null}
+                  {devices.map((d, n) => (
+                    <option key={d.device} value={n}>
+                      {d.device}
+                      {d.supports_key_fill ? ' · key+fill' : ''}
+                      {d.has_genlock ? ' · genlock' : ''}
+                    </option>
+                  ))}
+                </select>
+              </FormGroup>
+              <FormGroup label="Key">
+                <select
+                  value={o.key_device == null ? '' : String(o.key_device)}
+                  aria-label={`Output ${o.id} key device`}
+                  onChange={(e) =>
+                    set(i, { key_device: e.target.value === '' ? null : Number(e.target.value) })
+                  }
+                >
+                  <option value="">Fill only</option>
+                  {devices.map((d, n) => (
+                    <option key={d.device} value={n}>{d.device}</option>
+                  ))}
+                </select>
+              </FormGroup>
+              <FormGroup label="Mode">
+                <select
+                  value={o.mode ?? ''}
+                  aria-label={`Output ${o.id} mode`}
+                  onChange={(e) => {
+                    const m = MODES.find((x) => x.name === e.target.value)
+                    // The raster travels with the name: the node does not keep
+                    // a table of modes, and two tables that must agree is one
+                    // more than there should be.
+                    set(i, m ? { mode: m.name, width: m.width, height: m.height, fps_num: m.fps_num, fps_den: m.fps_den } : { mode: '' })
+                  }}
+                >
+                  <option value="">Choose a mode</option>
+                  {MODES.map((m) => <option key={m.name} value={m.name}>{m.name}</option>)}
+                </select>
+              </FormGroup>
+            </>
+          ) : null}
+
+          <FormGroup label="Audio channels">
+            <select
+              value={String(o.audio_channels ?? 0)}
+              aria-label={`Output ${o.id} audio`}
+              onChange={(e) => set(i, { audio_channels: Number(e.target.value) })}
+            >
+              <option value="0">None</option>
+              <option value="2">2</option>
+              <option value="8">8</option>
+              <option value="16">16</option>
+            </select>
+          </FormGroup>
+          <FormGroup label="Clock group">
+            {/* Outputs naming the same group share a thread, which is what
+                phase-locked together means in practice (ADR 0011) — and what
+                decides which outputs a change interrupts. */}
+            <input
+              value={o.group ?? 'default'}
+              aria-label={`Output ${o.id} group`}
+              onChange={(e) => set(i, { group: e.target.value })}
+            />
+          </FormGroup>
+          <button
+            type="button"
+            className="edit-console__iconbtn"
+            aria-label={`Remove output ${o.id}`}
+            onClick={() => setDraft(rows.filter((_, n) => n !== i))}
+          >
+            <Trash2 size={13} aria-hidden />
+          </button>
+        </div>
+      ))}
+
+      <div className="cfg-console__screen-add">
+        <button
+          type="button"
+          className="edit-console__addbtn"
+          onClick={() =>
+            setDraft([
+              ...rows,
+              { id: `out-${rows.length}`, backend: 'ndi', ndi_name: `${node.name} ${rows.length}`, group: `g${rows.length}` },
+            ])
+          }
+        >
+          <Plus size={12} aria-hidden /> Add an output
+        </button>
+        <Button variant="secondary" disabled={!draft} onClick={() => void save(false)}>
+          Apply
+        </Button>
+        {ack?.refused_on_air?.length ? (
+          // Only offered once the node has said what it would not do — an
+          // "interrupt anyway" button on a quiet plant is a trap with no
+          // purpose.
+          <Button variant="secondary" onClick={() => void save(true)}>
+            Apply anyway — interrupts {ack.refused_on_air.join(', ')}
+          </Button>
+        ) : null}
+        {draft ? (
+          <Button variant="quiet" onClick={() => setDraft(null)}>Discard</Button>
+        ) : null}
+      </div>
+
+      {problem ? <p className="tl__problem" role="alert">{problem}</p> : null}
+      {note ? <p className="cfg-console__note" role="status">{note}</p> : null}
+      {ack?.problems?.length ? (
+        <p className="tl__problem" role="alert">
+          The node could not apply all of it: {ack.problems.join('; ')}
+        </p>
+      ) : null}
+      {ack?.refused_on_air?.length ? (
+        <p className="cfg-console__note">
+          Left alone because something is on air on {ack.refused_on_air.join(', ')} — closing a
+          device takes the graphic with it.
+        </p>
+      ) : null}
+    </details>
+  )
+}
+
 /**
  * Users, groups, and stations (ADR 0013).
  *
@@ -561,6 +815,8 @@ function AdoptedNode({ node }: { node: FullNode }) {
           { label: 'Max layers', value: String(caps?.max_layers ?? '?'), accent: true },
         ]}
       />
+
+      <OutputHardware node={node} />
 
       {/* What somebody needs when it is going wrong: where the node is, what
           it is running, whether it has the content we think it has, and how

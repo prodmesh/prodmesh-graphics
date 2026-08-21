@@ -30,6 +30,7 @@ import { router as templatesRouter } from './routes/templates.js'
 import { router as itemsRouter } from './routes/items.js'
 import { router as themesRouter } from './routes/themes.js'
 import { router as screensRouter } from './routes/screens.js'
+import { router as nodeOutputsRouter } from './routes/nodeOutputs.js'
 import { router as cueRouter } from './routes/cue.js'
 import { router as rundownRouter } from './routes/rundown.js'
 import { router as authRouter } from './routes/auth.js'
@@ -105,6 +106,7 @@ export function createApp() {
   app.use(itemsRouter)
   app.use(themesRouter)
   app.use(screensRouter)
+  app.use(nodeOutputsRouter)
   app.use(cueRouter)
   app.use(rundownRouter)
 

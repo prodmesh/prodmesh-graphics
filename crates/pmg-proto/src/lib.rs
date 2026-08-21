@@ -121,6 +121,7 @@ pub enum ToServer {
     /// The node's view of what is on air. **The server adopts this; it never
     /// overwrites it** (ADR 0009).
     StateReport(StateReport),
+    OutputsAck(OutputsAck),
     SyncProgress(SyncProgress),
     Ready(Ready),
     CueAck(CueAck),
@@ -151,6 +152,102 @@ pub enum ToNode {
     Ping {
         t_ms: u64,
     },
+    /// Reconfigure this node's outputs (ADR 0024). Persisted by the node before
+    /// it is acked, the same ordering an assignment uses.
+    SetOutputs {
+        gen: u64,
+        outputs: Vec<OutputConfig>,
+        /// Reconfigure an output even though something is on air on it.
+        #[serde(default)]
+        force: bool,
+    },
+}
+
+// ---------------------------------------------------------------------------
+// Output configuration (ADR 0024)
+// ---------------------------------------------------------------------------
+
+/// One output's HARDWARE, as the server asks for it.
+///
+/// Deliberately not layers or colour: those travel in the assignment and are
+/// content-facing. This is which device, which mode, which clock — the things
+/// that mean closing a card and opening it again (ADR 0024).
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+pub struct OutputConfig {
+    pub id: String,
+    /// `ndi` | `decklink` | `window` | `headless`
+    pub backend: String,
+    /// What an NDI receiver sees in its source list.
+    #[serde(default)]
+    pub ndi_name: String,
+    /// DeckLink device index for the fill.
+    #[serde(default)]
+    pub device: u32,
+    /// Second port for the key half of a fill+key pair. Absent means fill only.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub key_device: Option<u32>,
+    /// Display mode name, e.g. `1080p59.94`.
+    #[serde(default)]
+    pub mode: String,
+    /// The raster and rate this output runs at.
+    ///
+    /// Stated rather than derived from `mode`: the node would have to keep a
+    /// table mapping mode names to timings, the server already has one to draw
+    /// the picker from, and two tables that must agree is one more than there
+    /// should be. Defaults travel explicitly here, as they do in the
+    /// assignment.
+    #[serde(default = "default_width")]
+    pub width: u32,
+    #[serde(default = "default_height")]
+    pub height: u32,
+    #[serde(default = "default_fps_num")]
+    pub fps_num: u32,
+    #[serde(default = "default_fps_den")]
+    pub fps_den: u32,
+    /// Embedded audio channels: 0, 2, 8 or 16.
+    #[serde(default)]
+    pub audio_channels: i32,
+    /// 0 disables this output's preview channel.
+    #[serde(default)]
+    pub preview_port: u16,
+    /// Which CLOCK this output runs on. Outputs naming the same group share a
+    /// render thread, which is what "phase-locked together" means in practice
+    /// (ADR 0011) — and what decides which outputs a reconfiguration
+    /// interrupts.
+    #[serde(default)]
+    pub group: String,
+}
+
+fn default_width() -> u32 {
+    1920
+}
+fn default_height() -> u32 {
+    1080
+}
+fn default_fps_num() -> u32 {
+    60000
+}
+fn default_fps_den() -> u32 {
+    1001
+}
+
+/// What a node did with a `SetOutputs`.
+///
+/// **What it APPLIED, not what it was asked for.** A device that will not open
+/// leaves the node running the configuration that was working, and says so —
+/// a node that accepts a broken configuration and goes dark is the failure this
+/// whole path exists to avoid.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+pub struct OutputsAck {
+    pub gen: u64,
+    pub applied: Vec<OutputConfig>,
+    /// Empty when everything opened. One sentence per output that did not.
+    #[serde(default)]
+    pub problems: Vec<String>,
+    /// Outputs that were left alone because something was on air on them and
+    /// the request did not say `force`.
+    #[serde(default)]
+    pub refused_on_air: Vec<String>,
 }
 
 // ---------------------------------------------------------------------------

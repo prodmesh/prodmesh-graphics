@@ -436,6 +436,26 @@ const MIGRATIONS = [
       CREATE INDEX item_destinations_by_screen ON item_destinations(screen_id);
     `)
   },
+
+  // 14 — the hardware an operator asked each node for (ADR 0024).
+  //
+  // The NODE owns its outputs and persists them itself; this is the server's
+  // record of what it last asked for, so Configure has something to show
+  // before a node connects and something to re-send when one does. The node's
+  // own file is the authority — if the two disagree, the node is right and its
+  // StateReport says so.
+  (d) => {
+    d.exec(`
+      CREATE TABLE node_outputs (
+        node_id    TEXT NOT NULL,
+        output_id  TEXT NOT NULL,
+        config     TEXT NOT NULL,
+        ordinal    INTEGER NOT NULL DEFAULT 0,
+        updated_at INTEGER NOT NULL,
+        PRIMARY KEY (node_id, output_id)
+      );
+    `)
+  },
 ]
 
 /**

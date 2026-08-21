@@ -170,12 +170,21 @@ function buildOp(body, item) {
     // what a lower third plus its full-screen version on one card would be.
     case 'take': {
       const dests = destinationsFor(item.id, body.node)
+      const to = { output: dests[0]?.output ?? output, layer: dests[0]?.layer ?? layer }
+      if (!to.output || !to.layer) {
+        // Never build a cue with a hole in it. CBOR encodes a missing JS field
+        // as `undefined`, which the node cannot decode AT ALL — so a take whose
+        // destinations resolved to nothing arrived as an undecodable frame and
+        // came back as "undefined didn’t confirm the take". The Item has
+        // somewhere to go or it does not, and saying which is the whole job.
+        return [null, 'no_destination']
+      }
       return [
         {
           Take: {
             item: item.id,
-            output: dests[0]?.output ?? output,
-            layer: dests[0]?.layer ?? layer,
+            output: to.output,
+            layer: to.layer,
             destinations: dests,
           },
         },

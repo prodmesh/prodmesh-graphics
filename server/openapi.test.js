@@ -68,6 +68,8 @@ const NOT_PUBLIC = new Map([
   ['DELETE /api/playlists/:id', 'Editing.'],
   ['POST /api/rundowns', 'Editing.'],
   ['PUT /api/rundowns/:id/playlists', 'Editing.'],
+  ['GET /api/nodes/:id/output-config', 'Configure — a node\u2019s hardware (ADR 0024). Integrators fire cues; what a node drives is plant configuration.'],
+  ['PUT /api/nodes/:id/output-config', 'Configure. Reconfiguring an output closes a device and opens it again.'],
   ['GET /api/screens', 'Configure — a screen is plant configuration, like a node or an output (ADR 0023). Integrators fire cues at Items, and an Item already carries where it goes.'],
   ['POST /api/screens', 'Configure. Naming the places in a building is a human act.'],
   ['PATCH /api/screens/:id', 'Configure.'],

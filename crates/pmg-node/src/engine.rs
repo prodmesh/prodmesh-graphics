@@ -428,6 +428,33 @@ impl LayerEngine {
         self.seeded = true;
     }
 
+    /// Re-declare the outputs after the NODE's own configuration changed
+    /// (ADR 0024).
+    ///
+    /// The seal stays meaningful: an assignment still cannot invent an output.
+    /// This is the node saying what it now drives, which is the one voice
+    /// entitled to — it is the thing with the wire in the back of it. Outputs
+    /// that are gone are removed, taking any occupant with them, because an
+    /// output that no longer exists cannot still be showing something.
+    pub fn redeclare_outputs(&mut self, outputs: &[(String, Vec<String>)], fps: (u32, u32)) {
+        self.seeded = false;
+        self.configure(
+            &outputs
+                .iter()
+                .map(|(id, layers)| pmg_proto::OutputAssignment {
+                    id: id.clone(),
+                    mode: String::new(),
+                    color: Default::default(),
+                    layers: layers.clone(),
+                })
+                .collect::<Vec<_>>(),
+            fps,
+        );
+        self.outputs
+            .retain(|o| outputs.iter().any(|(id, _)| id == &o.id));
+        self.seeded = true;
+    }
+
     /// A new server epoch invalidates the idempotency keys, because `seq`
     /// restarts and the server may reuse numbers it already used.
     pub fn set_epoch(&mut self, epoch: u64) {

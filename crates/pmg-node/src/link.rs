@@ -38,6 +38,13 @@ pub enum FromLink {
     Tick,
     Disconnected,
     Assignment(Box<pmg_proto::Assignment>),
+    /// New output hardware configuration (ADR 0024). The owner persists it,
+    /// applies what it can, and answers with what it ACTUALLY applied.
+    SetOutputs {
+        gen: u64,
+        outputs: Vec<pmg_proto::OutputConfig>,
+        force: bool,
+    },
     /// A cue, **stamped with the instant it came off the socket**.
     ///
     /// The stamp is taken here rather than where it is applied, because the
@@ -71,6 +78,8 @@ pub enum ToLink {
     AssignmentSaved {
         gen: u64,
     },
+    /// What the node ACTUALLY did with a `SetOutputs` — see `OutputsAck`.
+    OutputsApplied(pmg_proto::OutputsAck),
 }
 
 pub struct Config {
@@ -173,6 +182,7 @@ fn session(cfg: &Config, tx: &Sender<FromLink>, rx: &Receiver<ToLink>) -> Result
                 ToLink::State(s) => send(&mut ws, &ToServer::StateReport(s))?,
                 ToLink::Ready(r) => send(&mut ws, &ToServer::Ready(r))?,
                 ToLink::Progress(p) => send(&mut ws, &ToServer::SyncProgress(p))?,
+                ToLink::OutputsApplied(a) => send(&mut ws, &ToServer::OutputsAck(a))?,
                 ToLink::AssignmentSaved { gen } => {
                     // HERE, and only here. The owner has fsynced.
                     send(&mut ws, &ToServer::AssignmentAck { gen })?;
@@ -222,6 +232,17 @@ fn handle(
         }
         ToNode::Resync { reason } => {
             let _ = tx.send(FromLink::Resync(reason));
+        }
+        ToNode::SetOutputs {
+            gen,
+            outputs,
+            force,
+        } => {
+            let _ = tx.send(FromLink::SetOutputs {
+                gen,
+                outputs,
+                force,
+            });
         }
         ToNode::Ping { t_ms } => send(ws, &ToServer::Pong { t_ms })?,
     }
