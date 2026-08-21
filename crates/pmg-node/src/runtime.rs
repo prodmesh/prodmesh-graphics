@@ -539,8 +539,36 @@ impl Runtime {
         }
 
         let mut last_state = Instant::now();
+        // The node's offset from UTC, read once. A clock graphic shows the
+        // node's local time (ADR 0022); a countdown is arithmetic on instants
+        // and needs no offset at all.
+        let tz_offset_ms = local_utc_offset_ms();
         loop {
-            match rx.recv_timeout(Duration::from_millis(200)) {
+            // Timers first, before the wait: a countdown must tick whether or
+            // not the server has anything to say, which is the whole point of
+            // the node computing it.
+            //
+            // The wait is then exactly as long as the soonest timer allows, so
+            // a clock changes ON the second rather than up to a poll interval
+            // after it — and with no timers on air it is the ordinary poll and
+            // costs one comparison per layer.
+            let now = crate::link::now_ms() as i64;
+            {
+                let mut e = self.engine.lock().unwrap();
+                for l in e.run_timers(&self.assigned, now, tz_offset_ms) {
+                    tracing::debug!(layer = %l, "timer tick");
+                }
+            }
+            let wait = {
+                let e = self.engine.lock().unwrap();
+                match e.next_timer_due_ms() {
+                    Some(due) => Duration::from_millis(
+                        (due - crate::link::now_ms() as i64).clamp(1, 200) as u64,
+                    ),
+                    None => Duration::from_millis(200),
+                }
+            };
+            match rx.recv_timeout(wait) {
                 Ok(FromLink::Cue(c, received_at, reply)) => {
                     // Arming happens under the engine lock, which briefly stalls
                     // every render thread. An arm is 0.3–2 ms against a 16.68 ms
@@ -796,6 +824,35 @@ const LEARN_TARGET_FRAME: u64 = 600;
 ///
 /// `None` means the op carries no deadline — an arm or a preload, which are not
 /// time-critical and must not be refused for being slow.
+/// This machine's offset from UTC, in milliseconds.
+///
+/// Read from the C library rather than pulled in as a dependency: a booth Mac
+/// has no internet and the tz database it already carries is the one its own
+/// clock uses. A failure reads as UTC, which is wrong by hours rather than
+/// wrong by a little — the sort of wrong somebody notices immediately, which
+/// is the right way for a clock to fail.
+fn local_utc_offset_ms() -> i64 {
+    // `date +%z` is +HHMM. Shelling out once at startup is cheaper in
+    // dependencies than a tz crate, and this is the only place that needs it.
+    let out = std::process::Command::new("date").arg("+%z").output().ok();
+    let text = out
+        .filter(|o| o.status.success())
+        .and_then(|o| String::from_utf8(o.stdout).ok())
+        .unwrap_or_default();
+    let t = text.trim();
+    let parse = || -> Option<i64> {
+        let sign = match t.as_bytes().first()? {
+            b'-' => -1,
+            b'+' => 1,
+            _ => return None,
+        };
+        let h: i64 = t.get(1..3)?.parse().ok()?;
+        let m: i64 = t.get(3..5)?.parse().ok()?;
+        Some(sign * (h * 3_600_000 + m * 60_000))
+    };
+    parse().unwrap_or(0)
+}
+
 fn is_late(deadline_ms: Option<u64>, elapsed: std::time::Duration) -> bool {
     deadline_ms.is_some_and(|d| elapsed.as_millis() as u64 > d)
 }

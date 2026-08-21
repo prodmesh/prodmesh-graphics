@@ -78,6 +78,9 @@ pub struct Armed {
     pub in_ms: f64,
     pub out_ms: f64,
     pub doc: SceneDoc,
+    /// The Item's timer fields, by key (ADR 0022). Empty for almost every Item,
+    /// which is why the per-frame cost of having timers at all is one `is_empty`.
+    pub timers: Vec<(String, pmg_scene::timer::TimerSpec)>,
 }
 
 /// Where a layer's occupant is in its life.
@@ -149,6 +152,16 @@ pub struct Occupant {
     pub tween: Option<Tween>,
     /// Named timelines playing (or holding) over the base phase, start order.
     pub named: Vec<NamedRun>,
+    /// When this went on air, in UTC milliseconds — what `elapsed` counts from.
+    pub taken_at_ms: i64,
+    /// What each timer field currently READS. The comparison that decides
+    /// whether a tick needs a rebind is on the string, not on the time: a clock
+    /// showing minutes changes 60 times less often than one showing seconds,
+    /// and neither should re-solve a layout for a number that has not changed.
+    pub shown: BTreeMap<String, String>,
+    /// UTC milliseconds at which `shown` next goes stale, or `None` when
+    /// nothing here changes on its own.
+    pub timer_due_ms: Option<i64>,
 }
 
 #[derive(Default)]
@@ -240,6 +253,16 @@ pub struct LayerEngine {
     /// Set once the node's own outputs are in place, after which the assignment
     /// may only configure them and never add to them.
     seeded: bool,
+    /// This node's wall clock, in UTC milliseconds, and its offset from UTC —
+    /// what timers read (ADR 0022).
+    ///
+    /// Held here rather than read from the operating system inside the engine,
+    /// for the reason every clock in this codebase is passed in: a countdown
+    /// whose time comes from `SystemTime::now()` two calls deep cannot be
+    /// TESTED, and a countdown nobody can test is a countdown nobody should
+    /// put on a wall.
+    now_ms: i64,
+    tz_offset_ms: i64,
 }
 
 impl LayerEngine {
@@ -251,7 +274,150 @@ impl LayerEngine {
             applied: std::collections::HashSet::new(),
             epoch: 0,
             seeded: false,
+            now_ms: 0,
+            tz_offset_ms: 0,
         }
+    }
+
+    /// Tell the engine what time it is. The runtime does this every pass;
+    /// a test does it by hand, which is the point.
+    pub fn set_clock(&mut self, now_ms: i64, tz_offset_ms: i64) {
+        self.now_ms = now_ms;
+        self.tz_offset_ms = tz_offset_ms;
+    }
+
+    /// When the soonest timer anywhere on this node next changes what it says.
+    ///
+    /// The runtime waits on its socket for exactly this long instead of its
+    /// usual poll, so a clock ticks ON the second rather than up to a couple of
+    /// hundred milliseconds after it.
+    pub fn next_timer_due_ms(&self) -> Option<i64> {
+        self.outputs
+            .iter()
+            .flat_map(|o| o.layers.iter())
+            .filter_map(|l| l.occupant.as_ref())
+            .filter_map(|o| o.timer_due_ms)
+            .min()
+    }
+
+    /// Re-evaluate every live timer and rebind the ones whose STRING changed.
+    ///
+    /// Returns the layers it rebound, for the log. Called every pass of the
+    /// runtime loop: with no timers anywhere it is one `is_empty` per layer,
+    /// and with timers it is one integer comparison until the second turns
+    /// over.
+    ///
+    /// **A timer rebind does not morph.** The tween exists so a lower third
+    /// whose text changed mid-hold grows into its new shape; applied to a clock
+    /// it would start a 400 ms animation on every tick and the next tick would
+    /// interrupt it (ADR 0022).
+    pub fn run_timers(&mut self, lib: &dyn Library, now_ms: i64, tz_offset_ms: i64) -> Vec<String> {
+        self.set_clock(now_ms, tz_offset_ms);
+        let mut done = Vec::new();
+
+        // Which layers need what, decided before anything is armed: arming
+        // borrows the engine immutably and the occupant is borrowed mutably.
+        struct Due {
+            output: String,
+            layer: String,
+            item: String,
+            fps: (u32, u32),
+            taken_at_ms: i64,
+            values: BTreeMap<String, String>,
+        }
+        let mut due: Vec<Due> = Vec::new();
+        for out in &self.outputs {
+            for l in &out.layers {
+                let Some(o) = &l.occupant else { continue };
+                if o.armed.timers.is_empty() {
+                    continue;
+                }
+                if o.timer_due_ms.is_some_and(|d| now_ms < d) {
+                    continue;
+                }
+                let values: BTreeMap<String, String> = o
+                    .armed
+                    .timers
+                    .iter()
+                    .map(|(k, spec)| {
+                        (
+                            k.clone(),
+                            pmg_scene::timer::format_at(spec, now_ms, tz_offset_ms, o.taken_at_ms),
+                        )
+                    })
+                    .collect();
+                if values == o.shown {
+                    // Nothing to redraw; only the deadline moves.
+                    continue;
+                }
+                due.push(Due {
+                    output: out.id.clone(),
+                    layer: l.name.clone(),
+                    item: o.armed.item_id.clone(),
+                    fps: (out.fps_num, out.fps_den),
+                    taken_at_ms: o.taken_at_ms,
+                    values,
+                });
+            }
+        }
+
+        for d in due {
+            let overrides: BTreeMap<String, DataValue> = d
+                .values
+                .iter()
+                .map(|(k, v)| (k.clone(), DataValue::Text(v.clone())))
+                .collect();
+            let Ok(rebound) = self.arm_inner_at(
+                &d.item,
+                lib,
+                Some(d.fps),
+                Some(&overrides),
+                None,
+                d.taken_at_ms,
+            ) else {
+                // The template or a font went away underneath a live graphic.
+                // The old instance stays on screen showing the last number it
+                // had, which is the least-wrong thing available: taking the
+                // graphic down mid-service because a clock could not re-solve
+                // would be a far bigger failure than a stopped clock.
+                continue;
+            };
+            let Some(out) = self.output_mut(&d.output) else {
+                continue;
+            };
+            let Some(l) = out.layer_mut(&d.layer) else {
+                continue;
+            };
+            let Some(o) = l.occupant.as_mut() else {
+                continue;
+            };
+            o.armed = rebound;
+            o.shown = d.values;
+            done.push(format!("{}/{}", d.output, d.layer));
+        }
+
+        // Deadlines last, for everything with timers — including the ones whose
+        // string had not changed, whose deadline still has to move forward or
+        // they would be recomputed every single pass.
+        for out in &mut self.outputs {
+            for l in &mut out.layers {
+                let Some(o) = &mut l.occupant else { continue };
+                if o.armed.timers.is_empty() {
+                    o.timer_due_ms = None;
+                    continue;
+                }
+                o.timer_due_ms = o
+                    .armed
+                    .timers
+                    .iter()
+                    .filter_map(|(_, spec)| {
+                        pmg_scene::timer::ms_until_change(spec, now_ms, o.taken_at_ms)
+                    })
+                    .min()
+                    .map(|ms| now_ms + ms.max(1));
+            }
+        }
+        done
     }
 
     /// Declare the outputs this node physically drives.
@@ -367,6 +533,9 @@ impl LayerEngine {
         now_ms: u64,
         received_late: bool,
     ) -> CueAck {
+        // Every cue carries the wall time already, so a take knows when it
+        // happened without asking the operating system from inside the engine.
+        self.now_ms = now_ms as i64;
         let ack = |result, reason, frame| CueAck {
             seq: cue.seq,
             cue_id: cue.cue_id.clone(),
@@ -493,6 +662,7 @@ impl LayerEngine {
 
                 let mut frame = None;
                 for (output, layer, armed) in prepared {
+                    let taken_at_ms = self.now_ms;
                     let out = self.output_mut(&output).ok_or(RejectReason::NoSuchLayer)?;
                     frame.get_or_insert(out.frame);
                     let l = out.layer_mut(&layer).ok_or(RejectReason::NoSuchLayer)?;
@@ -518,6 +688,14 @@ impl LayerEngine {
                         t_ms: 0.0,
                         tween: None,
                         named: Vec::new(),
+                        // A graphic's `elapsed` counts from the moment it went
+                        // on air, which is this one.
+                        taken_at_ms,
+                        shown: BTreeMap::new(),
+                        // Due immediately: the first pass of the runtime loop
+                        // after the take resolves every timer against the real
+                        // clock and sets a real deadline.
+                        timer_due_ms: Some(i64::MIN),
                     });
                 }
                 Ok(frame)
@@ -546,6 +724,7 @@ impl LayerEngine {
                     .ok_or(RejectReason::NoSuchLayer)?;
                 let armed = self.arm(item, lib, Some(out_fps))?;
                 let taking = matches!(op, CueOp::Take { .. });
+                let taken_at_ms = self.now_ms;
                 let out = self.output_mut(output).ok_or(RejectReason::NoSuchLayer)?;
                 let frame = out.frame;
                 let l = out.layer_mut(layer).ok_or(RejectReason::NoSuchLayer)?;
@@ -556,6 +735,14 @@ impl LayerEngine {
                         t_ms: 0.0,
                         tween: None,
                         named: Vec::new(),
+                        // A graphic's `elapsed` counts from the moment it went
+                        // on air, which is this one.
+                        taken_at_ms,
+                        shown: BTreeMap::new(),
+                        // Due immediately: the first pass of the runtime loop
+                        // after the take resolves every timer against the real
+                        // clock and sets a real deadline.
+                        timer_due_ms: Some(i64::MIN),
                     });
                     Ok(Some(frame))
                 } else {
@@ -821,6 +1008,19 @@ impl LayerEngine {
         overrides: Option<&BTreeMap<String, DataValue>>,
         rev_override: Option<&str>,
     ) -> Result<Armed, RejectReason> {
+        self.arm_inner_at(item_id, lib, out_fps, overrides, rev_override, self.now_ms)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn arm_inner_at(
+        &self,
+        item_id: &str,
+        lib: &dyn Library,
+        out_fps: Option<(u32, u32)>,
+        overrides: Option<&BTreeMap<String, DataValue>>,
+        rev_override: Option<&str>,
+        taken_at_ms: i64,
+    ) -> Result<Armed, RejectReason> {
         let (label, item_rev, data) = lib.item(item_id).ok_or(RejectReason::NoSuchItem)?;
         let template_rev = rev_override.unwrap_or(item_rev);
         let doc = lib.template(template_rev).ok_or(RejectReason::NotReady)?;
@@ -834,9 +1034,21 @@ impl LayerEngine {
 
         // The Item's data, then anything a live rebind overrode. Merged rather
         // than replaced: an Update that names one field must not blank the rest.
+        //
+        // Timers resolve HERE, against this node's own clock (ADR 0022) — the
+        // number never travels over the link, so a countdown keeps counting
+        // when the server dies. `taken_at` is the engine's current wall time at
+        // arm; the occupant's own take instant replaces it on the first tick
+        // after it goes on air, which is when `elapsed` starts meaning
+        // anything.
         let mut bound: pmg_scene::bind::Data = data
             .iter()
-            .map(|(k, v)| (k.clone(), v.as_binding_str()))
+            .map(|(k, v)| {
+                (
+                    k.clone(),
+                    v.as_binding_str_at(self.now_ms, self.tz_offset_ms, taken_at_ms),
+                )
+            })
             .collect();
         if let Some(over) = overrides {
             for (k, v) in over {
@@ -946,6 +1158,16 @@ impl LayerEngine {
                 .unwrap_or(0.0),
             instance: std::sync::Arc::new(instance),
             doc: doc.clone(),
+            // Collected from the Item's OWN data, never from an override: a
+            // rebind hands in formatted strings, and a timer that picked those
+            // up would stop being a timer after its first tick.
+            timers: data
+                .iter()
+                .filter_map(|(k, v)| match v {
+                    DataValue::Timer(spec) => Some((k.clone(), spec.clone())),
+                    _ => None,
+                })
+                .collect(),
         })
     }
 

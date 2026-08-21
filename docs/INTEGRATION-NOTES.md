@@ -427,6 +427,34 @@ Not worth chasing into the shader. It is two pixels, in the accepted class
 risk R1), with geometry exact. CI fails the corpus at >2/255, so if this ever
 grows, it fails rather than drifts.
 
+### A timer tick costs 0.087 ms, and an idle pass costs nothing
+*2026-08-21 · MacBook Pro M3 Max · release build · one text node, one timer field, Arial*
+
+ADR 0022 said a timer rebind "costs what an arm costs" — 0.3–2 ms — and left the
+per-frame cost of merely HAVING timers unstated. Measured over 300 consecutive
+ticks of a live countdown:
+
+```
+tick that changes the picture   mean 0.087 ms   worst 0.168 ms
+pass that changes nothing       worst 0.0001 ms
+```
+
+Against a 16.68 ms frame budget, a tick is about 1% of one frame, once a
+second. The idle pass — which is 59 frames out of 60, and every frame of every
+graphic that has no timer at all — is an integer comparison per layer and does
+not appear in the noise.
+
+**Read the tick number as a floor, not a ceiling.** This document is one text
+node; the cost is a layout solve plus a shaping pass, so a template with fifty
+nodes and three fonts pays what ITS arm pays. The number that generalises is
+the idle one, because that is the cost imposed on every graphic in the rundown
+by the existence of the feature.
+
+The measurement lives in `crates/pmg-node/tests/timers.rs` as a test that
+asserts correctness and PRINTS the timings rather than asserting them: a timing
+assertion on a shared CI runner is a flake, and a number nobody reads is not a
+budget.
+
 ### The GPU scene path renders a lower third in 13.9 ms against a 16.68 ms budget
 *2026-08-14 · MacBook Pro M3 Max, macOS 26.3 · wgpu 30 · 1920×1080p59.94*
 

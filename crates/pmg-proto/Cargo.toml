@@ -8,6 +8,11 @@ publish.workspace = true
 
 [dependencies]
 serde = { workspace = true }
+# The timer DECLARATION an Item carries (ADR 0022). Taken from `pmg-scene`
+# rather than restated here: it is one type on both sides of the wire, and a
+# second definition of it is exactly the disagreement this repo spends its
+# discipline avoiding. No cycle — `pmg-scene` knows nothing of the wire.
+pmg-scene = { path = "../pmg-scene" }
 ciborium = { workspace = true }
 thiserror = { workspace = true }
 anyhow = { workspace = true }

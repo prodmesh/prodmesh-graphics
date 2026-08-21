@@ -193,10 +193,16 @@ pub fn ms_until_change(spec: &TimerSpec, now_ms: i64, taken_at_ms: i64) -> Optio
                 // Floored, and staying there.
                 return None;
             }
-            // Counting DOWN truncates, so the display changes when the
-            // remaining time crosses the step boundary BELOW it, which is a
-            // different instant from the one a count-up would change at.
-            return Some((left.saturating_sub(1).rem_euclid(step)) + 1);
+            // Counting DOWN truncates, so the display holds until the
+            // remaining time drops BELOW the whole step it is currently
+            // showing: 4.5 s left reads 0:04 and becomes 0:03 when 4 s left
+            // becomes 3.999, which is 501 ms away — not 500.
+            //
+            // The off-by-one here SKIPPED A SECOND, and it took a frame-walk
+            // through a whole countdown to see it: at a boundary the engine
+            // slept a full step and woke a display later. Unit-testing the
+            // formula against my own belief about it agreed with the bug.
+            return Some(left.rem_euclid(step) + 1);
         }
     };
     Some(step - position.rem_euclid(step))
@@ -313,11 +319,16 @@ mod tests {
     #[test]
     fn a_countdown_asks_again_at_its_own_boundary() {
         let s = spec(TimerKind::Countdown, Some(T10), TimerFormat::MSs);
-        // 4.5 s left reads "0:04" and becomes "0:03" in 500 ms.
+        // 4.5 s left reads "0:04" and becomes "0:03" when it drops below 4 s,
+        // which is 501 ms away — the half-second to the boundary plus the
+        // millisecond that crosses it.
         assert_eq!(format_at(&s, T10 - 4_500, 0, 0), "0:04");
-        assert_eq!(ms_until_change(&s, T10 - 4_500, 0), Some(500));
-        // Exactly on a second: the display changes a full second later.
-        assert_eq!(ms_until_change(&s, T10 - 4_000, 0), Some(1_000));
+        assert_eq!(ms_until_change(&s, T10 - 4_500, 0), Some(501));
+        // EXACTLY on a second, the display is about to change: 4.000 s left
+        // reads "0:04" and 3.999 reads "0:03".
+        assert_eq!(format_at(&s, T10 - 4_000, 0, 0), "0:04");
+        assert_eq!(format_at(&s, T10 - 3_999, 0, 0), "0:03");
+        assert_eq!(ms_until_change(&s, T10 - 4_000, 0), Some(1));
         // Finished: nothing left to say.
         assert_eq!(ms_until_change(&s, T10, 0), None);
         assert_eq!(ms_until_change(&s, T10 + 5_000, 0), None);

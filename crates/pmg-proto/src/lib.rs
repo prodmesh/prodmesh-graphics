@@ -362,6 +362,10 @@ pub enum DataValue {
     Bool(bool),
     /// A content address for an image or video.
     Asset(String),
+    /// A value the NODE computes from its own clock — a countdown, a clock, a
+    /// service timer (ADR 0022). The declaration travels; the number never
+    /// does, which is what lets a countdown keep counting when this link dies.
+    Timer(pmg_scene::timer::TimerSpec),
 }
 
 impl DataValue {
@@ -382,6 +386,25 @@ impl DataValue {
             }
             DataValue::Bool(b) => b.to_string(),
             DataValue::Asset(h) => h.clone(),
+            // A timer with no clock reads as though no time has passed. Every
+            // caller that HAS a clock must use `as_binding_str_at`; this is the
+            // total answer for the ones that do not, and a stopped clock is at
+            // least an honest-looking string rather than a panic or a blank.
+            DataValue::Timer(spec) => pmg_scene::timer::format_at(spec, 0, 0, 0),
+        }
+    }
+
+    /// The string a text binding sees, at a given instant.
+    ///
+    /// Only timers care. Everything else answers the same as
+    /// [`Self::as_binding_str`], which is why the node can call this
+    /// unconditionally and never has to ask what kind of value it is holding.
+    pub fn as_binding_str_at(&self, now_ms: i64, offset_ms: i64, taken_at_ms: i64) -> String {
+        match self {
+            DataValue::Timer(spec) => {
+                pmg_scene::timer::format_at(spec, now_ms, offset_ms, taken_at_ms)
+            }
+            other => other.as_binding_str(),
         }
     }
 }
