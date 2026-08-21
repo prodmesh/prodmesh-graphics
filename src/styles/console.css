@@ -250,27 +250,15 @@
 
 /* ---- Shell: brand / mode tabs / status / telemetry / footer -------------- */
 
-.c-brand { display: flex; gap: 8px; align-items: center; flex-shrink: 0; }
-.c-brand__mark {
-  width: 26px;
-  height: 26px;
-  border-radius: var(--pm-radius-4);
-  background: var(--pm-red);
-  display: flex;
-  align-items: center;
-  justify-content: center;
+.c-brand { display: flex; gap: 10px; align-items: center; flex-shrink: 0; }
+/* Height-driven, so the lockup keeps its own proportions whatever the header
+   does. Shipped at 3x for a retina booth screen; 24 KB, bundled. */
+.c-brand__logo {
+  height: 22px;
+  width: auto;
+  display: block;
   flex-shrink: 0;
-  color: var(--pm-white);
 }
-.c-brand__name {
-  font-weight: 700;
-  font-size: 15px;
-  line-height: 100%;
-  letter-spacing: var(--pm-tracking-wordmark);
-  color: var(--pm-text-primary);
-  white-space: nowrap;
-}
-.c-brand__name span { color: var(--pm-text-secondary); }
 .c-brand__version {
   font-family: var(--pm-font-mono);
   font-weight: 600;

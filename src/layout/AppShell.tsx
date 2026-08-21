@@ -1,5 +1,5 @@
 import { NavLink, Outlet, useLocation } from 'react-router-dom'
-import { Microchip } from 'lucide-react'
+import logo from '../assets/prodmesh-gfx-lockup.png'
 import { useQuery } from '../lib/useQuery'
 import { useTopic } from '../lib/stream'
 import { keys, topics } from '../lib/keys'
@@ -42,12 +42,10 @@ export function AppShell() {
     <div className="console">
       <header className="console__header">
         <div className="c-brand">
-          <span className="c-brand__mark">
-            <Microchip size={14} aria-hidden />
-          </span>
-          <span className="c-brand__name">
-            ProdMesh <span>Graphics</span>
-          </span>
+          {/* The lockup carries the name, so there is no text beside it to
+              disagree with. Bundled by Vite rather than fetched — no CDNs,
+              ever, and a booth machine has no internet to fetch from. */}
+          <img className="c-brand__logo" src={logo} alt="ProdMesh GFX" />
           <span className="c-brand__version">
             {version ? `v${version.server} · ${version.milestone}` : 'connecting'}
           </span>

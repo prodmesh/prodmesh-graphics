@@ -1,3 +1,5 @@
+<img src="assets/pm-logo-trans.png" alt="ProdMesh GFX" width="420">
+
 # ProdMesh Graphics
 
 A distributed graphics design, programming, and playout system for templated

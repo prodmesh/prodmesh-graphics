@@ -47,6 +47,15 @@ import { SCENE_READER_MAJOR } from './manifest.js'
 const API_VERSION = 1
 
 /**
+ * Which milestone this build is from, shown beside the wordmark.
+ *
+ * Hard-coded and stated ONCE, because it was hard-coded in two places and read
+ * "M2" for four milestones — a version badge that lies is worse than no badge,
+ * since it is the first thing anyone quotes when reporting a problem.
+ */
+const MILESTONE = 'M6'
+
+/**
  * The listen port: `--port <n>` beats `PMG_PORT` beats `PORT` beats 8519.
  *
  * The explicit flag exists because dev harnesses (Claude Code's preview, some
@@ -348,7 +357,7 @@ export function createApp() {
       server: '0.1.0',
       proto_ver: 1,
       scene_reader_major: SCENE_READER_MAJOR,
-      milestone: 'M2',
+      milestone: MILESTONE,
     })
   })
 
@@ -386,7 +395,7 @@ export function createApp() {
 // Only listen when run directly, so tests can import createApp() freely.
 if (process.argv[1] && import.meta.url === `file://${process.argv[1]}`) {
   const server = createApp().listen(PORT, () => {
-    console.log(`ProdMesh Graphics control server on :${PORT} (M2)`)
+    console.log(`ProdMesh Graphics control server on :${PORT} (${MILESTONE})`)
   })
   // PMG Link shares the HTTP listener: it is a WebSocket upgrade on /link, so
   // it needs the server object rather than the app. Assets and preview stay
