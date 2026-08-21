@@ -531,7 +531,7 @@ pub fn paste_node(
 pub fn set_gradient(
     armed: &Armed,
     id: &str,
-    gradient: Option<(f32, Vec<([f32; 4], f32)>)>,
+    gradient: Option<pmg_render::interact::GradientSpec>,
 ) -> Result<String, String> {
     let mut doc = armed.doc.clone();
     interact::apply_set_gradient(&mut doc, id, gradient)?;

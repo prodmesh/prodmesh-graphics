@@ -1411,10 +1411,14 @@ pub fn apply_clear_theme(doc: &mut SceneDoc) {
 /// know) — and stamps the document 1.1, because it now uses a 1.1 field. The
 /// editor that introduces the version is the editor that declares it, same
 /// rule as fields.
+/// An angle and its stops as `(rgba, at)` — what an editor hands in, before it
+/// becomes a `Gradient`.
+pub type GradientSpec = (f32, Vec<([f32; 4], f32)>);
+
 pub fn apply_set_gradient(
     doc: &mut SceneDoc,
     id: &str,
-    gradient: Option<(f32, Vec<([f32; 4], f32)>)>,
+    gradient: Option<GradientSpec>,
 ) -> Result<(), String> {
     if let Some((_, stops)) = &gradient {
         if stops.len() < 2 || stops.len() > 4 {
@@ -2066,9 +2070,7 @@ pub fn apply_paste(
                     let mut carry = Some(node);
                     for c in &mut n.children {
                         carry = insert_after(c, target, carry.take()?);
-                        if carry.is_none() {
-                            return None;
-                        }
+                        carry.as_ref()?;
                     }
                     carry
                 }

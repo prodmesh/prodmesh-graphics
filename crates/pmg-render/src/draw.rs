@@ -123,9 +123,9 @@ fn uniform_bytes(u: &NodeUniform) -> [u8; UNIFORM_SIZE as usize] {
 fn gradient_stops(g: Option<&pmg_scene::doc::Gradient>) -> [[f32; 4]; 4] {
     let mut out = [[0.0; 4]; 4];
     if let Some(g) = g {
-        for i in 0..4 {
+        for (i, slot) in out.iter_mut().enumerate() {
             let s = &g.stops[i.min(g.stops.len() - 1)];
-            out[i] = crate::color_to_linear(s.color.rgba);
+            *slot = crate::color_to_linear(s.color.rgba);
         }
     }
     out
@@ -134,8 +134,8 @@ fn gradient_stops(g: Option<&pmg_scene::doc::Gradient>) -> [[f32; 4]; 4] {
 fn gradient_offsets(g: Option<&pmg_scene::doc::Gradient>) -> [f32; 4] {
     let mut out = [0.0; 4];
     if let Some(g) = g {
-        for i in 0..4 {
-            out[i] = g.stops[i.min(g.stops.len() - 1)].at;
+        for (i, slot) in out.iter_mut().enumerate() {
+            *slot = g.stops[i.min(g.stops.len() - 1)].at;
         }
     }
     out

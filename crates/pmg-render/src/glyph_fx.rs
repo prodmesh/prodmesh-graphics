@@ -180,9 +180,9 @@ mod tests {
         assert_eq!(fx.offset, -2);
         assert_eq!((fx.width, fx.height), (12, 12));
         // Just outside the old edge: solid ring.
-        assert_eq!(fx.bytes[(1 * 12 + 6) as usize], 255);
+        assert_eq!(fx.bytes[12 + 6], 255);
         // Dead centre of the glyph: knocked out entirely.
-        assert_eq!(fx.bytes[(6 * 12 + 6) as usize], 0);
+        assert_eq!(fx.bytes[6 * 12 + 6], 0);
         // Beyond the radius: nothing.
         assert_eq!(fx.bytes[0], 0);
     }

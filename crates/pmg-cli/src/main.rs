@@ -38,7 +38,8 @@ USAGE:
     pmgctl take <template> --font <ttf>       M1: render an Item on air
     pmgctl spike s2 --font <ttf>              Spike S2: text typography
 
-    pmgctl render-golden <dir>     Spike S1: render the parity corpus natively
+    pmgctl render-golden <dir> [--font <path>]
+                                 Render the parity corpus natively
     pmgctl golden-diff <a> <b>     Spike S1: compare native against browser
 
 PLANNED (see docs/ROADMAP.md):
@@ -119,9 +120,15 @@ fn main() -> Result<()> {
         Some("render-golden") => {
             let dir = args
                 .get(1)
+                .filter(|a| !a.starts_with("--"))
                 .map(String::as_str)
                 .unwrap_or("testdata/golden/native");
-            golden::render_golden(std::path::Path::new(dir))
+            let font = args
+                .iter()
+                .position(|a| a == "--font")
+                .and_then(|i| args.get(i + 1))
+                .map(String::as_str);
+            golden::render_golden(std::path::Path::new(dir), font)
         }
         Some("golden-diff") => match (args.get(1), args.get(2)) {
             (Some(a), Some(b)) => {

@@ -349,6 +349,45 @@ Browser-side timings, which also serve spike S6: **221.6 ms** for the first
 figure (including adapter and device acquisition), then **5.1 ms** and **5.7 ms**.
 The wasm bundle is **244 KB** — before any text stack.
 
+### The parity result survives the corpus growing from 3 figures to 92
+*2026-08-20 · MacBook Pro M3 Max, macOS 26.3 · wgpu 30.0.0 · Chromium WebGPU (in-app browser) · Arial 773 236 bytes, blake3:920ba7d7… on both sides*
+
+The S1 result above was measured over three hand-drawn primitives. Everything
+built since — layout, transforms, strokes, shadows, gradients, clipping, images,
+timelines, and text with its CPU-rasterized outlines and shadows — went through
+no parity check at all, because there was nothing in the corpus that used it.
+
+`pmg_render::corpus` now holds 89 real SceneDocs alongside the three primitives.
+All 92 rendered on both targets, and the worst figure of the 92 reads:
+
+```
+                    within 1/255   max delta   centroid shift   alpha mass
+worst of 92           100.0000%      0/255      0.000000 px      0.0000%
+```
+
+Still bit-identical, now including 22 figures of real shaped type. The Metal
+caveat from the 2026-08-14 entry is unchanged and still applies: two WGSL
+frontends over one driver, not a cross-backend result.
+
+**Two things the growth itself found**, neither of them a parity failure:
+
+- **`transform.skew` is in the format and the renderer ignores it.** No editor
+  writes one, nothing draws one, and the spec listed the field without saying
+  so. Now stated in `docs/specs/scene-format.md` §3, and pinned by the figure
+  `transform-skew-ignored` so implementing it changes an image somebody has to
+  look at.
+- **Text `align` is relative to the widest LINE, not to the box.** Deliberate
+  and commented in `text_source.rs` — a content-sized text node is exactly as
+  wide as its widest line, and the parent has already centred it, so aligning
+  against `max_width` would centre twice. The consequence is that alignment is
+  invisible on single-line text, which is why the corpus figures for it are
+  two-line.
+
+**The font is the part to get right.** `pmg-text` has no system font database,
+so both halves must be handed the same bytes; each prints the face's blake3 and
+comparing those two lines is the whole check. Handed different faces, the run
+measures two typefaces and reports it as a renderer difference.
+
 ### The GPU scene path renders a lower third in 13.9 ms against a 16.68 ms budget
 *2026-08-14 · MacBook Pro M3 Max, macOS 26.3 · wgpu 30 · 1920×1080p59.94*
 

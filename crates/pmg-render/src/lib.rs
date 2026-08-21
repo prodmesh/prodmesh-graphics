@@ -21,6 +21,7 @@
 
 #![forbid(unsafe_code)]
 
+pub mod corpus;
 pub mod draw;
 pub mod glyph_fx;
 pub mod interact;

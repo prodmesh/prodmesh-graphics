@@ -28,8 +28,23 @@ deleted or weakened:
 
 ## 2 — Golden images
 
-`testdata/templates/*.pmgscene.json` compile and render to
-`testdata/golden/*.png`. Two things are checked, and they are different failures:
+`pmgctl render-golden <dir>` renders the whole corpus offscreen. It is two
+corpora in one command:
+
+- **three primitives** (`pmg_render::parity`, 512x512) covering what a GPU does
+  differently at all — fill, our own antialiasing math, texture sampling;
+- **~90 templates** (`pmg_render::corpus`, 512x288) — real SceneDocs armed and
+  drawn through the same path a node runs, covering layout, transforms, strokes,
+  shadows, gradients, clipping, images, animation, and text with its
+  CPU-rasterized effects.
+
+The templates are **constructed in Rust, not loaded from files**, so both the
+native and the browser half build byte-identical documents; fifty JSON files
+fetched over HTTP would make "did both sides render the same template?" a
+question about the web server. The rendered images are **not committed** — see
+`testdata/golden/README.md` for why, and for the three ways they are compared.
+
+Two things are checked, and they are different failures:
 
 - **Native regression** — did a change to layout, text, or the renderer move
   something that was not supposed to move?
@@ -43,9 +58,22 @@ is a GPU backend difference we have already accepted. Reporting them as one
 number hides the one that matters.
 
 **Measured 2026-08-14: bit-identical on Metal**, 0/255 and 0.000000 px across
-the whole corpus — see spike S1. The separation of the two metrics was validated
-by deliberately perturbing the corpus, and each failure mode tripped only its own
-metric.
+the three primitives — see spike S1. The separation of the two metrics was
+validated by deliberately perturbing the corpus, and each failure mode tripped
+only its own metric.
+
+**Re-measured 2026-08-20 across the grown corpus: still bit-identical.** 92
+figures — the three primitives plus 89 templates, 22 of them real shaped text
+with outlines and shadows — every one at 0/255 max channel delta and 0.000000 px
+centroid shift, native wgpu against Chromium WebGPU on an Apple M3 Max. Same
+Metal caveat as before: two WGSL frontends over one driver, not a cross-backend
+result.
+
+**Fonts.** `pmg-text` takes font BYTES and has no system font database, so the
+text figures render only when the harness is handed a face and are **skipped
+loudly** otherwise. Both halves of a cross-target run must be given the same
+file: each prints the face's blake3, and comparing those two lines is the check
+that the run measured one typeface rather than two.
 
 ### Running the cross-target comparison by hand
 
@@ -54,13 +82,20 @@ bytes). The browser half needs a WebGPU-capable browser with a real GPU, which
 hosted runners do not provide, so it is a **release-time manual step**:
 
 ```bash
-cargo run --release -p pmg-cli -- render-golden testdata/golden/native
-cargo build --release --target wasm32-unknown-unknown -p pmg-wasm
+FONT=/System/Library/Fonts/Supplemental/Arial.ttf     # any face, the SAME one both sides
+
+cargo run --release -p pmg-cli -- render-golden /tmp/native --font "$FONT"
+# `--features corpus` exports the corpus bindings, which the app bundle does
+# not carry: they would put ~90 test documents in what a booth browser loads.
+cargo build --release --target wasm32-unknown-unknown -p pmg-wasm --features corpus
 wasm-bindgen --target web --out-dir web/pkg --no-typescript \
   target/wasm32-unknown-unknown/release/pmg_wasm.wasm
-python3 tools/parity-server.py web testdata/golden/wasm     # then open :8532/parity.html
-cargo run --release -p pmg-cli -- golden-diff testdata/golden/native testdata/golden/wasm
+python3 tools/parity-server.py web /tmp/wasm "$FONT"   # then open :8532/parity.html
+cargo run --release -p pmg-cli -- golden-diff /tmp/native /tmp/wasm
 ```
+
+Check the two font hashes match before believing any text result, and check what
+backend the browser reported before calling it cross-backend.
 
 The browser posts **raw RGBA** back, never a canvas encode — `toDataURL` may
 apply a colour profile, which would measure the browser's colour pipeline

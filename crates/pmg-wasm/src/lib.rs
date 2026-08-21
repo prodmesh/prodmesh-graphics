@@ -64,6 +64,26 @@ mod browser {
             .map_err(|e| JsValue::from_str(&format!("no device: {e}")))
     }
 
+    thread_local! {
+        static SHARED: std::cell::RefCell<Option<(wgpu::Device, wgpu::Queue)>> =
+            const { std::cell::RefCell::new(None) };
+    }
+
+    /// One device for a whole harness run.
+    ///
+    /// The corpus is ninety figures; asking the browser for ninety adapters and
+    /// devices is both slow and a good way to be refused one. Native makes a
+    /// single device and draws everything with it, and the parity claim is
+    /// weaker if the two sides differ in how they got their device.
+    pub(crate) async fn shared_device() -> Result<(wgpu::Device, wgpu::Queue), JsValue> {
+        if let Some(d) = SHARED.with(|c| c.borrow().clone()) {
+            return Ok(d);
+        }
+        let d = device().await?;
+        SHARED.with(|c| *c.borrow_mut() = Some(d.clone()));
+        Ok(d)
+    }
+
     pub(crate) fn oneshot() -> (impl FnOnce(bool), impl std::future::Future<Output = bool>) {
         futures_channel_oneshot()
     }
@@ -78,7 +98,7 @@ mod browser {
         let figure = Figure::parse(&name)
             .ok_or_else(|| JsValue::from_str(&format!("unknown figure {name}")))?;
 
-        let (device, queue) = device().await?;
+        let (device, queue) = shared_device().await?;
 
         let corpus = Corpus::new(&device, &queue);
 
@@ -150,6 +170,123 @@ mod browser {
             .to_vec();
         buf.unmap();
 
+        Ok(js_sys::Uint8Array::from(&data[..]))
+    }
+
+    /// Every corpus template's name, in corpus order, as JSON.
+    ///
+    /// The browser harness iterates THIS rather than a list of its own: a
+    /// hand-kept list in JavaScript is a list that silently stops covering the
+    /// figures added since someone last edited it.
+    #[cfg(feature = "corpus")]
+    #[wasm_bindgen]
+    pub fn corpus_names() -> String {
+        let names = pmg_render::corpus::names();
+        serde_json::to_string(&names).unwrap_or_else(|_| "[]".into())
+    }
+
+    /// The corpus canvas, as `[w, h]` JSON — what the poster back needs to
+    /// name the raw file, since raw bytes carry no dimensions.
+    #[cfg(feature = "corpus")]
+    #[wasm_bindgen]
+    pub fn corpus_size() -> String {
+        format!(
+            "[{},{}]",
+            pmg_render::corpus::CANVAS_W,
+            pmg_render::corpus::CANVAS_H
+        )
+    }
+
+    /// The content address of the font bytes the page fetched.
+    ///
+    /// Printed by both halves of a cross-target run so "we were handed the same
+    /// face" is a checked claim rather than an assumption. Goes through
+    /// `pmg-scene` because that is where the hash lives in the pure set.
+    #[cfg(feature = "corpus")]
+    #[wasm_bindgen]
+    pub fn font_fingerprint(bytes: &[u8]) -> String {
+        pmg_scene::validate::address_of(bytes)
+    }
+
+    /// Render one corpus template and return raw RGBA8.
+    ///
+    /// `font` is the face every declared family is registered against, and must
+    /// be the SAME BYTES the native side was given — otherwise this measures
+    /// two different typefaces and reports it as a renderer difference. A text
+    /// figure handed no font is an error here, not a blank frame.
+    #[cfg(feature = "corpus")]
+    #[wasm_bindgen]
+    pub async fn render_template(
+        name: String,
+        font: Option<js_sys::Uint8Array>,
+    ) -> Result<js_sys::Uint8Array, JsValue> {
+        let t = pmg_render::corpus::by_name(&name)
+            .ok_or_else(|| JsValue::from_str(&format!("unknown template {name}")))?;
+        let font_bytes = font.map(|f| f.to_vec());
+        let armed = pmg_render::corpus::arm(&t, font_bytes.as_deref())
+            .map_err(|e| JsValue::from_str(&e))?;
+
+        let (device, queue) = shared_device().await?;
+        let (w, h) = (pmg_render::corpus::CANVAS_W, pmg_render::corpus::CANVAS_H);
+
+        // The same pairing a node uses: composite in linear, encode once out.
+        let fb = pmg_render::draw::LinearFrame::new(&device, w, h);
+        let view = fb.view().clone();
+        pmg_render::SceneRenderer::new(&device, &queue, &armed.inst).render(
+            &device,
+            &queue,
+            &armed.inst,
+            &armed.frame,
+            &view,
+            (w, h),
+        );
+        fb.encode(&device, &queue);
+
+        let bytes_per_row = w * 4;
+        let buf = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("pmg-corpus-readback"),
+            size: (bytes_per_row * h) as u64,
+            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+            mapped_at_creation: false,
+        });
+        let mut enc = device.create_command_encoder(&Default::default());
+        enc.copy_texture_to_buffer(
+            wgpu::TexelCopyTextureInfo {
+                texture: fb.output(),
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
+            wgpu::TexelCopyBufferInfo {
+                buffer: &buf,
+                layout: wgpu::TexelCopyBufferLayout {
+                    offset: 0,
+                    bytes_per_row: Some(bytes_per_row),
+                    rows_per_image: Some(h),
+                },
+            },
+            wgpu::Extent3d {
+                width: w,
+                height: h,
+                depth_or_array_layers: 1,
+            },
+        );
+        queue.submit(Some(enc.finish()));
+
+        let slice = buf.slice(..);
+        let (tx, rx) = futures_channel_oneshot();
+        slice.map_async(wgpu::MapMode::Read, move |r| {
+            tx(r.is_ok());
+        });
+        let _ = device.poll(wgpu::PollType::wait_indefinitely());
+        if !rx.await {
+            return Err(JsValue::from_str("buffer map failed"));
+        }
+        let data = slice
+            .get_mapped_range()
+            .map_err(|e| JsValue::from_str(&format!("mapped range: {e}")))?
+            .to_vec();
+        buf.unmap();
         Ok(js_sys::Uint8Array::from(&data[..]))
     }
 

@@ -6,6 +6,12 @@ name: parity
 # that way: the corpus grows with pmg-render, and a wgpu bump or a shader edit
 # that reintroduces backend-defined behaviour must fail here rather than in M4.
 #
+# The corpus is two things. Three hand-drawn primitives cover what a GPU does
+# differently at all; ~90 real SceneDocs (pmg_render::corpus) cover everything
+# built on them since — layout, transforms, strokes, shadows, gradients,
+# clipping, images, animation, and text. Both are rendered by the same
+# `render-golden` command.
+#
 # Two INDEPENDENT numbers, reported separately on purpose:
 #
 #   - channel delta            a shade one step off is a GPU backend difference
@@ -21,10 +27,12 @@ on:
   push:
     branches: [main]
     paths: ['crates/pmg-render/**', 'crates/pmg-layout/**', 'crates/pmg-text/**',
-            'crates/pmg-scene/**', 'crates/pmg-wasm/**', 'testdata/**', 'Cargo.toml']
+            'crates/pmg-scene/**', 'crates/pmg-anim/**', 'crates/pmg-wasm/**',
+            'crates/pmg-cli/**', 'testdata/**', 'Cargo.toml']
   pull_request:
     paths: ['crates/pmg-render/**', 'crates/pmg-layout/**', 'crates/pmg-text/**',
-            'crates/pmg-scene/**', 'crates/pmg-wasm/**', 'testdata/**', 'Cargo.toml']
+            'crates/pmg-scene/**', 'crates/pmg-anim/**', 'crates/pmg-wasm/**',
+            'crates/pmg-cli/**', 'testdata/**', 'Cargo.toml']
   workflow_dispatch:
 
 jobs:
@@ -39,8 +47,22 @@ jobs:
           targets: wasm32-unknown-unknown
       - uses: Swatinem/rust-cache@v2
 
+      # The corpus keeps its own count honest: a figure list that quietly
+      # stopped covering things is the failure mode a parity suite has.
+      - name: the corpus is what it claims to be
+        run: cargo test --release -p pmg-render --lib corpus
+
       - name: render the corpus
-        run: cargo run --release -p pmg-cli -- render-golden /tmp/corpus-a
+        run: cargo run --release -p pmg-cli -- render-golden /tmp/corpus-a | tee /tmp/render.txt
+
+      # macOS runners have Supplemental fonts, so the text figures must have
+      # rendered. If they were skipped the suite is a third smaller than it
+      # reads, and the log would say so where nobody looks.
+      - name: no figure was skipped for want of a font
+        run: |
+          if grep -q "^SKIPPED" /tmp/render.txt; then
+            echo "text figures were skipped — the corpus ran short"; exit 1
+          fi
 
       # Determinism check that needs no browser: render twice and require the
       # bytes to match. A renderer that is not stable against itself cannot be
@@ -50,9 +72,16 @@ jobs:
           cargo run --release -p pmg-cli -- render-golden /tmp/corpus-b
           cargo run --release -p pmg-cli -- golden-diff /tmp/corpus-a /tmp/corpus-b | tee /tmp/self.txt
           grep -q "^PASS" /tmp/self.txt
+          # A PASS over three figures reads exactly like a PASS over ninety, so
+          # the count is checked too — M5's bar is a corpus past fifty.
+          n=$(sed -n 's/^compared \([0-9]*\) figure.*/\1/p' /tmp/self.txt)
+          echo "compared $n figures"
+          test "${n:-0}" -gt 50
 
       - name: the wasm harness must at least build
-        run: cargo build --release --target wasm32-unknown-unknown -p pmg-wasm
+        run: |
+          cargo build --release --target wasm32-unknown-unknown -p pmg-wasm
+          cargo build --release --target wasm32-unknown-unknown -p pmg-wasm --features corpus
 
       - uses: actions/upload-artifact@v4
         with:

@@ -189,6 +189,16 @@ pub struct ManifestWarning {
 }
 
 /// Compile a document to its canonical bytes plus the manifest sidecar.
+/// The content address of arbitrary bytes, in the family's one form.
+///
+/// Exposed here because the parity harness must prove both halves were handed
+/// the SAME font file, and "same length" is not the same claim. `pmg-cas` has
+/// the store; this is just the hash, and it is in the pure set so the browser
+/// can compute it too.
+pub fn address_of(bytes: &[u8]) -> String {
+    format!("blake3:{}", blake3::hash(bytes).to_hex())
+}
+
 pub fn compile(doc: &SceneDoc) -> Result<(Vec<u8>, Manifest), SceneError> {
     let warnings = validate(doc)?;
     let bytes = cbor::to_canonical(doc).map_err(|e| SceneError::WrongFormat(e.to_string()))?;

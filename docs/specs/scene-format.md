@@ -82,6 +82,11 @@ upscale a 1080 raster to 2160; glyph antialiasing gives it away immediately.
   "layout":    { /* §4 */ },
   "transform": { "translate": [0,0], "rotate": 0, "scale": [1,1],
                  "anchor": [0.5,0.5], "skew": [0,0] },
+  // `skew` is RESERVED and the v1 reader does not draw it: a document carrying
+  // a non-zero skew renders unskewed, and no editor writes one. Stated here
+  // because the field's presence otherwise reads as a promise. The parity
+  // corpus pins the current behaviour as `transform-skew-ignored`, so the day
+  // it is implemented the image changes and somebody has to look at it.
   "style":     { "fill": {...}, "stroke": {...}, "radius": 8,
                  "shadow": {...}, "blur": 0, "opacity": 1.0 },
   // `stroke` and `shadow` decorate the node's silhouette, and WHERE depends on

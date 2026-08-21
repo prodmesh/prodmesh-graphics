@@ -4,20 +4,32 @@
 <style>
   body { font: 13px/1.5 ui-monospace, monospace; padding: 16px; background:#090d11; color:#edf2f7 }
   pre { white-space: pre-wrap }
-  .ok { color:#43d17d } .bad { color:#ff6b6b }
+  .ok { color:#43d17d } .bad { color:#ff6b6b } .dim { color:#7c8a99 }
 </style>
 <h1>PMG parity harness</h1>
 <pre id="log">starting…</pre>
 <script type="module">
-import init, { render_figure } from './pkg/pmg_wasm.js';
+import init, {
+  render_figure, render_template, corpus_names, corpus_size, font_fingerprint,
+} from './pkg/pmg_wasm.js';
 
 const log = document.getElementById('log');
 const say = (m, cls) => {
   log.innerHTML += `\n${cls ? `<span class="${cls}">${m}</span>` : m}`;
 };
 
-const FIGURES = ['triangle', 'rounded-rect', 'alpha-atlas'];
-const results = {};
+// The three S1 primitives are 512x512 and hand-drawn; the corpus templates are
+// 16:9 and go through the real arm-and-draw path. Both post raw RGBA.
+const PRIMITIVES = ['triangle', 'rounded-rect', 'alpha-atlas'];
+const PRIMITIVE_SIZE = 512;
+
+// RAW RGBA8 — never through a canvas. toDataURL is entitled to apply a colour
+// profile, and that would make this measure Chrome's colour pipeline instead of
+// our renderer.
+const post = async (name, bytes, w, h) => {
+  const res = await fetch(`/put/${name}?w=${w}&h=${h}`, { method: 'POST', body: bytes });
+  if (!res.ok) throw new Error(`POST ${name} failed: ${res.status}`);
+};
 
 try {
   await init();
@@ -27,22 +39,57 @@ try {
   say(`adapter: ${JSON.stringify(adapter.info ?? {})}`);
   say(`maxTextureDimension2D: ${adapter.limits.maxTextureDimension2D}`);
 
-  for (const name of FIGURES) {
-    const t0 = performance.now();
-    // RAW RGBA8 — never through a canvas. toDataURL is entitled to apply a
-    // colour profile, and that would make this measure Chrome's colour
-    // pipeline instead of our renderer.
-    const bytes = await render_figure(name);
-    const ms = (performance.now() - t0).toFixed(1);
-    say(`${name}: ${bytes.length} bytes in ${ms} ms`);
-
-    const res = await fetch(`/put/${name}`, { method: 'POST', body: bytes });
-    if (!res.ok) throw new Error(`POST ${name} failed: ${res.status}`);
-    results[name] = bytes.length;
+  // The face. Fetched from the harness server rather than bundled, so the two
+  // halves of a run are provably holding the same file — the fingerprint below
+  // is the same blake3 `pmgctl render-golden` prints.
+  let font = null;
+  const fres = await fetch('/font');
+  if (fres.ok) {
+    font = new Uint8Array(await fres.arrayBuffer());
+    say(`font: ${font.length} bytes, ${font_fingerprint(font)}`);
+    say('CHECK THAT HASH against the native run before believing any text result.', 'dim');
+  } else {
+    say('font: NONE served — text figures will be SKIPPED', 'bad');
   }
 
-  say('\nALL FIGURES RENDERED AND POSTED', 'ok');
-  window.__parity = { done: true, results };
+  for (const name of PRIMITIVES) {
+    const t0 = performance.now();
+    const bytes = await render_figure(name);
+    await post(name, bytes, PRIMITIVE_SIZE, PRIMITIVE_SIZE);
+    say(`${name}: ${bytes.length} bytes in ${(performance.now() - t0).toFixed(1)} ms`);
+  }
+
+  // The corpus enumerates itself. A list kept here in JavaScript is a list that
+  // silently stops covering the figures added since someone last edited it.
+  const [W, H] = JSON.parse(corpus_size());
+  const names = JSON.parse(corpus_names());
+  say(`\ncorpus: ${names.length} template(s) at ${W}x${H}`);
+
+  let drawn = 0;
+  const skipped = [];
+  const t0 = performance.now();
+  for (const name of names) {
+    try {
+      const bytes = await render_template(name, font);
+      await post(name, bytes, W, H);
+      drawn++;
+      if (drawn % 10 === 0) say(`  ${drawn}/${names.length}…`, 'dim');
+    } catch (e) {
+      // A figure that needs a font and was handed none reports itself; anything
+      // else is a real failure and must not be swallowed into a count.
+      if (!font && String(e).includes('needs a font')) skipped.push(name);
+      else throw e;
+    }
+  }
+  say(`  ${drawn} template(s) in ${((performance.now() - t0) / 1000).toFixed(1)} s`);
+  if (skipped.length) {
+    say(`SKIPPED ${skipped.length} text figure(s) for want of a font:`, 'bad');
+    say(`  ${skipped.join(', ')}`, 'bad');
+    say('  start the server with a font path to render them', 'bad');
+  }
+
+  say(`\nALL FIGURES RENDERED AND POSTED (${PRIMITIVES.length + drawn})`, 'ok');
+  window.__parity = { done: true, primitives: PRIMITIVES.length, templates: drawn, skipped };
 } catch (e) {
   say(`\nFAILED: ${e}`, 'bad');
   window.__parity = { done: false, error: String(e) };

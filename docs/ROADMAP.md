@@ -251,7 +251,23 @@ than something the author of the format can use.
 - The migration machinery exercised for real on a v1.0 → v1.1 step.
 
 **Verification:** the golden corpus grows past 50 templates, and S1's parity
-suite runs across all of them on every CI run.
+suite runs across all of them on every CI run. **Done 2026-08-20** — 89
+templates plus the 3 primitives, native and browser bit-identical across all 92;
+`parity.yml` renders and diffs the whole corpus per push and fails if the count
+drops below 50 or a text figure was skipped.
+
+**Still open in this milestone**, and deliberately named rather than quietly
+dropped:
+
+- **Template variants.** "Variants and themes" shipped its themes half (ADR
+  0021, format 1.2, the manager and the apply sweep). Variants — a template
+  family with field compatibility enforced at publish — are not started.
+- **Masks.** `kind: "mask"` is in the format and nothing renders it. What
+  shipped is `clip`, overflow-hide to a node's own bounds, which is the mask a
+  pop-out reveal needs and not an arbitrary alpha or luma mask.
+- **Curve editing.** The format carries arbitrary cubic Béziers and `pmg-anim`
+  evaluates them; the editor offers four named presets and shows anything else
+  as "Custom". A designer cannot draw a curve.
 
 ---
 

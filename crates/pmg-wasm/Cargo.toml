@@ -9,6 +9,17 @@ publish.workspace = true
 [lib]
 crate-type = ["cdylib", "rlib"]
 
+[features]
+# The golden-corpus bindings, for the parity harness only.
+#
+# OFF by default because they are the one thing here that is not part of the
+# product: enabling them pulls ~90 constructed SceneDocs into the binary, which
+# is 150 KB of the Design bundle a booth browser downloads to author graphics
+# with. The corpus itself always builds and its tests always run — this gates
+# only the wasm-bindgen exports, and without them dead-code elimination drops
+# the documents from the app.
+corpus = []
+
 [dependencies]
 pmg-render = { path = "../pmg-render" }
 pmg-scene = { path = "../pmg-scene" }
