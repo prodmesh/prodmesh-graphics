@@ -120,6 +120,28 @@ test('adding the first user reports that it was made an administrator', async ()
   await screen.findByText(/dan is an Administrator/)
 })
 
+/**
+ * The whole point of the sentence above it: creating the first user turns
+ * permissions on. Until the shell hears about it, the footer of this very page
+ * still says the server is open and the header still offers no way in — which
+ * is exactly how somebody ends up locked out of a server they just secured.
+ */
+test('adding the first user tells the shell that permissions are now on', async () => {
+  const heard: Event[] = []
+  const listen = (e: Event) => heard.push(e)
+  window.addEventListener('pmg:auth-changed', listen)
+
+  await paint()
+  fireEvent.click(screen.getByRole('button', { name: /Users & stations/ }))
+  await screen.findByLabelText('New username')
+  fireEvent.change(screen.getByLabelText('New username'), { target: { value: 'dan' } })
+  fireEvent.change(screen.getByLabelText('New user PIN'), { target: { value: '1234' } })
+  fireEvent.click(screen.getByRole('button', { name: 'Add user' }))
+
+  await waitFor(() => expect(heard.length).toBe(1))
+  window.removeEventListener('pmg:auth-changed', listen)
+})
+
 test('a PIN under four digits does not offer the button', async () => {
   await paint()
   fireEvent.click(screen.getByRole('button', { name: /Users & stations/ }))

@@ -39,6 +39,7 @@ const NOT_PUBLIC = new Map([
   ['POST /api/groups', 'Administration, not operation.'],
   ['GET /api/stations', 'Administration, not operation.'],
   ['POST /api/stations/register', 'Administration, not operation.'],
+  ['PUT /api/stations/:id', 'Administration, not operation.'],
   ['PUT /api/stations/:id/trust', 'Administration, not operation.'],
   ['GET /api/audit', 'Administration, not operation.'],
   ['GET /cas/:hash', 'Content-addressed asset transfer — plain HTTP with Range, deliberately NOT on the control socket (ADR 0007). Its own spec: asset-cas.md.'],

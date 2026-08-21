@@ -64,9 +64,17 @@ router.get('/api/auth/me', (req, res) => {
 // ---------------------------------------------------------------------------
 
 router.get('/api/users', requirePermission('graphics.users.manage'), (_req, res) => {
+  const db = handle()
+  // A group WITHOUT its permissions is the one thing this list must not show:
+  // it renders as holding nothing, and the group it lies about most loudly is
+  // Administrators.
+  const perms = db.prepare('SELECT group_id, permission FROM group_permissions').all()
   res.json({
-    users: handle().prepare('SELECT id, username, display_name, created_at FROM users ORDER BY username').all(),
-    groups: handle().prepare('SELECT * FROM groups ORDER BY name').all(),
+    users: db.prepare('SELECT id, username, display_name, created_at FROM users ORDER BY username').all(),
+    groups: db
+      .prepare('SELECT * FROM groups ORDER BY name')
+      .all()
+      .map((g) => ({ ...g, permissions: perms.filter((p) => p.group_id === g.id).map((p) => p.permission) })),
   })
 })
 
@@ -103,6 +111,21 @@ router.get('/api/stations', requirePermission('graphics.stations.manage'), (_req
       .all()
       .map((s) => ({ ...s, trusted: Boolean(s.trusted), scope: s.scope ? JSON.parse(s.scope) : null })),
   })
+})
+
+/**
+ * Rename a station.
+ *
+ * The browser registers itself with a placeholder — it has to, so an unattended
+ * display can be marked trusted without anybody ever signing in there — and
+ * this is where that placeholder becomes the name of a place.
+ */
+router.put('/api/stations/:id', requirePermission('graphics.stations.manage'), (req, res) => {
+  const name = String(req.body?.name ?? '').trim()
+  if (!name) return fail(res, 422, 'validation_failed', 'A station needs a name.')
+  const s = store.renameStation(req.params.id, name)
+  if (!s) return fail(res, 404, 'not_found', 'There is no station with that id.')
+  res.json({ ...s, trusted: Boolean(s.trusted), scope: s.scope ? JSON.parse(s.scope) : null })
 })
 
 /**

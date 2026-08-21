@@ -208,6 +208,21 @@ specifically shaped to avoid. Do not re-derive them.
   real check is `npm run build`, which runs `tsc -b` across the references and
   includes the test files. Two type errors reached a rehearsal build this way,
   after `tsc --noEmit` had reported clean several times.
+- **A permission boundary with only a server half is invisible until it
+  isn't.** `requirePermission` was complete and tested from M2 — and the browser
+  sent no station header, no bearer token, and had no sign-in anywhere. Nothing
+  failed, because `unconfigured()` lets everything through until the first user
+  exists. Adding that user turned enforcement on for good and left a console
+  that could not be administered from itself. When a boundary is gated on
+  "nobody has configured this yet", the client half is not optional work for
+  later: it is the half that gets exercised the moment somebody uses the
+  feature. Same shape as the footer that said "add a user in Configure" for
+  four milestones while no such page existed.
+- **A browser that posts raw bytes bypasses every convention in `api.ts`.**
+  Two uploads in Design built their own `fetch`, so they sent no credentials
+  and rendered `the server answered 401` instead of the server's sentence.
+  Anything that talks to the server goes through `src/lib/api.ts` — the headers
+  and the refusal handling live there, once.
 - **Long-GOP H.264 is where frame-accurate seek goes to die.** Require an
   all-intra intermediate (ProRes 4444, DNxHR, HAP) for anything that must hit a
   mark; the server transcodes on ingest.

@@ -21,6 +21,8 @@
 
 import { useEffect, useState } from 'react'
 
+import { authHeaders } from './identity'
+
 type Entry<T> = { data?: T; error?: Error; promise?: Promise<void>; at: number }
 
 const cache = new Map<string, Entry<unknown>>()
@@ -40,7 +42,7 @@ function start<T>(key: string): Entry<T> {
   // the last known good state, never a loading hole.
   const prev = cache.get(key) as Entry<T> | undefined
   const next: Entry<T> = { at: Date.now(), data: prev?.data }
-  next.promise = fetch(key)
+  next.promise = fetch(key, { headers: authHeaders() })
     .then(async (r) => {
       if (!r.ok) throw new Error(`${r.status} ${r.statusText}`)
       next.data = (await r.json()) as T
@@ -110,6 +112,17 @@ export function invalidate(key: string) {
     cache.delete(key)
   }
   notify(key)
+}
+
+/**
+ * Refetch everything anyone is watching, and forget the rest.
+ *
+ * Signing in or out changes what every read is allowed to return, so the whole
+ * cache is answers to a question that was asked as somebody else.
+ */
+export function invalidateAll() {
+  // A snapshot: invalidate() deletes unwatched keys as it goes.
+  for (const key of Array.from(cache.keys())) invalidate(key)
 }
 
 /** Test seam. */

@@ -25,6 +25,7 @@ import { Check, ChevronDown, ChevronUp, Plus, Trash2, X } from 'lucide-react'
 import { useQuery, invalidate } from '../../lib/useQuery'
 import { keys } from '../../lib/keys'
 import { ApiError, del, patch, post, put } from '../../lib/api'
+import { identityChanged, requestSignIn, useIdentity } from '../../lib/identity'
 import {
   Button,
   FormGroup,
@@ -443,6 +444,7 @@ function Users() {
   const users = data?.users ?? []
   const groups = data?.groups ?? []
   const stations = stationData?.stations ?? []
+  const me = useIdentity()
 
   const [username, setUsername] = useState('')
   const [pin, setPin] = useState('')
@@ -468,8 +470,27 @@ function Users() {
       <section className="cfg-console__section" aria-label="Users">
         <GroupHeader label="Users & stations" />
         <div className="mode__stub">
+          {/* Survives the switch into this branch on purpose: adding the first
+              user is what CAUSED the refusal, and "you are now an
+              administrator" is the one sentence that makes the locked page
+              make sense. Losing it here would leave the operator staring at a
+              door with no idea they hold the key. */}
+          {note ? <p role="status">{note}</p> : null}
           <p>This server will not show you its users.</p>
           <p>Sign in as someone who holds <code>graphics.users.manage</code>.</p>
+          {/* Naming the missing authority and then leaving the operator to find
+              the door is half an answer. This is the door. */}
+          <Button
+            variant="secondary"
+            onClick={() =>
+              requestSignIn({
+                permission: 'graphics.users.manage',
+                label: 'Manage users and groups',
+              })
+            }
+          >
+            Sign in
+          </Button>
         </div>
       </section>
     )
@@ -530,6 +551,10 @@ function Users() {
                 )
                 setUsername('')
                 setPin('')
+                // The first user turns permissions ON. The shell is holding an
+                // answer from before that happened — an open server, no way to
+                // sign in — and it is the footer of this very page.
+                identityChanged()
               })
             }
           >
@@ -569,7 +594,22 @@ function Users() {
         </p>
         {stations.map((st) => (
           <div key={st.id} className="cfg-console__userrow">
-            <span className="cfg-console__username">{st.name}</span>
+            {/* A browser names itself when it registers, so that an unattended
+                display exists to be trusted before anybody signs in on it.
+                That name is a placeholder for the PLACE, and this is where a
+                person replaces it. */}
+            <input
+              className="cfg-console__stationname"
+              defaultValue={st.name}
+              aria-label={`Station ${st.name} name`}
+              onBlur={(e) => {
+                const name = e.target.value.trim()
+                if (name && name !== st.name) void run(() => put(`/api/stations/${st.id}`, { name }))
+              }}
+            />
+            {st.id === me?.station?.id ? (
+              <span className="cfg-console__userid">this browser</span>
+            ) : null}
             <label className="cfg-console__trust">
               <input
                 type="checkbox"

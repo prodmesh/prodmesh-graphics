@@ -168,6 +168,20 @@ export function setStationTrust(id, { trusted, scope = null }) {
   return handle().prepare('SELECT id, name, trusted, scope FROM stations WHERE id = ?').get(id)
 }
 
+/**
+ * Rename a station.
+ *
+ * A browser names itself when it registers, because a station has to exist
+ * before anyone can mark it trusted — including an unattended display nobody
+ * ever signs in on. "Chrome · macOS" is a placeholder for a person to replace
+ * with the place: "Booth Mac", "Foyer wall".
+ */
+export function renameStation(id, name) {
+  const info = handle().prepare('UPDATE stations SET name = ? WHERE id = ?').run(name, id)
+  if (info.changes === 0) return null
+  return handle().prepare('SELECT id, name, trusted, scope FROM stations WHERE id = ?').get(id)
+}
+
 /** Does a trusted station's scope cover this output and layer? */
 export function trustCovers(station, { output, layer }) {
   if (!station?.trusted) return false
@@ -208,6 +222,32 @@ export function login({ username, pin, stationId = null }) {
   ).run(sha256(token), user.id, stationId, now, now + SESSION_TTL_MS)
   audit({ user: user.id, station: stationId, action: 'auth.login', result: 'ok' })
   return { token, user: { id: user.id, username: user.username, display_name: user.display_name } }
+}
+
+/**
+ * Set a user's PIN.
+ *
+ * Every session that user holds is dropped, because a PIN is changed either to
+ * rotate it or because somebody should not be signed in any more, and leaving
+ * eight hours of live sessions behind serves neither.
+ *
+ * There is no HTTP route to this. It exists for `npm run reset-pin`, run on the
+ * machine holding the database — the recovery path for a first user whose PIN
+ * is forgotten, which is otherwise a server locked out of its own
+ * administration for good. Physical access to the server is the authority, the
+ * same reasoning ADR 0013 uses for trusted stations in a booth.
+ */
+export function setPin(username, pin) {
+  const db = handle()
+  const user = db.prepare('SELECT id FROM users WHERE username = ?').get(username)
+  if (!user) return null
+  const { salt, hash } = hashPin(pin)
+  db.transaction(() => {
+    db.prepare('UPDATE users SET pin_salt = ?, pin_hash = ? WHERE id = ?').run(salt, hash, user.id)
+    db.prepare('DELETE FROM sessions WHERE user_id = ?').run(user.id)
+  })()
+  audit({ user: user.id, station: null, action: 'auth.set_pin', result: 'ok', detail: 'console' })
+  return { id: user.id, username }
 }
 
 export function logout(token) {

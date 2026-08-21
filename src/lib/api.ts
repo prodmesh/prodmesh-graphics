@@ -10,6 +10,8 @@
  * last step, so `ApiError` carries both and `message` IS the label.
  */
 
+import { authHeaders, requestSignIn } from './identity'
+
 export class ApiError extends Error {
   readonly code: string
   readonly status: number
@@ -29,7 +31,10 @@ async function send<T>(method: string, url: string, body?: unknown): Promise<T> 
   try {
     res = await fetch(url, {
       method,
-      headers: body === undefined ? {} : { 'content-type': 'application/json' },
+      headers: {
+        ...authHeaders(),
+        ...(body === undefined ? {} : { 'content-type': 'application/json' }),
+      },
       body: body === undefined ? undefined : JSON.stringify(body),
     })
   } catch {
@@ -44,7 +49,50 @@ async function send<T>(method: string, url: string, body?: unknown): Promise<T> 
   if (res.status === 204) return undefined as T
   const text = await res.text()
   const json = text ? (JSON.parse(text) as Record<string, unknown>) : {}
-  if (!res.ok) throw new ApiError(res.status, json)
+  if (!res.ok) {
+    // A refusal for want of authority is the one failure the operator can fix
+    // from here, so it opens the sign-in bar naming what was missing rather
+    // than landing as one more sentence to read and dismiss. 401 and 403 both
+    // arrive here and stay distinguishable: ApiError carries the status, and
+    // the bar says "sign in" or "sign in as someone else" accordingly.
+    if (json.error === 'permission_required' && (res.status === 401 || res.status === 403)) {
+      requestSignIn({ permission: String(json.permission ?? ''), label: String(json.label ?? '') })
+    }
+    throw new ApiError(res.status, json)
+  }
+  return json as T
+}
+
+/**
+ * POST raw bytes — an upload, not a document.
+ *
+ * It exists so uploads share `send`'s failure handling rather than growing
+ * their own. They did have their own, and once permissions came on it showed:
+ * a refused upload read "the server answered 401" instead of the server's own
+ * sentence, and nothing offered a way to sign in.
+ */
+export async function postBytes<T>(url: string, bytes: Uint8Array): Promise<T> {
+  let res: Response
+  try {
+    res = await fetch(url, {
+      method: 'POST',
+      headers: { ...authHeaders(), 'content-type': 'application/octet-stream' },
+      body: bytes as unknown as BodyInit,
+    })
+  } catch {
+    throw new ApiError(0, {
+      error: 'unreachable',
+      label: 'The control server is not answering. Anything already on air is still on air.',
+    })
+  }
+  const text = await res.text()
+  const json = text ? (JSON.parse(text) as Record<string, unknown>) : {}
+  if (!res.ok) {
+    if (json.error === 'permission_required' && (res.status === 401 || res.status === 403)) {
+      requestSignIn({ permission: String(json.permission ?? ''), label: String(json.label ?? '') })
+    }
+    throw new ApiError(res.status, json)
+  }
   return json as T
 }
 

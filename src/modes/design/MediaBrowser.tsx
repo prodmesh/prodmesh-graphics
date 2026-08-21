@@ -28,6 +28,7 @@ import { useEffect, useRef, useState } from 'react'
 import { Clapperboard, FileUp, X } from 'lucide-react'
 import { invalidate, useQuery } from '../../lib/useQuery'
 import { keys } from '../../lib/keys'
+import { postBytes } from '../../lib/api'
 import { GroupHeader, StatusPill, Tag } from '../../components/console'
 import type { FaceInfo } from './useDesign'
 
@@ -160,12 +161,7 @@ export function MediaBrowser({
   const upload = async (file: File, kind: 'font' | 'image') => {
     setProblem(null)
     try {
-      const res = await fetch(`/api/assets?kind=${kind}`, {
-        method: 'POST',
-        headers: { 'content-type': 'application/octet-stream' },
-        body: new Uint8Array(await file.arrayBuffer()),
-      })
-      if (!res.ok) throw new Error(`the server answered ${res.status}`)
+      await postBytes(`/api/assets?kind=${kind}`, new Uint8Array(await file.arrayBuffer()))
       invalidate(keys.assets())
       invalidate(keys.assetSync())
     } catch (e) {
@@ -176,13 +172,10 @@ export function MediaBrowser({
   const ingest = async (file: File) => {
     setProblem(null)
     try {
-      const res = await fetch(`/api/assets/ingest?filename=${encodeURIComponent(file.name)}`, {
-        method: 'POST',
-        headers: { 'content-type': 'application/octet-stream' },
-        body: new Uint8Array(await file.arrayBuffer()),
-      })
-      if (!res.ok) throw new Error(`the server answered ${res.status}`)
-      const job = (await res.json()) as IngestJob
+      const job = await postBytes<IngestJob>(
+        `/api/assets/ingest?filename=${encodeURIComponent(file.name)}`,
+        new Uint8Array(await file.arrayBuffer()),
+      )
       setJobs((j) => [...j.filter((x) => x.id !== job.id), job])
     } catch (e) {
       setProblem(`Could not ingest ${file.name}: ${e instanceof Error ? e.message : String(e)}`)

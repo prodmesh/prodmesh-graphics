@@ -211,3 +211,21 @@
   font-size: 11px;
   color: var(--pm-text-secondary);
 }
+
+/* A station's name is editable in place: the browser registers itself with a
+   placeholder so an unattended display can be trusted before anyone signs in
+   there, and this is where that becomes the name of a place. */
+.cfg-console__stationname {
+  height: 24px;
+  min-width: 180px;
+  border: 0;
+  outline: none;
+  border-radius: var(--pm-radius-4);
+  background: transparent;
+  color: var(--pm-text-primary);
+  font-family: var(--pm-font-ui);
+  font-size: 12px;
+  padding: 0 6px;
+}
+.cfg-console__stationname:hover,
+.cfg-console__stationname:focus { background: var(--pm-surface-field); }

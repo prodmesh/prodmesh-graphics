@@ -120,3 +120,79 @@
   overflow: hidden;
   text-overflow: ellipsis;
 }
+
+/* ---- Sign in, and who is signed in (ADR 0025) -------------------------------
+   A band of chrome between the header and the workspace, never an overlay: a
+   refusal can arrive mid-edit, and a modal that steals focus — or a route that
+   replaces the centre — would unmount unpublished work to ask for a PIN. */
+
+.c-signin {
+  flex-shrink: 0;
+  box-sizing: border-box;
+  min-height: var(--pm-toolbar-height);
+  background: var(--pm-surface-raised);
+  border-bottom: 1px solid var(--pm-border-hairline);
+  padding: 8px 16px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+.c-signin__mark { color: var(--pm-text-muted); flex-shrink: 0; }
+.c-signin__why {
+  margin: 0;
+  font-family: var(--pm-font-ui);
+  font-size: 12px;
+  color: var(--pm-text-secondary);
+}
+.c-signin__why strong { color: var(--pm-text-primary); font-weight: 600; }
+.c-signin__form { display: flex; align-items: center; gap: 8px; }
+.c-signin__field {
+  box-sizing: border-box;
+  height: 27px;
+  width: 160px;
+  border: 0;
+  outline: none;
+  border-radius: var(--pm-radius-4);
+  background: var(--pm-surface-field);
+  color: var(--pm-text-primary);
+  font-family: var(--pm-font-ui);
+  font-size: 12px;
+  padding: 0 10px;
+}
+.c-signin__field--pin { width: 100px; font-family: var(--pm-font-mono); }
+.c-signin__error { font-size: 12px; color: var(--pm-text-primary); }
+.c-signin__close {
+  margin-left: auto;
+  border: 0;
+  background: transparent;
+  color: var(--pm-text-muted);
+  cursor: pointer;
+  display: inline-flex;
+  padding: 4px;
+}
+.c-signin__close:hover { color: var(--pm-text-primary); }
+
+/* The identity control in the header. Always present once the server has
+   users, because a sign-in nobody can find is a server nobody can administer. */
+.c-identity { display: flex; align-items: center; gap: 8px; flex-shrink: 0; }
+.c-identity__who {
+  white-space: nowrap;
+  font-family: var(--pm-font-mono);
+  font-size: 11px;
+  color: var(--pm-text-secondary);
+  letter-spacing: var(--pm-tracking-caps);
+}
+.c-identity__link {
+  border: 0;
+  white-space: nowrap;
+  background: transparent;
+  padding: 0;
+  cursor: pointer;
+  font-family: var(--pm-font-ui);
+  font-size: 11px;
+  color: var(--pm-text-muted);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+.c-identity__link:hover { color: var(--pm-text-primary); }

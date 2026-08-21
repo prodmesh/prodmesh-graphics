@@ -238,3 +238,86 @@ test('an unknown permission in a group is refused rather than silently granting 
   assert.equal(r.status, 422)
   assert.match(r.json.label, /Not a permission/)
 })
+
+// ---------------------------------------------------------------------------
+// Naming a station, and getting back in. ADR 0025.
+
+test('a station can be renamed, because the browser names it before a person does', async () => {
+  admin()
+  const login = await req('POST', '/api/auth/login', { username: 'jbeale', pin: '1234' })
+  const auth = { authorization: `Bearer ${login.json.token}` }
+  const st = store.registerStation('Chrome · macOS')
+
+  const r = await req('PUT', `/api/stations/${st.id}`, { name: 'Booth Mac' }, auth)
+  assert.equal(r.status, 200)
+  assert.equal(r.json.name, 'Booth Mac')
+  // And it is still the same station: renaming must not cost it its trust.
+  assert.equal(store.stationByToken(st.token)?.id, st.id)
+
+  const missing = await req('PUT', '/api/stations/nope', { name: 'Anything' }, auth)
+  assert.equal(missing.status, 404)
+})
+
+test('renaming a station needs the authority to manage stations', async () => {
+  admin()
+  const st = store.registerStation('Chrome · macOS')
+  const r = await req('PUT', `/api/stations/${st.id}`, { name: 'Booth Mac' })
+  assert.equal(r.status, 401)
+})
+
+/**
+ * The last-resort recovery path, and the reason it is worth a test: the first
+ * user turns permissions on for good, so a forgotten PIN with nobody else to
+ * grant anything is a server locked out of its own administration. Its
+ * authority is physical access to the database, never HTTP.
+ */
+test('a PIN can be reset from the machine holding the database, and it ends every session', async () => {
+  const { user } = admin()
+  const before = await req('POST', '/api/auth/login', { username: 'jbeale', pin: '1234' })
+  assert.equal(before.status, 200)
+
+  assert.equal(store.setPin('jbeale', '5678').id, user.id)
+
+  const stale = await req('GET', '/api/users', null, { authorization: `Bearer ${before.json.token}` })
+  assert.equal(stale.status, 401, 'the session it was signed in with is gone')
+
+  const old = await req('POST', '/api/auth/login', { username: 'jbeale', pin: '1234' })
+  assert.equal(old.status, 401)
+  const now = await req('POST', '/api/auth/login', { username: 'jbeale', pin: '5678' })
+  assert.equal(now.status, 200)
+
+  assert.equal(store.setPin('nobody', '5678'), null)
+})
+
+test('resetting a PIN never becomes an HTTP route', async () => {
+  admin()
+  const login = await req('POST', '/api/auth/login', { username: 'jbeale', pin: '1234' })
+  const auth = { authorization: `Bearer ${login.json.token}` }
+  // Not even an administrator: physical access to the server is the authority,
+  // and an endpoint that sets a PIN is a rather different blast radius.
+  for (const [method, url] of [
+    ['POST', '/api/users/jbeale/pin'],
+    ['PUT', '/api/users/jbeale/pin'],
+    ['POST', '/api/auth/reset-pin'],
+  ]) {
+    // Raw, because a 404 from Express is an HTML page and req() expects JSON.
+    const r = await fetch(`http://127.0.0.1:${port}${url}`, {
+      method,
+      headers: { 'content-type': 'application/json', ...auth },
+      body: JSON.stringify({ pin: '0000' }),
+    })
+    assert.equal(r.status, 404, `${method} ${url} must not exist`)
+  }
+})
+
+test('a group is listed with the permissions it actually holds', async () => {
+  admin()
+  const login = await req('POST', '/api/auth/login', { username: 'jbeale', pin: '1234' })
+  const r = await req('GET', '/api/users', null, { authorization: `Bearer ${login.json.token}` })
+
+  const admins = r.json.groups.find((g) => g.name === 'Administrators')
+  // Listing Administrators as holding nothing is the most misleading row this
+  // page can print, and it printed it: the query selected the group table and
+  // the permissions live in another one.
+  assert.deepEqual(admins.permissions, ['*'])
+})
