@@ -33,6 +33,17 @@ import type { DesignSession, DragResult, Handles } from './useDesign'
 
 const HANDLE_SCREEN_PX = 8
 
+/**
+ * How far the pointer must travel before a press becomes a drag, in SCREEN
+ * pixels.
+ *
+ * A trackpad click is not a still event — lifting a finger drags the cursor a
+ * pixel or three — so without this, every click that selected a node also
+ * nudged it, and the designer's next act was Cmd+Z. Four is the usual figure
+ * and it is comfortably under any movement someone means.
+ */
+const DRAG_THRESHOLD_PX = 4
+
 type HandleName = 'nw' | 'n' | 'ne' | 'e' | 'se' | 's' | 'sw' | 'w'
 
 const CURSORS: Record<HandleName, string> = {
@@ -89,6 +100,17 @@ export function CanvasStage({
   const [handles, setHandles] = useState<Handles | null>(null)
   const [ghost, setGhost] = useState<DragResult | null>(null)
   const [dragging, setDragging] = useState(false)
+  /**
+   * Where the pointer went down, in SCREEN pixels, and whether it has since
+   * moved far enough to mean it.
+   *
+   * A trackpad click is not a still event: lifting a finger drags the cursor a
+   * pixel or three, and without a threshold every selection click also nudged
+   * the node and had to be undone. Screen pixels rather than canvas units on
+   * purpose — the wobble is a property of the finger, not of the zoom level.
+   */
+  const press = useRef<{ x: number; y: number } | null>(null)
+  const [moved, setMoved] = useState(false)
   // Canvas px per screen px, so handles keep their screen size.
   const [scale, setScale] = useState(1)
 
@@ -188,6 +210,8 @@ export function CanvasStage({
         if (!hit) return
         s.beginDrag(hit, 'move', p[0], p[1])
       }
+      press.current = { x: e.clientX, y: e.clientY }
+      setMoved(false)
       setDragging(true)
       ;(e.currentTarget as Element).setPointerCapture(e.pointerId)
       e.preventDefault()
@@ -200,6 +224,14 @@ export function CanvasStage({
       const s = session.current
       const p = toCanvas(e)
       if (!dragging || !s || !p) return
+      // Under the threshold this is still a click. Nothing is dragged, no
+      // ghost is drawn, and the node has not been told to move.
+      if (!moved) {
+        const a = press.current
+        if (!a) return
+        if (Math.hypot(e.clientX - a.x, e.clientY - a.y) < DRAG_THRESHOLD_PX) return
+        setMoved(true)
+      }
       try {
         // Alt disables snapping — the convention every design tool shares.
         setGhost(JSON.parse(s.dragTo(p[0], p[1], !e.altKey)) as DragResult)
@@ -207,16 +239,25 @@ export function CanvasStage({
         setGhost(null)
       }
     },
-    [dragging, session, toCanvas],
+    [dragging, moved, session, toCanvas],
   )
 
   const onPointerUp = useCallback(
     (e: React.PointerEvent) => {
       const s = session.current
       const p = toCanvas(e)
+      const wasMoved = moved
       setDragging(false)
+      setMoved(false)
       setGhost(null)
+      press.current = null
       if (!s || !p) return
+      // A press that never passed the threshold selected something and nothing
+      // more. The pending drag is dropped rather than committed.
+      if (!wasMoved) {
+        s.cancelDrag()
+        return
+      }
       try {
         const edited = s.endDrag(p[0], p[1], !e.altKey)
         // null means the drag never moved: a click, not an edit.
@@ -225,7 +266,7 @@ export function CanvasStage({
         // The document did not change; the canvas still shows the truth.
       }
     },
-    [session, toCanvas, onEdit],
+    [session, toCanvas, onEdit, moved],
   )
 
   const onKeyDown = useCallback(

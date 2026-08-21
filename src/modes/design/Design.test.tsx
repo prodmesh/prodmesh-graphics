@@ -81,7 +81,11 @@ const h = vi.hoisted(() => {
     facts: vi.fn(facts),
     hitTest: vi.fn(() => 'band'),
     beginDrag: vi.fn(),
-    dragTo: vi.fn(() => JSON.stringify({})),
+    // A real DragResult: the ghost is drawn from it, and an empty object
+    // crashed the render the moment a test actually dragged something.
+    dragTo: vi.fn(() =>
+      JSON.stringify({ rect: [0, 0, 100, 50], dx: 40, dy: 0, w: 100, h: 50, guides: [] }),
+    ),
     endDrag: vi.fn(() => null),
     cancelDrag: vi.fn(),
     setStroke: vi.fn((_id: string, r: number, g: number, b: number, a: number, w: number) => {
@@ -141,12 +145,20 @@ vi.mock('./useDesign', async () => {
       React.useEffect(() => {
         if (doc) setGen((g) => g + 1)
       }, [doc])
+      // ONE ref object for the life of the component, like the real hook's.
+      // A fresh `{ current }` literal per render looks equivalent and is not:
+      // `CanvasStage` captures the session inside a `useCallback([])`, so a new
+      // object every render left that closure holding the FIRST one — null,
+      // forever. Every canvas pointer handler then returned early, and the
+      // right-button test passed for the wrong reason.
+      const session = React.useRef<unknown>(null)
+      session.current = doc ? h.session : null
       return {
         status: doc ? 'ready' : 'idle',
         problem: null,
         info: null,
         paint: async () => {},
-        session: { current: doc ? h.session : null },
+        session,
         generation,
       }
     },
@@ -391,6 +403,52 @@ describe('the canvas and the right button', () => {
     const svg = document.querySelector('.dsg-overlay')!
     fireEvent.pointerDown(svg, { button: 2, clientX: 100, clientY: 100 })
     expect(h.session.beginDrag).not.toHaveBeenCalled()
+  })
+})
+
+describe('the drag threshold', () => {
+  /** The overlay, with a pointer-capture stub jsdom does not provide. */
+  const overlay = () => {
+    const svg = document.querySelector('.dsg-overlay') as SVGSVGElement & {
+      setPointerCapture: (id: number) => void
+    }
+    svg.setPointerCapture = () => {}
+    svg.getBoundingClientRect = () =>
+      ({ left: 0, top: 0, width: 1280, height: 720, right: 1280, bottom: 720, x: 0, y: 0 }) as DOMRect
+    return svg
+  }
+
+  test('a click with a pixel of trackpad wobble selects and does NOT move', async () => {
+    await openTemplate()
+    const svg = overlay()
+    h.session.dragTo.mockClear()
+    h.session.endDrag.mockClear()
+    h.session.cancelDrag.mockClear()
+
+    fireEvent.pointerDown(svg, { button: 0, clientX: 100, clientY: 100, pointerId: 1 })
+    // The press DID begin a drag — the threshold is about whether it commits.
+    expect(h.session.beginDrag).toHaveBeenCalled()
+    fireEvent.pointerMove(svg, { buttons: 1, clientX: 102, clientY: 101, pointerId: 1 })
+    fireEvent.pointerUp(svg, { clientX: 102, clientY: 101, pointerId: 1 })
+
+    // Nothing was dragged and nothing was committed — the press was a click.
+    expect(h.session.dragTo).not.toHaveBeenCalled()
+    expect(h.session.endDrag).not.toHaveBeenCalled()
+    expect(h.session.cancelDrag).toHaveBeenCalled()
+  })
+
+  test('past the threshold it is a drag, and the node moves', async () => {
+    await openTemplate()
+    const svg = overlay()
+    h.session.dragTo.mockClear()
+    h.session.endDrag.mockClear()
+
+    fireEvent.pointerDown(svg, { button: 0, clientX: 100, clientY: 100, pointerId: 1 })
+    fireEvent.pointerMove(svg, { buttons: 1, clientX: 140, clientY: 100, pointerId: 1 })
+    fireEvent.pointerUp(svg, { clientX: 140, clientY: 100, pointerId: 1 })
+
+    expect(h.session.dragTo).toHaveBeenCalled()
+    expect(h.session.endDrag).toHaveBeenCalled()
   })
 })
 

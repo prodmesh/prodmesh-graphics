@@ -24,6 +24,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { Pause, Play, Plus, Trash2 } from 'lucide-react'
 import { Button, FormGroup, GroupHeader, Tag } from '../../components/console'
+import { ContextMenu, type MenuItem } from './ContextMenu'
 import type { DesignSession, DocTimeline, Ease } from './useDesign'
 
 /** The properties a track may animate — the renderer's own list. */
@@ -213,6 +214,17 @@ function CurveEditor({
 const W = 1000
 const ROW_H = 18
 
+/**
+ * How near the playhead has to land, in SCREEN pixels, to snap to a key.
+ *
+ * Lining two properties up EXACTLY by dragging a playhead across a thousand
+ * milliseconds is a game of pixels, and "move x at 400 and opacity at 401" is
+ * an animation with a tiny wrong step in it. Snapping makes the common intent
+ * — the same instant on both lanes — the easy one. Screen pixels, so the pull
+ * feels the same however long the timeline is.
+ */
+const SNAP_PX = 8
+
 export function TimelinePanel({
   session,
   ready,
@@ -244,6 +256,14 @@ export function TimelinePanel({
   const duration = Math.max(1, active?.duration_ms ?? 1000)
   const [newName, setNewName] = useState('')
   const [keySel, setKeySel] = useState<{ prop: string; t: number } | null>(null)
+  /**
+   * The lane menu. `key` is the one under the pointer, when there was one —
+   * right-clicking a key offers to delete it, and right-clicking bare lane
+   * offers to make one right there.
+   */
+  const [menu, setMenu] = useState<
+    { x: number; y: number; prop: string; fallback: number; t: number; key: boolean } | null
+  >(null)
   const [problem, setProblem] = useState<string | null>(null)
 
   // A different timeline or node is a different set of keys.
@@ -277,19 +297,23 @@ export function TimelinePanel({
    * exists, the property's resting default when it does not. Continuity by
    * construction: adding a key never jolts the animation.
    */
-  const addKey = (prop: string, fallback: number) => {
+  const addKeyAt = (prop: string, fallback: number, at: number) => {
     const s = session.current
     if (!s || !selected || !timeline) return
+    const t = Math.round(at)
     let v = fallback
     try {
-      const values = JSON.parse(s.valuesAt(timeline, tMs)) as Record<string, number>
+      const values = JSON.parse(s.valuesAt(timeline, t)) as Record<string, number>
       v = values[`${selected}/${prop}`] ?? fallback
     } catch {
       // The fallback is the property's resting value; good enough to edit.
     }
-    edit((s2) => s2.setKey(timeline, selected, prop, Math.round(tMs), v, JSON.stringify('linear')))
-    setKeySel({ prop, t: Math.round(tMs) })
+    edit((s2) => s2.setKey(timeline, selected, prop, t, v, JSON.stringify('linear')))
+    setKeySel({ prop, t })
   }
+
+  /** The lane header's + button: a key at the playhead. */
+  const addKey = (prop: string, fallback: number) => addKeyAt(prop, fallback, tMs)
 
   const selKey = (() => {
     if (!keySel || !active || !selected) return null
@@ -300,10 +324,45 @@ export function TimelinePanel({
 
   const x = (t: number) => (t / duration) * W
 
+  /**
+   * Every time the playhead can usefully land on: each key of the selected
+   * node's tracks in this timeline, plus both ends.
+   *
+   * Keys on ALL lanes, not just the one under the pointer — the point of
+   * snapping here is to line properties up with each other.
+   */
+  const snapTimes = (): number[] => {
+    const out = [0, duration]
+    for (const tr of active?.tracks ?? []) {
+      if (!selected || !tr.target.startsWith(`${selected}/`)) continue
+      for (const k of tr.keys) out.push(k.t)
+    }
+    return out
+  }
+
+  /** The time under the pointer, snapped unless a modifier says otherwise. */
+  const timeAt = (e: { clientX: number; shiftKey: boolean; ctrlKey: boolean; altKey: boolean }, r: DOMRect) => {
+    // A zero-width lane means the panel has no layout yet — a narrow window
+    // collapses the centre column to nothing. Dividing by it produced NaN,
+    // which travelled all the way into `pmg_anim::eval` and panicked the wasm
+    // module on the next frame. Both ends are fixed; this is the near one.
+    if (!(r.width > 0)) return 0
+    const raw = Math.max(0, Math.min(duration, ((e.clientX - r.left) / r.width) * duration))
+    // Shift, Control, or Alt turns it off — Alt because that is what the canvas
+    // already uses for "no snapping", the other two because those are the keys
+    // hands reach for.
+    if (e.shiftKey || e.ctrlKey || e.altKey) return raw
+    const withinMs = (SNAP_PX / Math.max(1, r.width)) * duration
+    let best: number | null = null
+    for (const t of snapTimes()) {
+      if (Math.abs(t - raw) > withinMs) continue
+      if (best === null || Math.abs(t - raw) < Math.abs(best - raw)) best = t
+    }
+    return best ?? raw
+  }
+
   const scrubFrom = (e: React.PointerEvent<SVGSVGElement>) => {
-    const r = e.currentTarget.getBoundingClientRect()
-    const t = Math.max(0, Math.min(duration, ((e.clientX - r.left) / r.width) * duration))
-    onScrub(Math.round(t))
+    onScrub(Math.round(timeAt(e, e.currentTarget.getBoundingClientRect())))
   }
 
   if (!ready || !doc) return null
@@ -418,9 +477,36 @@ export function TimelinePanel({
               className="tl__lanes"
               viewBox={`0 0 ${W} ${PROPS.length * ROW_H}`}
               preserveAspectRatio="none"
-              onPointerDown={scrubFrom}
+              onPointerDown={(e) => { if (e.button === 0) scrubFrom(e) }}
               onPointerMove={(e) => { if (e.buttons & 1) scrubFrom(e) }}
+              onContextMenu={(e) => {
+                // Which lane, and what time, the pointer is actually over.
+                const r = e.currentTarget.getBoundingClientRect()
+                const row = Math.min(
+                  PROPS.length - 1,
+                  Math.max(0, Math.floor(((e.clientY - r.top) / r.height) * PROPS.length)),
+                )
+                const lane = PROPS[row]!
+                const t = Math.round(timeAt(e, r))
+                const keys =
+                  active?.tracks.find((tr) => tr.target === `${selected}/${lane.prop}`)?.keys ?? []
+                const withinMs = (SNAP_PX / Math.max(1, r.width)) * duration
+                const hit = keys.find((k) => Math.abs(k.t - t) <= withinMs)
+                e.preventDefault()
+                setMenu({
+                  x: e.clientX,
+                  y: e.clientY,
+                  prop: lane.prop,
+                  fallback: lane.fallback,
+                  t: hit ? hit.t : t,
+                  key: !!hit,
+                })
+              }}
             >
+              <title>
+                Drag to scrub — the playhead snaps to keys; hold Shift, Control, or Alt for
+                none. Right-click a key to delete it, or bare lane to add one.
+              </title>
               {PROPS.map((_, i) => (
                 <line key={i} className="tl__lane" x1={0} y1={(i + 1) * ROW_H - 0.5} x2={W} y2={(i + 1) * ROW_H - 0.5} />
               ))}
@@ -463,6 +549,37 @@ export function TimelinePanel({
         <p className="tl__dim">
           No timelines yet. Add one — In and Out are the ones a take plays.
         </p>
+      ) : null}
+
+      {menu && selected && timeline ? (
+        <ContextMenu
+          x={menu.x}
+          y={menu.y}
+          items={
+            (menu.key
+              ? [
+                  {
+                    label: `Delete key at ${Math.round(menu.t)} ms`,
+                    danger: true,
+                    onPick: () => {
+                      edit((s2) => s2.deleteKey(timeline, selected, menu.prop, menu.t))
+                      setKeySel(null)
+                    },
+                  },
+                  {
+                    label: 'Move the playhead here',
+                    onPick: () => onScrub(Math.round(menu.t)),
+                  },
+                ]
+              : [
+                  {
+                    label: `Add a key at ${Math.round(menu.t)} ms`,
+                    onPick: () => addKeyAt(menu.prop, menu.fallback, menu.t),
+                  },
+                ]) as MenuItem[]
+          }
+          onClose={() => setMenu(null)}
+        />
       ) : null}
 
       {selKey && selected && timeline ? (

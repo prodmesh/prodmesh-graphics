@@ -42,12 +42,18 @@ const setKeyMock = () =>
   )
 type SetKey = ReturnType<typeof setKeyMock>
 
-function harness(setKey: SetKey) {
+function harness(
+  setKey: SetKey,
+  extra: Record<string, unknown> = {},
+  onScrub: (t: number) => void = () => {},
+) {
   const session = {
     setKey,
     addTimeline: vi.fn(() => '{}'),
     deleteKey: vi.fn(() => '{}'),
     retimeKey: vi.fn(() => '{}'),
+    valuesAt: vi.fn(() => '{}'),
+    ...extra,
   } as unknown as DesignSession
 
   function Host() {
@@ -63,7 +69,7 @@ function harness(setKey: SetKey) {
         playing={false}
         onTogglePlay={() => {}}
         onPickTimeline={() => {}}
-        onScrub={() => {}}
+        onScrub={onScrub}
         onEdit={() => {}}
       />
     )
@@ -168,5 +174,76 @@ describe('the curve editor', () => {
     expect(setKey).toHaveBeenCalledTimes(1)
     const ease = JSON.parse(setKey.mock.calls[0]![5]) as { cubic: number[] }
     expect(ease.cubic[0]).toBeCloseTo(0.35, 2)
+  })
+})
+
+/** The lanes SVG, with the layout jsdom will not give it. */
+const lanes = () => {
+  const svg = document.querySelector('.tl__lanes') as SVGSVGElement
+  svg.getBoundingClientRect = () =>
+    ({ left: 0, top: 0, width: 1000, height: 108, right: 1000, bottom: 108, x: 0, y: 0 }) as DOMRect
+  return svg
+}
+
+/** Scrub at a time, in ms, with the lane 1000 px wide over 1000 ms. */
+const scrubAt = (ms: number, mods: Partial<PointerEventInit> = {}) =>
+  fireEvent.pointerDown(lanes(), { clientX: ms, clientY: 4, button: 0, ...mods })
+
+describe('the playhead', () => {
+  test('snaps to a key when it lands near one — lining two lanes up is the point', async () => {
+    const scrubbed: number[] = []
+    const Host = harness(setKeyMock(), {}, (t: number) => { scrubbed.push(t) })
+    render(<Host />)
+    await act(async () => {})
+
+    scrubAt(994) // 6 px short of the key at 1000
+    expect(scrubbed.at(-1)).toBe(1000)
+
+    scrubAt(500) // nothing near
+    expect(scrubbed.at(-1)).toBe(500)
+  })
+
+  test('Shift, Control, and Alt each turn the pull off', async () => {
+    const scrubbed: number[] = []
+    const Host = harness(setKeyMock(), {}, (t: number) => { scrubbed.push(t) })
+    render(<Host />)
+    await act(async () => {})
+
+    for (const mod of [{ shiftKey: true }, { ctrlKey: true }, { altKey: true }]) {
+      scrubAt(994, mod)
+      expect(scrubbed.at(-1)).toBe(994)
+    }
+  })
+})
+
+describe('the lane menu', () => {
+  test('right-clicking a key offers to delete THAT key', async () => {
+    const deleteKey = vi.fn(() => '{}')
+    const Host = harness(setKeyMock(), { deleteKey })
+    render(<Host />)
+    await act(async () => {})
+
+    fireEvent.contextMenu(lanes(), { clientX: 1000, clientY: 4 })
+    const item = await screen.findByRole('menuitem', { name: /Delete key at 1000 ms/ })
+    fireEvent.click(item)
+    expect(deleteKey).toHaveBeenCalledWith('In', 'band', 'transform.translate.x', 1000)
+  })
+
+  test('right-clicking bare lane offers a key THERE, not at the playhead', async () => {
+    const setKey = setKeyMock()
+    const Host = harness(setKey)
+    render(<Host />)
+    await act(async () => {})
+
+    // 600 ms along, on the third lane (scale x) — nowhere near a key, and the
+    // playhead is at 0.
+    fireEvent.contextMenu(lanes(), { clientX: 600, clientY: 45 })
+    const item = await screen.findByRole('menuitem', { name: /Add a key at 600 ms/ })
+    fireEvent.click(item)
+    expect(setKey).toHaveBeenCalledTimes(1)
+    const [, node, prop, t] = setKey.mock.calls[0]!
+    expect(node).toBe('band')
+    expect(prop).toBe('transform.scale.x')
+    expect(t).toBe(600)
   })
 })

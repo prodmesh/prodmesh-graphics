@@ -230,6 +230,25 @@ each is additive later.
 rectangular scissor in target pixels that removes fragments; a mask is a shaped
 coverage multiply. A node can have both.
 
+### 3.6 Opacity inherits
+
+`style.opacity` folds down the tree the way `transform` does: a node's
+effective opacity is its own multiplied by every ancestor's. Fading a band
+fades the text on it, and a key on a container animates everything it holds.
+
+**It is a per-node multiply, not a group composite.** The two differ in exactly
+one case: two *overlapping* children inside a half-faded parent show through
+each other here, where a true group would composite the subtree once and fade
+the result as one picture. Doing it the group way means rendering the subtree
+to its own texture — a change to the render graph, and a **seam**, not a
+promise. The corpus pins the current behaviour as
+`opacity-overlap-shows-through` so that the day it changes, an image changes
+with it.
+
+A mask (§3.5) uses its **own** opacity, not the inherited one. Its container's
+fade already reaches the masked content; folding it into the mask as well would
+count the same fade twice.
+
 ## 4. Layout
 
 The Yoga flexbox model. Fields:

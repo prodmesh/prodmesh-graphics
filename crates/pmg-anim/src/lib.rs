@@ -96,13 +96,28 @@ pub struct Key {
 pub fn eval(keys: &[Key], t_ms: f32) -> Option<f32> {
     let first = keys.first()?;
     let last = keys.last()?;
-    if t_ms <= first.t {
+    // NaN compares FALSE against everything, so it fell through both holds and
+    // reached the search below, where `partition_point` returned 0 and the
+    // `- 1` underflowed to usize::MAX — an index panic on the thread that
+    // draws frames. Found from the browser (a zero-width timeline divided by
+    // zero and scrubbed to NaN), which is a UI bug fixed in its own place; a
+    // panic here would have been the same crash from any caller.
+    //
+    // A time that is not a time holds the first value, which is what "before
+    // the start" already means.
+    if !t_ms.is_finite() || t_ms <= first.t {
         return Some(first.v);
     }
     if t_ms >= last.t {
         return Some(last.v);
     }
-    let i = keys.partition_point(|k| k.t <= t_ms) - 1;
+    // Saturating, not `- 1`: the two holds above already cover a single-key
+    // track, and this is a render-thread function where being total matters
+    // more than being tight.
+    let i = keys.partition_point(|k| k.t <= t_ms).saturating_sub(1);
+    if i + 1 >= keys.len() {
+        return Some(last.v);
+    }
     let (a, b) = (&keys[i], &keys[i + 1]);
     let span = b.t - a.t;
     if span <= f32::EPSILON {
@@ -190,5 +205,42 @@ mod tests {
         let at_5994 = frame_time_ms(48, 60000, 1001); // ~800.8 ms
         assert!((at_25p - 800.0).abs() < 1e-6);
         assert!((at_5994 - 800.0).abs() < 1.0);
+    }
+    /// A time that is not a time must not panic on the render thread.
+    ///
+    /// NaN compares false against everything, so it walked past both of
+    /// `eval`'s holds and underflowed the interval search. Reached in the
+    /// browser from a timeline laid out at zero width — the UI has its own
+    /// guard now, and this is the one that matters: whatever a caller hands
+    /// in, the function draws a frame instead of killing the thread.
+    #[test]
+    fn a_non_finite_time_holds_rather_than_panicking() {
+        let one = [Key {
+            t: 500.0,
+            v: 7.0,
+            ease: Ease::Linear,
+        }];
+        let two = [
+            Key {
+                t: 0.0,
+                v: 0.0,
+                ease: Ease::Linear,
+            },
+            Key {
+                t: 1000.0,
+                v: 100.0,
+                ease: Ease::Linear,
+            },
+        ];
+        for keys in [&one[..], &two[..]] {
+            for t in [f32::NAN, f32::INFINITY, f32::NEG_INFINITY] {
+                let v = eval(keys, t).expect("a keyed track always answers");
+                assert!(v.is_finite(), "eval({t}) returned {v}");
+            }
+        }
+        // And the shapes that used to underflow, answered plainly.
+        assert_eq!(eval(&one, f32::NAN), Some(7.0));
+        assert_eq!(eval(&one, 250.0), Some(7.0));
+        assert_eq!(eval(&one, 900.0), Some(7.0));
     }
 }

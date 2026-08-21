@@ -108,6 +108,32 @@ pub fn world_transforms(inst: &SceneInstance, frame: &[FrameNode]) -> Vec<Affine
     world
 }
 
+/// Each node's opacity with its ancestors' folded in.
+///
+/// **Opacity inherits, the way transforms do.** Fading a band has to fade the
+/// text on it; a parent whose opacity animates to zero and leaves its children
+/// fully painted is a graphic that half-disappears, and it read as a bug every
+/// time somebody tried it.
+///
+/// This is a per-node MULTIPLY, not a group composite. The difference shows in
+/// exactly one place: two OVERLAPPING children inside a half-faded parent show
+/// through each other here, where a true group would fade the pair as one
+/// picture. Doing it properly means rendering the subtree to its own texture
+/// and compositing that once — a real change to the render graph, and a seam
+/// (`docs/specs/scene-format.md` §3.6), not a v1 promise. What is here is what
+/// every child gets right and nothing gets catastrophically wrong.
+pub fn world_opacities(inst: &SceneInstance, frame: &[FrameNode]) -> Vec<f32> {
+    let mut out: Vec<f32> = Vec::with_capacity(inst.nodes.len());
+    for (i, n) in inst.nodes.iter().enumerate() {
+        let own = frame.get(i).map(|f| f.opacity).unwrap_or(n.opacity);
+        let inherited = n.parent.and_then(|p| out.get(p).copied()).unwrap_or(1.0);
+        // Parents always come first in `nodes` — flatten pushes a node before
+        // its children — so the ancestor's product is already resolved.
+        out.push(own * inherited);
+    }
+    out
+}
+
 fn apply(a: &Affine, p: [f32; 2]) -> [f32; 2] {
     let (m, t) = a;
     [

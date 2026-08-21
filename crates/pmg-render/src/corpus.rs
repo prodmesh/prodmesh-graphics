@@ -1555,6 +1555,134 @@ pub fn all() -> Vec<Template> {
         degraded,
     ));
 
+    // --- Inherited opacity -------------------------------------------------
+    //
+    // Opacity folds down the tree like the transform above it. These figures
+    // are also where the honest LIMIT of that is pinned: it is a per-node
+    // multiply, not a group composite, and `opacity-overlap-shows-through` is
+    // what that difference looks like.
+    v.push(t(
+        "opacity-inherits",
+        "a half-faded parent with an opaque child — the child fades too, which \
+         is the whole point: fading a band has to fade the text on it",
+        doc_of(
+            "opacity-inherits",
+            vec![Node {
+                style: Style {
+                    opacity: 0.5,
+                    ..fill(TEAL)
+                },
+                children: vec![Node {
+                    layout: Layout {
+                        position: Position::Absolute,
+                        margin: Edges {
+                            top: 30.0,
+                            left: 30.0,
+                            ..Default::default()
+                        },
+                        ..px(180.0, 80.0)
+                    },
+                    style: fill(RED),
+                    ..node("child", NodeKind::Box)
+                }],
+                ..at("parent", 96.0, 64.0, 320.0, 160.0, fill(TEAL))
+            }],
+        ),
+    ));
+    v.push(t(
+        "opacity-compounds",
+        "half of a half — a 0.5 child inside a 0.5 parent lands at 0.25, the \
+         same arithmetic transforms do when they compose",
+        doc_of(
+            "opacity-compounds",
+            vec![Node {
+                style: Style {
+                    opacity: 0.5,
+                    ..fill(TEAL)
+                },
+                children: vec![Node {
+                    layout: Layout {
+                        position: Position::Absolute,
+                        margin: Edges {
+                            top: 30.0,
+                            left: 30.0,
+                            ..Default::default()
+                        },
+                        ..px(180.0, 80.0)
+                    },
+                    style: Style {
+                        opacity: 0.5,
+                        ..fill(RED)
+                    },
+                    ..node("child", NodeKind::Box)
+                }],
+                ..at("parent", 96.0, 64.0, 320.0, 160.0, fill(TEAL))
+            }],
+        ),
+    ));
+    v.push(t(
+        "opacity-overlap-shows-through",
+        "two OVERLAPPING children inside a half-faded parent. They show through \
+         each other, because inherited opacity is a per-node multiply and not a \
+         group composite — the honest current behaviour, pinned so that the day \
+         the render graph grows a group pass, this image changes and somebody \
+         has to look at it",
+        doc_of(
+            "opacity-overlap-shows-through",
+            vec![Node {
+                style: Style {
+                    opacity: 0.5,
+                    ..Default::default()
+                },
+                children: vec![
+                    at("a", 40.0, 30.0, 180.0, 100.0, fill(RED)),
+                    at("b", 130.0, 60.0, 180.0, 100.0, fill(BLUE)),
+                ],
+                ..at("parent", 96.0, 64.0, 320.0, 160.0, Style::default())
+            }],
+        ),
+    ));
+    v.push(
+        t(
+            "anim-parent-opacity-mid",
+            "a parent's opacity animated, sampled mid-tween — the fade the \
+             designer meant when they put a key on the container",
+            {
+                let mut d = doc_of(
+                    "anim-parent-opacity-mid",
+                    vec![Node {
+                        children: vec![Node {
+                            layout: Layout {
+                                position: Position::Absolute,
+                                margin: Edges {
+                                    top: 30.0,
+                                    left: 30.0,
+                                    ..Default::default()
+                                },
+                                ..px(180.0, 80.0)
+                            },
+                            style: fill(CREAM),
+                            ..node("child", NodeKind::Box)
+                        }],
+                        ..at("parent", 96.0, 64.0, 320.0, 160.0, fill(TEAL))
+                    }],
+                );
+                d.timelines = vec![timeline(
+                    vec![track(
+                        "parent/style.opacity",
+                        0.0,
+                        1.0,
+                        1000.0,
+                        pmg_anim::Ease::Linear,
+                    )],
+                    1000.0,
+                )];
+                d
+            },
+        )
+        .at_ms(400.0),
+    );
+
     // --- Masks (format 1.3) ------------------------------------------------
     //
     // A mask node masks its SIBLINGS. Every figure here is therefore a group
@@ -2591,6 +2719,46 @@ mod tests {
         }
         paint(&mut t.doc.root);
         assert!(pmg_scene::validate::compile(&t.doc).is_err());
+    }
+
+    /// Opacity folds down the tree. Checked on the numbers rather than on the
+    /// picture, because the picture is one shade of the answer and this is the
+    /// answer.
+    #[test]
+    fn opacity_inherits_and_compounds() {
+        let a = arm(&by_name("opacity-inherits").unwrap(), None).unwrap();
+        let ops = crate::interact::world_opacities(&a.inst, &a.frame);
+        let at = |id: &str| {
+            let i = a.inst.nodes.iter().position(|n| n.id == id).unwrap();
+            ops[i]
+        };
+        assert!((at("parent") - 0.5).abs() < 1e-6);
+        assert!(
+            (at("child") - 0.5).abs() < 1e-6,
+            "the child inherits the fade"
+        );
+
+        let b = arm(&by_name("opacity-compounds").unwrap(), None).unwrap();
+        let ops = crate::interact::world_opacities(&b.inst, &b.frame);
+        let i = b.inst.nodes.iter().position(|n| n.id == "child").unwrap();
+        assert!((ops[i] - 0.25).abs() < 1e-6, "half of a half");
+    }
+
+    /// A mask's own opacity is NOT the inherited one — the container's fade
+    /// already reaches the content, and folding it into the mask too would
+    /// count it twice.
+    #[test]
+    fn an_animated_parent_opacity_reaches_its_children() {
+        let t = by_name("anim-parent-opacity-mid").unwrap();
+        let a = arm(&t, None).unwrap();
+        let ops = crate::interact::world_opacities(&a.inst, &a.frame);
+        let child = a.inst.nodes.iter().position(|n| n.id == "child").unwrap();
+        // 400 ms into a linear 0 → 1 over 1000 ms.
+        assert!(
+            (ops[child] - 0.4).abs() < 1e-3,
+            "the child sits at the parent's animated value, not at 1.0: {}",
+            ops[child]
+        );
     }
 
     #[test]

@@ -66,6 +66,7 @@ import { MediaBrowser } from './MediaBrowser'
 import { ThemeManager } from './ThemeManager'
 import { useDocHistory } from './useHistory'
 import { LayerTree } from './LayerTree'
+import { ContextMenu, type MenuItem } from './ContextMenu'
 import { TimelinePanel } from './TimelinePanel'
 import { CanvasStage } from './CanvasStage'
 import type { Item } from '../show/types'
@@ -206,74 +207,6 @@ function OptionalSection({
   )
 }
 
-/**
- * The element menu, at the pointer. Force of habit for most hands — cut, copy,
- * paste, duplicate live here and on the matching Cmd keys, backed by the same
- * clipboard. Closes on any press elsewhere, Escape, or leaving the window.
- */
-type MenuItem = { label: string; disabled?: boolean; danger?: boolean; onPick: () => void } | 'rule'
-
-function ContextMenu({
-  x,
-  y,
-  items,
-  onClose,
-}: {
-  x: number
-  y: number
-  items: MenuItem[]
-  onClose: () => void
-}) {
-  useEffect(() => {
-    const close = () => onClose()
-    const key = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') onClose()
-    }
-    // Bubble phase, so a press inside the menu (which stops propagation)
-    // reaches its item before anything closes.
-    window.addEventListener('pointerdown', close)
-    window.addEventListener('keydown', key)
-    window.addEventListener('blur', close)
-    return () => {
-      window.removeEventListener('pointerdown', close)
-      window.removeEventListener('keydown', key)
-      window.removeEventListener('blur', close)
-    }
-  }, [onClose])
-  const style: React.CSSProperties = {
-    left: Math.min(x, window.innerWidth - 190),
-    top: Math.min(y, window.innerHeight - items.length * 28 - 20),
-  }
-  return (
-    <div
-      className="ctx"
-      role="menu"
-      style={style}
-      onPointerDown={(e) => e.stopPropagation()}
-      onContextMenu={(e) => e.preventDefault()}
-    >
-      {items.map((it, i) =>
-        it === 'rule' ? (
-          <div key={`rule-${i}`} className="ctx__rule" role="separator" />
-        ) : (
-          <button
-            key={it.label}
-            type="button"
-            role="menuitem"
-            disabled={it.disabled}
-            className={it.danger ? 'ctx__item ctx__item--danger' : 'ctx__item'}
-            onClick={() => {
-              onClose()
-              it.onPick()
-            }}
-          >
-            {it.label}
-          </button>
-        ),
-      )}
-    </div>
-  )
-}
 
 type GradStops = [[number, number, number, number], number][]
 

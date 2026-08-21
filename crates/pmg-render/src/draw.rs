@@ -208,6 +208,10 @@ fn mask_uniform(
         meta: [
             m.radius.min(half[0].abs()).min(half[1].abs()),
             1.0,
+            // The mask's OWN opacity, deliberately not the inherited one: the
+            // mask is a shape, and its container's fade already reaches the
+            // content through `world_opacities`. Folding it in here would
+            // count the same fade twice.
             f.map(|f| f.opacity).unwrap_or(m.opacity),
             0.0,
         ],
@@ -904,6 +908,11 @@ impl SceneRenderer {
         // node whose pixels are not there.
         let clips = crate::interact::clip_rects(inst, frame, &world);
 
+        // Opacity inherits like the transform above it: fading a band fades
+        // the text on it. See `world_opacities` for what this is NOT (a group
+        // composite) and why that is a seam rather than a bug.
+        let opacities = crate::interact::world_opacities(inst, frame);
+
         for (i, n) in inst.nodes.iter().enumerate() {
             let f = frame.get(i).copied().unwrap_or(FrameNode {
                 transform: n.base_transform,
@@ -937,7 +946,7 @@ impl SceneRenderer {
                 xform: m,
                 xform_t: t,
                 radius: n.radius,
-                opacity: f.opacity,
+                opacity: opacities.get(i).copied().unwrap_or(f.opacity),
                 canvas: [inst.canvas_w as f32, inst.canvas_h as f32],
                 // One design-space unit per pixel. The corpus renders at design
                 // resolution, so this is 1 — but it is a uniform rather than a

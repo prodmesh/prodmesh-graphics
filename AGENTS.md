@@ -194,6 +194,14 @@ specifically shaped to avoid. Do not re-derive them.
   failure scrolls past above a cheerful "CLEAN". Two commits landed with clippy
   errors in them this way. Check the exit status (`cmd >/dev/null 2>&1 && echo
   ok || echo FAILED`) rather than printing a constant.
+- **A time that is not a time reaches the render thread.** `pmg_anim::eval`
+  held before the first key and after the last with `<=` / `>=`, and NaN
+  compares false against both — so it fell into the interval search and
+  underflowed `partition_point() - 1` to `usize::MAX`, panicking the wasm
+  module mid-frame. It arrived from a UI divide-by-zero (a collapsed panel with
+  zero width), which is fixed in its own place, but the lesson is the general
+  one: anything on the path to a frame must be TOTAL over its inputs, not
+  merely correct over the sensible ones.
 - **`npx tsc --noEmit` checks NOTHING in this repo.** The root `tsconfig.json`
   is a solution file — `"files": []` plus two project references — so that
   command type-checks an empty program and exits 0 looking like a pass. The
