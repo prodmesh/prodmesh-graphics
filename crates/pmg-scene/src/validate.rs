@@ -64,6 +64,57 @@ pub fn validate(doc: &SceneDoc) -> Result<Vec<Warning>, SceneError> {
         }
     });
 
+    // --- Timers (§3.7, format 1.4, ADR 0022) ------------------------------
+    //
+    // Tabular figures stop being advice the moment a number changes on its own:
+    // proportional digits have different widths, so a content-sized box
+    // breathes every second and centred type jitters left and right. The spec
+    // has warned about `tnum` since §3.3; a timer is where it becomes real, and
+    // the node that needs it is nameable here.
+    let timers: BTreeSet<&str> = doc
+        .fields
+        .iter()
+        .filter(|f| f.ty == FieldType::Timer)
+        .map(|f| f.key.as_str())
+        .collect();
+    if !timers.is_empty() {
+        doc.root.walk(&mut |n| {
+            let Some(Content::Text { binding, font, .. }) = &n.content else {
+                return;
+            };
+            let uses_timer = crate::bind::referenced_fields(&binding.expr)
+                .iter()
+                .any(|k| timers.contains(k.as_str()));
+            if uses_timer && !font.features.iter().any(|f| f == "tnum") {
+                warnings.push(Warning {
+                    code: "timer_needs_tnum",
+                    detail: format!(
+                        "node {:?} shows a timer in a font that has not asked for tabular \
+                         figures — the digits will change width every tick and the text \
+                         will jitter",
+                        n.id
+                    ),
+                });
+            }
+        });
+    }
+
+    // A field type this reader does not know renders as the Item's stored value
+    // and marks the instance degraded — the same bargain unknown node kinds
+    // get, and the reason `FieldType::Other` exists at all (ADR 0022).
+    for f in &doc.fields {
+        if !f.ty.is_known() {
+            warnings.push(Warning {
+                code: "unknown_field_type",
+                detail: format!(
+                    "field {:?} has type {:?}, which this reader cannot evaluate — it will \
+                     render as whatever the Item stored",
+                    f.key, f.ty
+                ),
+            });
+        }
+    }
+
     // --- Masks (§3.6, format 1.3) -----------------------------------------
     //
     // A mask node's SHAPE is the mask; its paint is meaningless and carrying

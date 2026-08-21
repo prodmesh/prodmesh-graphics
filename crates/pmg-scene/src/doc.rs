@@ -146,7 +146,14 @@ pub struct Field {
     pub sample: Option<String>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+/// What kind of value an Item supplies for a field.
+///
+/// `Other` is the same escape hatch [`NodeKind`] has, and it is here for the
+/// same reason: without it, adding a variant was a hard PARSE failure — an
+/// older reader could not load the document at all, which is a worse failure
+/// than the format is designed for and would have been true of every future
+/// field type, not just the one that exposed it (format 1.4, ADR 0022).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum FieldType {
     Text,
@@ -156,6 +163,21 @@ pub enum FieldType {
     Video,
     Color,
     Enum,
+    /// A value that changes on its own, computed by the node from its own
+    /// clock (ADR 0022). The template says a timer goes here; the Item says
+    /// which one.
+    Timer,
+    #[serde(untagged)]
+    Other(String),
+}
+
+impl FieldType {
+    /// Can this reader do anything useful with it? Anything else renders as
+    /// the Item's stored value and marks the instance degraded, exactly as an
+    /// unknown node kind does (§3.4).
+    pub fn is_known(&self) -> bool {
+        !matches!(self, FieldType::Other(_))
+    }
 }
 
 /// A binding: a template string plus a chain of total transforms.

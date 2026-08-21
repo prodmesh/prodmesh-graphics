@@ -11,7 +11,7 @@ Decisions and reasoning: [ADR 0005](../decisions/0005-the-pmg-scene-format.md).
 | Compiled scene | `.pmgscene` |
 | Template (scene + manifest) | `.pmgtemplate` |
 | Export bundle (with assets) | `.pmgpkg` |
-| Current version | `1.3`, `min_reader: 1` — see §9.2 |
+| Current version | `1.4`, `min_reader: 1` — see §9.2 |
 
 ## 1. Encoding
 
@@ -304,7 +304,15 @@ promise that *is* guaranteed.
 ]
 ```
 
-Types: `text`, `number`, `bool`, `image`, `video`, `color`, `enum`.
+Types: `text`, `number`, `bool`, `image`, `video`, `color`, `enum`, `timer`
+(§5.4).
+
+**An unknown type is preserved, not rejected** (format 1.4). A reader that does
+not know a type keeps it byte-identically through a read/write cycle, renders
+the field as whatever the Item stored, and marks the instance `degraded` — the
+same bargain unknown node kinds get in §3.4. Before 1.4 there was no such
+escape and a new type was a hard PARSE failure; that is fixed once, here, for
+every type that comes after.
 
 `sample` is what Design previews with and what a golden image renders. An Item
 supplying data MUST satisfy `required` and MUST NOT exceed `max_len`; the server
@@ -350,6 +358,48 @@ A node whose `visible_if` is false is **removed from layout**, not merely hidden
 which is what collapses a two-line lower third to one line when there is no
 title. That behaviour cannot be expressed by interpolation, and it is why this
 field exists.
+
+### 5.4 Timers (format 1.4)
+
+A `timer` field's value is not text — it is a **declaration the node evaluates
+from its own clock**, every frame, as a pure function (ADR 0022):
+
+```jsonc
+// the template says a timer goes here
+{ "key": "starts_in", "type": "timer", "label": "Starts in" }
+
+// the Item says which one
+{ "starts_in": { "timer": { "kind": "countdown",
+                            "at": 1755691200000,       // UTC milliseconds
+                            "format": "m:ss" } } }
+```
+
+`kind` is `clock`, `countdown`, `countup`, or `elapsed` (since the take).
+`format` is an enumerated set — `hh:mm:ss`, `h:mm:ss`, `mm:ss`, `m:ss`,
+`hh:mm`, `h:mm`, `h:mm am/pm` — and **not** a format string, because a format
+string is a parser and a parser is a thing that fails at air time.
+
+Rules that follow from "pure function of the clock":
+
+- **The value never travels over the link.** The node computes it, so a
+  countdown keeps counting when the control server dies. It also means a
+  countdown is only as right as the node's clock; NTP is an install
+  requirement.
+- **A countdown floors at zero** and stays there. It does not go negative and
+  it does not blank — a graphic that vanishes at zero leaves the wall empty at
+  the moment everyone is looking at it.
+- **Minutes formats carry the hours.** Ninety minutes is `90:00`, not `30:00`.
+  Wrapping would be a lie that looks exactly like a working clock.
+- **Durations truncate.** `0:01` means one whole second is left.
+- **`clock` is the node's local time.** Timezone is not in the declaration;
+  countdown arithmetic is on instants and needs none.
+- **Tabular figures are not optional.** A text node showing a timer without
+  `tnum` in its font features is a compile WARNING (`timer_needs_tnum`), because
+  proportional digits change width every tick: a content-sized box breathes and
+  centred type shuffles sideways.
+
+The rendered string changes at most once per second, and the node re-solves only
+when it changes — the same rebind an `Update` performs, without the morph.
 
 ## 6. Timelines
 
@@ -476,7 +526,7 @@ compatibility mechanism here. You find out at 10am Saturday, not at 10:15 Sunday
 - **`major`** — anything a previous reader would misinterpret. `min_reader` is
   raised.
 
-Current version: **1.3**. 1.1 introduced `style.gradient` (a 1.0 reader
+Current version: **1.4**. 1.1 introduced `style.gradient` (a 1.0 reader
 ignores the field and renders the flat `fill` writers keep beside it). 1.2
 introduced theme tokens (ADR 0021): colours and `FontSpec` may carry a
 `token` naming the theme token their stored value was resolved from, and the
@@ -490,7 +540,12 @@ the compiler refuses to let a mask carry any paint — an unpainted box draws
 nothing, so an older reader shows the masked content unmasked rather than
 painting a rectangle across it. A minor bump, and `min_reader` stays 1:
 revealing too much is a degradation an old node survives, and the manifest says
-so at publish.
+so at publish. 1.4 added the `timer` field type (§5.4, ADR 0022) and — the part
+that outlives timers — the **unknown-type escape** `FieldType` should always
+have had: before it, a new field type was a hard parse failure and an older
+reader could not load the document at all. From 1.4 an unknown type is
+preserved and renders degraded. A 1.3 reader still refuses a timer template
+outright; that is the last time a field type does this.
 
 ### 9.3 Migration
 

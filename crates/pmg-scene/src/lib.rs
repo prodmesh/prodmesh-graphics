@@ -24,6 +24,7 @@ pub mod doc;
 pub mod fixture;
 pub mod migrate;
 pub mod theme;
+pub mod timer;
 pub mod validate;
 
 pub use doc::*;

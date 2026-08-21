@@ -426,3 +426,120 @@ fn nested_masks_are_refused_rather_than_silently_dropped() {
         "the refusal explains itself: {err}"
     );
 }
+
+// ---------------------------------------------------------------------------
+// Timers (format 1.4, ADR 0022)
+// ---------------------------------------------------------------------------
+
+/// A template with one timer field shown by one text node.
+fn timer_template(features: Vec<String>) -> SceneDoc {
+    let mut doc = SceneDoc::blank("01TESTTIMERDOCUMENT000001", "Countdown", 1920, 1080);
+    doc.fields = vec![Field {
+        key: "starts_in".into(),
+        ty: FieldType::Timer,
+        label: "Starts in".into(),
+        required: false,
+        max_len: None,
+        sample: Some("4:32".into()),
+    }];
+    doc.fonts = vec![FontRef {
+        family: "Test".into(),
+        weight: 400,
+        style: None,
+        asset: None,
+        system_fallback: false,
+    }];
+    doc.root.children = vec![Node {
+        id: "count".into(),
+        display_name: None,
+        kind: NodeKind::Text,
+        layout: Layout::default(),
+        transform: Transform2D::default(),
+        style: Style::default(),
+        clip: false,
+        visible_if: None,
+        content: Some(Content::Text {
+            binding: Binding {
+                expr: "${starts_in}".into(),
+                transform: vec![],
+            },
+            font: FontSpec {
+                family: "Test".into(),
+                weight: 400,
+                size: 96.0,
+                features,
+                tracking: 0.0,
+                line_height: 1.2,
+                token: None,
+            },
+            align: Align::Center,
+            max_lines: None,
+        }),
+        children: vec![],
+        unknown: Default::default(),
+    }];
+    doc
+}
+
+#[test]
+fn a_timer_without_tabular_figures_is_warned_about_by_name() {
+    let (_, manifest) = validate::compile(&timer_template(vec![])).expect("it still publishes");
+    let w = manifest
+        .warnings
+        .iter()
+        .find(|w| w.code == "timer_needs_tnum")
+        .expect("the jitter is called out");
+    assert!(
+        w.detail.contains("count"),
+        "the NODE is named: {}",
+        w.detail
+    );
+}
+
+#[test]
+fn asking_for_tabular_figures_silences_it() {
+    let (_, manifest) = validate::compile(&timer_template(vec!["tnum".into()])).expect("publishes");
+    assert!(
+        !manifest
+            .warnings
+            .iter()
+            .any(|w| w.code == "timer_needs_tnum"),
+        "{:?}",
+        manifest.warnings
+    );
+}
+
+/// The escape hatch, which is the half of ADR 0022 that outlives timers: an
+/// unknown field type must LOAD, not fail to parse.
+#[test]
+fn an_unknown_field_type_survives_a_read_write_cycle_and_warns() {
+    let json = r#"{
+      "format": "pmg.scene",
+      "format_version": { "major": 1, "minor": 9 },
+      "min_reader": 1,
+      "id": "01TESTFUTUREFIELDTYPE0001",
+      "name": "From the future",
+      "canvas": { "width": 1920, "height": 1080 },
+      "fields": [ { "key": "score", "type": "scoreboard_feed", "label": "Score" } ],
+      "root": { "id": "root", "kind": "box", "layout": {}, "transform": {}, "style": {} },
+      "timelines": []
+    }"#;
+    let doc: SceneDoc = serde_json::from_str(json).expect("a newer field type still PARSES");
+    assert_eq!(
+        doc.fields[0].ty,
+        FieldType::Other("scoreboard_feed".into()),
+        "and is preserved verbatim"
+    );
+    // Round-trips: an older designer can open, edit, and re-save without
+    // silently deleting what it does not understand.
+    let back: SceneDoc = serde_json::from_str(&serde_json::to_string(&doc).unwrap()).unwrap();
+    assert_eq!(back.fields[0].ty, doc.fields[0].ty);
+
+    let mut publishable = doc.clone();
+    publishable.format_version = FormatVersion { major: 1, minor: 4 };
+    let (_, manifest) = validate::compile(&publishable).expect("it publishes, degraded");
+    assert!(manifest
+        .warnings
+        .iter()
+        .any(|w| w.code == "unknown_field_type"));
+}

@@ -185,7 +185,7 @@ fn font_doc(name: &'static str, children: Vec<Node>) -> SceneDoc {
     d
 }
 
-fn spec(size: f32) -> FontSpec {
+fn spec_of(size: f32) -> FontSpec {
     FontSpec {
         family: FONT_FAMILY.into(),
         weight: 400,
@@ -1878,7 +1878,12 @@ pub fn all() -> Vec<Template> {
                                 ..px(400.0, 140.0)
                             },
                             style: fill([0.08, 0.10, 0.14, 1.0]),
-                            children: vec![text_node("line", "${line}", spec(34.0), Align::Start)],
+                            children: vec![text_node(
+                                "line",
+                                "${line}",
+                                spec_of(34.0),
+                                Align::Start,
+                            )],
                             ..node("plate", NodeKind::Box)
                         },
                     ],
@@ -2015,7 +2020,7 @@ pub fn all() -> Vec<Template> {
             vec![plate(vec![text_node(
                 "line",
                 "${line}",
-                spec(36.0),
+                spec_of(36.0),
                 Align::Start,
             )])],
         ),
@@ -2031,7 +2036,7 @@ pub fn all() -> Vec<Template> {
             vec![plate(vec![text_node(
                 "line",
                 "${line}",
-                spec(36.0),
+                spec_of(36.0),
                 Align::Center,
             )])],
         ),
@@ -2045,7 +2050,7 @@ pub fn all() -> Vec<Template> {
             vec![plate(vec![text_node(
                 "line",
                 "${line}",
-                spec(36.0),
+                spec_of(36.0),
                 Align::End,
             )])],
         ),
@@ -2060,7 +2065,7 @@ pub fn all() -> Vec<Template> {
             vec![plate(vec![text_node(
                 "line",
                 "${line}",
-                spec(28.0),
+                spec_of(28.0),
                 Align::Start,
             )])],
         ),
@@ -2074,7 +2079,7 @@ pub fn all() -> Vec<Template> {
             vec![plate(vec![text_node(
                 "line",
                 "${line}",
-                spec(30.0),
+                spec_of(30.0),
                 Align::Center,
             )])],
         ),
@@ -2088,7 +2093,7 @@ pub fn all() -> Vec<Template> {
             vec![plate(vec![text_node(
                 "line",
                 "${line}",
-                spec(72.0),
+                spec_of(72.0),
                 Align::Center,
             )])],
         ),
@@ -2102,7 +2107,7 @@ pub fn all() -> Vec<Template> {
             vec![plate(vec![text_node(
                 "line",
                 "${line}",
-                spec(14.0),
+                spec_of(14.0),
                 Align::Start,
             )])],
         ),
@@ -2118,7 +2123,7 @@ pub fn all() -> Vec<Template> {
                 "${line}",
                 FontSpec {
                     tracking: 6.0,
-                    ..spec(30.0)
+                    ..spec_of(30.0)
                 },
                 Align::Center,
             )])],
@@ -2135,7 +2140,7 @@ pub fn all() -> Vec<Template> {
                 "${line}",
                 FontSpec {
                     line_height: 0.95,
-                    ..spec(30.0)
+                    ..spec_of(30.0)
                 },
                 Align::Start,
             )])],
@@ -2153,7 +2158,12 @@ pub fn all() -> Vec<Template> {
                     translate: [0.3333, 0.0],
                     ..Default::default()
                 },
-                ..plate(vec![text_node("line", "${line}", spec(36.0), Align::Start)])
+                ..plate(vec![text_node(
+                    "line",
+                    "${line}",
+                    spec_of(36.0),
+                    Align::Start,
+                )])
             }],
         ),
     ));
@@ -2171,7 +2181,7 @@ pub fn all() -> Vec<Template> {
                     }),
                     ..fill(WHITE)
                 },
-                ..text_node("line", "${line}", spec(56.0), Align::Center)
+                ..text_node("line", "${line}", spec_of(56.0), Align::Center)
             }])],
         ),
     ));
@@ -2191,7 +2201,7 @@ pub fn all() -> Vec<Template> {
                     }),
                     ..fill(WHITE)
                 },
-                ..text_node("line", "${line}", spec(56.0), Align::Center)
+                ..text_node("line", "${line}", spec_of(56.0), Align::Center)
             }])],
         ),
     ));
@@ -2215,7 +2225,7 @@ pub fn all() -> Vec<Template> {
                     }),
                     ..fill(WHITE)
                 },
-                ..text_node("line", "${line}", spec(64.0), Align::Center)
+                ..text_node("line", "${line}", spec_of(64.0), Align::Center)
             }])],
         ),
     ));
@@ -2235,7 +2245,7 @@ pub fn all() -> Vec<Template> {
                     }),
                     ..fill(WHITE)
                 },
-                ..text_node("line", "${line}", spec(48.0), Align::Center)
+                ..text_node("line", "${line}", spec_of(48.0), Align::Center)
             }])],
         ),
     ));
@@ -2258,7 +2268,7 @@ pub fn all() -> Vec<Template> {
                     },
                     ..px(400.0, 140.0)
                 },
-                children: vec![text_node("line", "${line}", spec(34.0), Align::Center)],
+                children: vec![text_node("line", "${line}", spec_of(34.0), Align::Center)],
                 ..Node {
                     style: grad(90.0, &[(TEAL, 0.0), (BLUE, 1.0)]),
                     ..at("plate", 56.0, 74.0, 400.0, 140.0, Style::default())
@@ -2290,7 +2300,7 @@ pub fn all() -> Vec<Template> {
                         width: Dimension::Px(600.0),
                         ..Default::default()
                     },
-                    ..text_node("line", "${line}", spec(30.0), Align::Start)
+                    ..text_node("line", "${line}", spec_of(30.0), Align::Start)
                 }],
                 ..at(
                     "band",
@@ -2334,7 +2344,7 @@ pub fn all() -> Vec<Template> {
                     radius: 8.0,
                     ..fill(TEAL)
                 },
-                children: vec![text_node("line", "${line}", spec(34.0), Align::Start)],
+                children: vec![text_node("line", "${line}", spec_of(34.0), Align::Start)],
                 ..node("band", NodeKind::Box)
             }],
         ),
@@ -2352,7 +2362,7 @@ pub fn all() -> Vec<Template> {
                         expr: "${line}".into(),
                         transform: vec![],
                     },
-                    font: spec(24.0),
+                    font: spec_of(24.0),
                     align: Align::Start,
                     max_lines: Some(2),
                 }),
@@ -2361,6 +2371,57 @@ pub fn all() -> Vec<Template> {
             }])],
         ),
     ));
+    // --- Timers (format 1.4, ADR 0022) -------------------------------------
+    //
+    // A timer is a pure function of the clock, so a corpus figure pins the
+    // clock and the formatter runs for real — the digits on screen come from
+    // `pmg_scene::timer::format_at`, not from a hand-typed sample.
+    let timer_doc = |name: &'static str, left_ms: i64| {
+        // A pinned instant, `left_ms` before the target. The digits on screen
+        // come from the real formatter, not from a hand-typed sample.
+        const TARGET: i64 = 1_755_691_200_000;
+        let spec = pmg_scene::timer::TimerSpec::countdown_to(TARGET);
+        let shown = pmg_scene::timer::format_at(&spec, TARGET - left_ms, 0, 0);
+        let mut d = font_doc(
+            name,
+            vec![plate(vec![text_node(
+                "count",
+                "${starts_in}",
+                FontSpec {
+                    // Tabular figures, always, for a number that changes on its
+                    // own — the whole point of the compiler's warning.
+                    features: vec!["tnum".into()],
+                    ..spec_of(96.0)
+                },
+                Align::Center,
+            )])],
+        );
+        d.fields = vec![Field {
+            key: "starts_in".into(),
+            ty: FieldType::Timer,
+            label: "Starts in".into(),
+            required: false,
+            max_len: None,
+            sample: Some(shown),
+        }];
+        d
+    };
+    v.push(t(
+        "timer-wide-digits",
+        "a countdown reading 4:11, rendered through the real formatter at a \
+         pinned instant — a timer is a pure function of the clock, so it can be \
+         in a corpus at all (ADR 0022)",
+        timer_doc("timer-wide-digits", 251_000),
+    ));
+    v.push(t(
+        "timer-narrow-digits",
+        "the same countdown reading 1:11. It pairs with 4:11 above on purpose: \
+         every glyph after the first is IDENTICAL between them, so any movement \
+         is the leading digit's advance and nothing else — which is exactly the \
+         sideways shuffle a non-tabular clock does every tick",
+        timer_doc("timer-narrow-digits", 71_000),
+    ));
+
     v.push(t(
         "text-coloured",
         "cream type rather than white — the fill IS the ink for a text node",
@@ -2371,7 +2432,7 @@ pub fn all() -> Vec<Template> {
                 style: fill(TEAL),
                 ..plate(vec![Node {
                     style: fill(CREAM),
-                    ..text_node("line", "${line}", spec(40.0), Align::Center)
+                    ..text_node("line", "${line}", spec_of(40.0), Align::Center)
                 }])
             }],
         ),
@@ -2390,7 +2451,7 @@ pub fn all() -> Vec<Template> {
                 ..plate(vec![text_node(
                     "line",
                     "${line}",
-                    spec(40.0),
+                    spec_of(40.0),
                     Align::Center,
                 )])
             }],
@@ -2411,7 +2472,7 @@ pub fn all() -> Vec<Template> {
                 ..plate(vec![text_node(
                     "line",
                     "${line}",
-                    spec(32.0),
+                    spec_of(32.0),
                     Align::Center,
                 )])
             }],
@@ -2759,6 +2820,70 @@ mod tests {
             "the child sits at the parent's animated value, not at 1.0: {}",
             ops[child]
         );
+    }
+
+    /// Tabular figures, measured rather than asserted.
+    ///
+    /// A countdown reading 4:32 and the same countdown reading 1:11 have the
+    /// same digit count, so with `tnum` they must occupy the SAME width. A
+    /// clock whose ink shuffles sideways every tick is the defect the
+    /// compiler's `timer_needs_tnum` warning exists to prevent, and this is the
+    /// measurement behind the warning.
+    ///
+    /// Needs a face, so it runs only where one is to hand — the same rule the
+    /// rest of the text corpus lives by.
+    #[test]
+    fn a_tabular_countdown_keeps_its_width_as_the_digits_change() {
+        let Some(font) = test_font() else {
+            eprintln!("SKIP: no system font to shape with");
+            return;
+        };
+        // 4:11 against 1:11: every glyph after the first is the SAME glyph, so
+        // its position measures the leading digit's ADVANCE and nothing else.
+        //
+        // Comparing ink extents instead measures the shape of a 1 against the
+        // shape of a 4, which differ in a tabular face BY DESIGN — the advances
+        // are equal, the paint inside them is not, and an earlier draft of this
+        // test failed for exactly that reason.
+        let pen = |name: &str| -> Vec<f32> {
+            let t = by_name(name).unwrap();
+            let a = arm(&t, Some(&font)).unwrap();
+            let n = a
+                .inst
+                .nodes
+                .iter()
+                .find(|n| n.id == "count")
+                .expect("the timer node");
+            let crate::RenderContent::Text(ink) = &n.content else {
+                panic!("{name} is not text")
+            };
+            ink.fill.iter().map(|g| g.x).collect()
+        };
+        let wide = pen("timer-wide-digits");
+        let narrow = pen("timer-narrow-digits");
+        assert_eq!(wide.len(), 4, "4:11 is four glyphs");
+        assert_eq!(narrow.len(), 4, "1:11 is four glyphs");
+        // Every glyph after the first sits at the same pen position in both
+        // strings. If it does not, the clock shuffles sideways every tick.
+        for i in 1..4 {
+            assert!(
+                (wide[i] - narrow[i]).abs() < 1.0,
+                "glyph {i} moved {:.2} px between 4:11 and 1:11 — these digits are not tabular",
+                wide[i] - narrow[i]
+            );
+        }
+    }
+
+    /// A face from the system, for the tests that need shaping. The corpus
+    /// itself never loads one — `arm` takes bytes — but a test may look.
+    fn test_font() -> Option<Vec<u8>> {
+        [
+            "/System/Library/Fonts/Supplemental/Arial.ttf",
+            "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+            "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf",
+        ]
+        .iter()
+        .find_map(|p| std::fs::read(p).ok())
     }
 
     #[test]

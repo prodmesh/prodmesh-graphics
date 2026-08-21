@@ -16,7 +16,7 @@ use crate::doc::{FormatVersion, SceneDoc};
 use crate::SceneError;
 
 /// The version this writer emits.
-pub const CURRENT: FormatVersion = FormatVersion { major: 1, minor: 3 };
+pub const CURRENT: FormatVersion = FormatVersion { major: 1, minor: 4 };
 
 /// Walk `doc` forward to [`CURRENT`], returning the names of the steps taken
 /// — empty when it was already current.
@@ -43,6 +43,10 @@ pub fn migrate(doc: &mut SceneDoc) -> Result<Vec<&'static str>, SceneError> {
     if doc.format_version.minor == 2 {
         v1_2_to_v1_3(doc);
         applied.push("1.2-to-1.3");
+    }
+    if doc.format_version.minor == 3 {
+        v1_3_to_v1_4(doc);
+        applied.push("1.3-to-1.4");
     }
     Ok(applied)
 }
@@ -75,4 +79,16 @@ pub fn v1_1_to_v1_2(doc: &mut SceneDoc) {
 /// graphic instead of quietly revealing too much.
 pub fn v1_2_to_v1_3(doc: &mut SceneDoc) {
     doc.format_version = FormatVersion { major: 1, minor: 3 };
+}
+
+/// 1.3 → 1.4: timers (ADR 0022) — the `timer` field type, and the `Other`
+/// escape hatch that `FieldType` should have had all along.
+///
+/// A stamp, like the three before it: a 1.3 document simply has no timer
+/// fields. The step that is NOT free is the other direction — a 1.3 reader
+/// cannot parse a document containing `"type": "timer"` and refuses the
+/// template at assignment. That is the last time a field type does this, which
+/// is the whole point of adding the escape now.
+pub fn v1_3_to_v1_4(doc: &mut SceneDoc) {
+    doc.format_version = FormatVersion { major: 1, minor: 4 };
 }
