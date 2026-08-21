@@ -64,6 +64,9 @@ pub enum SceneError {
 
     #[error("token {token:?} is not defined by theme {theme:?} — a dangling token is a typo worth catching while someone is looking")]
     UnknownToken { token: String, theme: String },
+
+    #[error("mask node {node:?} {why}")]
+    BadMask { node: String, why: String },
 }
 
 /// Can this reader open the document?

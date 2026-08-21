@@ -43,9 +43,24 @@ struct NodeUniform {
     /// x, y: unit gradient direction (y-down). z: stop count — 0 means no
     /// gradient, and the fill path is bit-for-bit what it was without one.
     grad_dir: [f32; 4],
+    /// The mask's world affine, INVERTED: a 2x2 that takes a world point back
+    /// into the mask's own design space (format 1.3).
+    mask_inv: [f32; 4],
+    /// x: corner radius. y: mode — 0 no mask (coverage exactly 1.0, so an
+    /// unmasked node is bit-for-bit what it was before masks existed), 1 a
+    /// mask, 2 a degenerate mask that hides everything. z: the mask's own
+    /// opacity, so a mask can be faded in. w: unused.
+    mask_meta: [f32; 4],
+    /// The mask's world translation, subtracted before `mask_inv` is applied.
+    mask_t: [f32; 2],
+    /// Centre of the mask's rect, in the mask's own design space.
+    mask_center: [f32; 2],
+    /// Half extent of the mask's rect.
+    mask_half: [f32; 2],
+    _mask_pad: [f32; 2],
 }
 
-const UNIFORM_SIZE: u64 = 240;
+const UNIFORM_SIZE: u64 = 304;
 const _: () = assert!(std::mem::size_of::<NodeUniform>() as u64 == UNIFORM_SIZE);
 
 fn uniform_bytes(u: &NodeUniform) -> [u8; UNIFORM_SIZE as usize] {
@@ -111,11 +126,95 @@ fn uniform_bytes(u: &NodeUniform) -> [u8; UNIFORM_SIZE as usize] {
         u.grad_dir[1],
         u.grad_dir[2],
         u.grad_dir[3],
+        u.mask_inv[0],
+        u.mask_inv[1],
+        u.mask_inv[2],
+        u.mask_inv[3],
+        u.mask_meta[0],
+        u.mask_meta[1],
+        u.mask_meta[2],
+        u.mask_meta[3],
+        u.mask_t[0],
+        u.mask_t[1],
+        u.mask_center[0],
+        u.mask_center[1],
+        u.mask_half[0],
+        u.mask_half[1],
+        u._mask_pad[0],
+        u._mask_pad[1],
     ];
     for (i, v) in f.iter().enumerate() {
         buf[i * 4..i * 4 + 4].copy_from_slice(&v.to_le_bytes());
     }
     buf
+}
+
+/// The mask fields for one node: everything the fragment shader needs to take a
+/// world point back into the mask's own space and ask the same rounded-box SDF
+/// the mask node would have been drawn with.
+///
+/// Resolved per FRAME rather than at arm, because the mask is usually the thing
+/// being animated — a wipe reveal is a mask sliding across, and its world
+/// transform is only known once this frame's tracks have been evaluated.
+struct MaskUniform {
+    inv: [f32; 4],
+    meta: [f32; 4],
+    t: [f32; 2],
+    center: [f32; 2],
+    half: [f32; 2],
+}
+
+/// The "no mask" encoding: mode 0, and the shader returns coverage exactly 1.0
+/// before touching any of the rest. An unmasked node therefore renders
+/// bit-for-bit as it did before masks existed — checked by the corpus, not
+/// hoped for.
+const NO_MASK: MaskUniform = MaskUniform {
+    inv: [1.0, 0.0, 0.0, 1.0],
+    meta: [0.0; 4],
+    t: [0.0, 0.0],
+    center: [0.0, 0.0],
+    half: [0.0, 0.0],
+};
+
+fn mask_uniform(
+    inst: &crate::SceneInstance,
+    frame: &[crate::FrameNode],
+    world: &[([f32; 4], [f32; 2])],
+    idx: usize,
+) -> MaskUniform {
+    let Some(m) = inst.nodes.get(idx) else {
+        return NO_MASK;
+    };
+    let f = frame.get(idx);
+    let rect = f.and_then(|f| f.rect).unwrap_or(m.rect);
+    let (wm, wt) = world[idx];
+
+    // Invert the 2x2. A mask scaled to zero on either axis has no area, and
+    // the honest answer is that it reveals NOTHING — a wipe animating from
+    // scale 0 must start hidden, not start fully visible because a matrix
+    // could not be inverted.
+    let det = wm[0] * wm[3] - wm[1] * wm[2];
+    if det.abs() < 1e-9 {
+        return MaskUniform {
+            meta: [0.0, 2.0, 1.0, 0.0],
+            ..NO_MASK
+        };
+    }
+    let inv = [wm[3] / det, -wm[1] / det, -wm[2] / det, wm[0] / det];
+
+    let half = [rect.w * 0.5, rect.h * 0.5];
+    MaskUniform {
+        inv,
+        meta: [
+            m.radius.min(half[0].abs()).min(half[1].abs()),
+            1.0,
+            f.map(|f| f.opacity).unwrap_or(m.opacity),
+            0.0,
+        ],
+        t: wt,
+        center: [rect.x + half[0], rect.y + half[1]],
+        half,
+    }
 }
 
 /// Stop colours for the uniform, unused slots repeating the last stop so the
@@ -827,6 +926,11 @@ impl SceneRenderer {
                 }
             };
 
+            let mask = match n.mask {
+                Some(mi) => mask_uniform(inst, frame, &world, mi),
+                None => NO_MASK,
+            };
+
             let u = NodeUniform {
                 rect: [rect.x, rect.y, rect.w, rect.h],
                 color,
@@ -868,6 +972,12 @@ impl SceneRenderer {
                 grad: gradient_stops(n.gradient.as_ref()),
                 grad_at: gradient_offsets(n.gradient.as_ref()),
                 grad_dir: gradient_dir(n.gradient.as_ref()),
+                mask_inv: mask.inv,
+                mask_meta: mask.meta,
+                mask_t: mask.t,
+                mask_center: mask.center,
+                mask_half: mask.half,
+                _mask_pad: [0.0, 0.0],
             };
             let off = (stride as usize) * i;
             ubytes[off..off + UNIFORM_SIZE as usize].copy_from_slice(&uniform_bytes(&u));
@@ -1033,6 +1143,10 @@ impl SceneRenderer {
                 }
 
                 match &n.content {
+                    // A mask is a shape, not ink. It contributed its geometry
+                    // to every node that carries its index; there is nothing
+                    // to paint here.
+                    RenderContent::Mask => {}
                     RenderContent::Unknown => {
                         pass.set_pipeline(&self.pipeline_unknown);
                         pass.set_bind_group(0, &bind, &[offset]);

@@ -29,7 +29,7 @@
  */
 
 import { useMemo, useRef, useState } from 'react'
-import { Clapperboard, Image as ImageIcon, Layers, Shapes, Square, Type } from 'lucide-react'
+import { Clapperboard, Image as ImageIcon, Layers, Scissors, Shapes, Square, Type } from 'lucide-react'
 import type { DesignSession } from './useDesign'
 
 type DocNode = {
@@ -65,6 +65,9 @@ const KIND_ICON: Record<string, typeof Square> = {
   video: Clapperboard,
   shape: Shapes,
   group: Layers,
+  // A mask is a shape that cuts, and the scissors say so at a glance — a row
+  // with a box icon and no colour reads as a layer someone forgot to fill.
+  mask: Scissors,
 }
 
 /** Kinds that can contain other layers. */

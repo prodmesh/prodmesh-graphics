@@ -257,17 +257,17 @@ templates plus the 3 primitives, native and browser bit-identical across all 92;
 drops below 50 or a text figure was skipped.
 
 **Still open in this milestone**, and deliberately named rather than quietly
-dropped:
+dropped — one of three, the other two closed on 2026-08-20:
 
 - **Template variants.** "Variants and themes" shipped its themes half (ADR
   0021, format 1.2, the manager and the apply sweep). Variants — a template
   family with field compatibility enforced at publish — are not started.
-- **Masks.** `kind: "mask"` is in the format and nothing renders it. What
-  shipped is `clip`, overflow-hide to a node's own bounds, which is the mask a
-  pop-out reveal needs and not an arbitrary alpha or luma mask.
-- **Curve editing.** The format carries arbitrary cubic Béziers and `pmg-anim`
-  evaluates them; the editor offers four named presets and shows anything else
-  as "Custom". A designer cannot draw a curve.
+- ~~**Masks.**~~ **Done 2026-08-20** (format 1.3, §3.5) — a mask node masks its
+  siblings through a rounded-box shape with its own transform, which is what a
+  wipe reveal is. Still deliberately out: an inverted mask, a feathered edge,
+  and masking by an arbitrary alpha (a glyph shape, an image's luma).
+- ~~**Curve editing.**~~ **Done 2026-08-20** — two draggable control points in
+  CSS's convention, overshoot allowed.
 
 ---
 

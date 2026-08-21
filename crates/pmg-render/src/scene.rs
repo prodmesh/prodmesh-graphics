@@ -84,6 +84,15 @@ pub enum RenderContent {
     /// **Rendering nothing and looking fine is the dangerous behaviour**
     /// (`docs/specs/scene-format.md` §3.4).
     Unknown,
+    /// A mask (format 1.3). Draws NOTHING itself — its rect, radius, and
+    /// per-frame transform are what its siblings are masked to.
+    ///
+    /// It stays in [`SceneInstance::nodes`] rather than being resolved away at
+    /// arm because a mask is usually the thing being ANIMATED: a wipe reveal is
+    /// a mask sliding across, which means its world transform has to be
+    /// recomputed every frame from the same track evaluation every other node
+    /// gets.
+    Mask,
 }
 
 /// One drawable node, flattened out of the tree in paint order.
@@ -113,6 +122,10 @@ pub struct RenderNode {
     pub radius: f32,
     pub opacity: f32,
     pub clip: bool,
+    /// Index into [`SceneInstance::nodes`] of the mask this node is drawn
+    /// through, if any — inherited from the nearest ancestor that has a mask
+    /// child (format 1.3).
+    pub mask: Option<usize>,
     pub content: RenderContent,
 }
 
@@ -329,6 +342,7 @@ impl SceneInstance {
         flatten(
             &doc.root,
             None,
+            None,
             solved,
             glyphs,
             images,
@@ -344,6 +358,7 @@ impl SceneInstance {
 fn flatten(
     node: &Node,
     parent: Option<usize>,
+    mask: Option<usize>,
     solved: &Solved,
     glyphs: &mut dyn GlyphSource,
     images: &mut dyn ImageSource,
@@ -442,6 +457,7 @@ fn flatten(
                 }
             }
         }
+        (true, _) if node.kind == pmg_scene::doc::NodeKind::Mask => RenderContent::Mask,
         _ => RenderContent::Box,
     };
 
@@ -458,11 +474,47 @@ fn flatten(
         radius: node.style.radius,
         opacity: node.style.opacity,
         clip: node.clip,
+        mask,
         content,
     });
 
+    // A mask child masks its SIBLINGS, so it has to exist in `nodes` before
+    // they do — its index is what they carry. It is emitted first for that
+    // reason alone; it draws nothing, so paint order is unaffected.
+    //
+    // The compiler refuses a mask inside an already-masked subtree
+    // (`validate`), so `child_mask` either introduces the only mask in play or
+    // passes the inherited one down untouched.
+    let child_mask = match node
+        .children
+        .iter()
+        .find(|c| c.kind == pmg_scene::doc::NodeKind::Mask)
+    {
+        Some(m) => {
+            let at = inst.nodes.len();
+            flatten(m, Some(me), None, solved, glyphs, images, inst, pending);
+            // `solved` omits a node `visible_if` removed, and flatten pushes
+            // nothing for it. A mask that was conditioned away masks nothing,
+            // rather than masking everything to an empty rect.
+            (inst.nodes.len() > at).then_some(at)
+        }
+        None => mask,
+    };
+
     for c in &node.children {
-        flatten(c, Some(me), solved, glyphs, images, inst, pending);
+        if c.kind == pmg_scene::doc::NodeKind::Mask {
+            continue;
+        }
+        flatten(
+            c,
+            Some(me),
+            child_mask,
+            solved,
+            glyphs,
+            images,
+            inst,
+            pending,
+        );
     }
 }
 
@@ -763,6 +815,7 @@ mod tests {
                 radius: 0.0,
                 opacity: 1.0,
                 clip: false,
+                mask: None,
                 content: RenderContent::Box,
             }],
             ..Default::default()
@@ -802,6 +855,7 @@ mod tests {
                 radius: 0.0,
                 opacity: 1.0,
                 clip: false,
+                mask: None,
                 content: RenderContent::Box,
             }],
             ..Default::default()

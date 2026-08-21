@@ -291,3 +291,138 @@ fn a_blank_document_compiles_and_declares_nothing() {
     assert!(manifest.timelines.is_empty());
     assert!(manifest.warnings.is_empty(), "{:?}", manifest.warnings);
 }
+
+// ---------------------------------------------------------------------------
+// Masks (format 1.3, §3.6)
+//
+// The rules here exist to keep ONE fallback true: a reader older than 1.3 draws
+// a mask node as an ordinary box, and an unpainted box draws nothing — so the
+// old reader shows the masked content unmasked. That degradation is acceptable.
+// Paint on the same node is not: it becomes a rectangle across the graphic.
+// ---------------------------------------------------------------------------
+
+fn with_mask(mut f: impl FnMut(&mut Node)) -> SceneDoc {
+    let mut doc = SceneDoc::blank("01TESTMASKDOCUMENT0000001", "Masked", 1920, 1080);
+    let mut mask = Node {
+        id: "wipe".into(),
+        display_name: Some("Wipe".into()),
+        kind: NodeKind::Mask,
+        layout: Layout {
+            width: Dimension::Px(400.0),
+            height: Dimension::Px(120.0),
+            ..Default::default()
+        },
+        transform: Transform2D::default(),
+        style: Style::default(),
+        clip: false,
+        visible_if: None,
+        content: None,
+        children: vec![],
+        unknown: Default::default(),
+    };
+    f(&mut mask);
+    doc.root.children = vec![
+        mask,
+        Node {
+            id: "band".into(),
+            display_name: None,
+            kind: NodeKind::Box,
+            layout: Layout {
+                width: Dimension::Px(600.0),
+                height: Dimension::Px(160.0),
+                ..Default::default()
+            },
+            transform: Transform2D::default(),
+            style: Style {
+                fill: Some(Rgba::flat([1.0, 0.0, 0.0, 1.0])),
+                ..Default::default()
+            },
+            clip: false,
+            visible_if: None,
+            content: None,
+            children: vec![],
+            unknown: Default::default(),
+        },
+    ];
+    doc
+}
+
+#[test]
+fn a_mask_publishes_and_says_older_readers_will_ignore_it() {
+    let doc = with_mask(|_| {});
+    let (_, manifest) = validate::compile(&doc).expect("a plain mask publishes");
+    assert!(
+        manifest.warnings.iter().any(|w| w.code == "mask_needs_1_3"),
+        "publishing a mask says what an older reader does with it: {:?}",
+        manifest.warnings
+    );
+}
+
+#[test]
+fn a_mask_carrying_paint_is_refused() {
+    // Each of these would be DRAWN by a 1.2 reader.
+    for paint in [
+        &mut (|n: &mut Node| n.style.fill = Some(Rgba::flat([1.0; 4])))
+            as &mut dyn FnMut(&mut Node),
+        &mut |n: &mut Node| {
+            n.style.stroke = Some(Stroke {
+                color: Rgba::flat([1.0; 4]),
+                width: 2.0,
+            })
+        },
+        &mut |n: &mut Node| {
+            n.style.shadow = Some(Shadow {
+                color: Rgba::flat([0.0, 0.0, 0.0, 1.0]),
+                dx: 1.0,
+                dy: 1.0,
+                blur: 2.0,
+            })
+        },
+        &mut |n: &mut Node| {
+            n.style.gradient = Some(Gradient {
+                angle_deg: 90.0,
+                stops: vec![
+                    GradientStop {
+                        color: Rgba::flat([1.0; 4]),
+                        at: 0.0,
+                    },
+                    GradientStop {
+                        color: Rgba::flat([0.0, 0.0, 0.0, 1.0]),
+                        at: 1.0,
+                    },
+                ],
+            })
+        },
+    ] {
+        let doc = with_mask(paint);
+        assert!(
+            validate::compile(&doc).is_err(),
+            "a painted mask must not publish"
+        );
+    }
+}
+
+#[test]
+fn nested_masks_are_refused_rather_than_silently_dropped() {
+    let mut doc = with_mask(|_| {});
+    // A mask inside the masked subtree: the inner one would replace the outer,
+    // and losing a mask reveals MORE than intended.
+    doc.root.children[1].children.push(Node {
+        id: "inner-wipe".into(),
+        display_name: None,
+        kind: NodeKind::Mask,
+        layout: Layout::default(),
+        transform: Transform2D::default(),
+        style: Style::default(),
+        clip: false,
+        visible_if: None,
+        content: None,
+        children: vec![],
+        unknown: Default::default(),
+    });
+    let err = validate::compile(&doc).expect_err("nested masks are refused");
+    assert!(
+        format!("{err}").contains("one mask at a time"),
+        "the refusal explains itself: {err}"
+    );
+}

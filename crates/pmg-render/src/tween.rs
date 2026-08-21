@@ -183,6 +183,7 @@ mod tests {
             radius: 0.0,
             opacity: 1.0,
             clip: false,
+            mask: None,
             content,
         }
     }

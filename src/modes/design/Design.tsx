@@ -32,7 +32,7 @@
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { AlertTriangle, Clapperboard, FileUp, FolderOpen, Image as ImageIcon, Plus, Redo2, Trash2, Type, Undo2, Upload } from 'lucide-react'
+import { AlertTriangle, Clapperboard, FileUp, FolderOpen, Image as ImageIcon, Plus, Redo2, Scissors, Trash2, Type, Undo2, Upload } from 'lucide-react'
 import { useQuery, invalidate } from '../../lib/useQuery'
 import { keys } from '../../lib/keys'
 import { ApiError, get, post } from '../../lib/api'
@@ -515,6 +515,16 @@ function SelectedNode({
         <>
           <KeyValueRow label="Position" value={`${Math.round(bbox[0])}, ${Math.round(bbox[1])}`} tone="plain" />
 
+          {facts.kind === 'mask' ? (
+            // A mask draws nothing, so selecting one and finding no colours is
+            // exactly right and needs saying once, here.
+            <p className="design-console__dim">
+              A mask reveals what falls inside its shape and hides the rest — everything
+              beside it in its container. It has no colour of its own: size it, round it,
+              and animate its position for a wipe.
+            </p>
+          ) : null}
+
           {/* The pin. Its own explicit control, because it changes what a
               drag DOES: pinned moves freely, in-flow moves shift neighbours. */}
           <FormGroup label="Placement">
@@ -745,6 +755,12 @@ function SelectedNode({
                 >
                   <option value="px">Fixed</option>
                   <option value="content">Fit contents</option>
+                  {facts.width_mode === 'percent' ? (
+                    // Shown only when the node IS a percent — a mask arrives
+                    // at 100% of its parent. Choosing anything else leaves
+                    // percent behind, which is why it is not offered outright.
+                    <option value="percent">Percent of parent</option>
+                  ) : null}
                 </select>
               </div>
             </FormGroup>
@@ -775,6 +791,12 @@ function SelectedNode({
                 >
                   <option value="px">Fixed</option>
                   <option value="content">Fit contents</option>
+                  {facts.width_mode === 'percent' ? (
+                    // Shown only when the node IS a percent — a mask arrives
+                    // at 100% of its parent. Choosing anything else leaves
+                    // percent behind, which is why it is not offered outright.
+                    <option value="percent">Percent of parent</option>
+                  ) : null}
                 </select>
               </div>
             </FormGroup>
@@ -820,7 +842,7 @@ function SelectedNode({
             </FormGroup>
           ) : null}
 
-          {facts.text ? (
+          {facts.kind === 'mask' ? null : facts.text ? (
             // The fill IS the text colour — not an option, the ink itself.
             facts.fill ? (
               <>
@@ -1100,7 +1122,9 @@ function SelectedNode({
                   ? 'Delete this text'
                   : facts.kind === 'image'
                     ? 'Delete this image'
-                    : 'Delete this box — and everything inside it'}
+                    : facts.kind === 'mask'
+                      ? 'Delete this mask — its container stops being masked'
+                      : 'Delete this box — and everything inside it'}
               </Button>
               <p className="design-console__dim">Also on the keyboard: Delete, with the canvas focused.</p>
             </>
@@ -1857,7 +1881,7 @@ export function Design() {
   /** Add a node — into the selection when there is one, else the canvas root —
    *  and select what was just made, so the next act is styling it. */
   const addNode = useCallback(
-    (what: 'box' | 'text' | 'image' | 'video') => {
+    (what: 'box' | 'text' | 'image' | 'video' | 'mask') => {
       const s = session.current
       if (!s) return
       try {
@@ -1866,9 +1890,11 @@ export function Design() {
             ? s.addBox(selNode ?? undefined)
             : what === 'text'
               ? s.addText(selNode ?? undefined)
-              : what === 'video'
-                ? s.addVideo(selNode ?? undefined)
-                : s.addImage(selNode ?? undefined, imageAssets[0]!.hash)
+              : what === 'mask'
+                ? s.addMask(selNode ?? undefined)
+                : what === 'video'
+                  ? s.addVideo(selNode ?? undefined)
+                  : s.addImage(selNode ?? undefined, imageAssets[0]!.hash)
         const r = JSON.parse(raw) as { id: string; doc: Record<string, unknown> }
         edit(r.doc)
         setSelNode(r.id)
@@ -2045,6 +2071,14 @@ export function Design() {
           </Button>
           <Button variant="secondary" disabled={status !== 'ready'} onClick={() => addNode('video')}>
             <Clapperboard size={14} aria-hidden /> Add a video
+          </Button>
+          <Button
+            variant="secondary"
+            disabled={status !== 'ready'}
+            title="A mask reveals what is inside its shape — animate it for a wipe"
+            onClick={() => addNode('mask')}
+          >
+            <Scissors size={14} aria-hidden /> Add a mask
           </Button>
           <Button variant="secondary" onClick={() => setMediaOpen(true)}>
             <FolderOpen size={14} aria-hidden /> Media Browser

@@ -167,6 +167,43 @@
 .tl__keybar > .c-formgroup { width: 110px; }
 .tl__keybar > .c-formgroup:last-of-type { width: 170px; }
 
+/* ---- The easing curve editor ----------------------------------------------
+   Two draggable control points over the unit square, CSS's convention exactly.
+   The box is drawn INSET in its own viewBox so a handle dragged to an
+   overshoot (y past 1, or below 0) still has room to be seen — clipping the
+   overshoot off the top would hide the only reason to hand-draw a curve. */
+
+.curve { display: flex; align-items: center; gap: 10px; }
+.curve__svg {
+  width: 132px;
+  height: 132px;
+  flex-shrink: 0;
+  background: var(--pm-bg-canvas);
+  border-radius: var(--pm-radius-4);
+  box-shadow: var(--pm-hairline);
+  touch-action: none;
+}
+.curve__box { fill: none; stroke: var(--pm-ink-700); stroke-width: 1; vector-effect: non-scaling-stroke; }
+.curve__diag { stroke: var(--pm-ink-700); stroke-width: 1; stroke-dasharray: 3 3; vector-effect: non-scaling-stroke; }
+.curve__arm { stroke: var(--pm-ink-500); stroke-width: 1; vector-effect: non-scaling-stroke; }
+.curve__path { fill: none; stroke: var(--pm-text-primary); stroke-width: 2; vector-effect: non-scaling-stroke; }
+.curve__handle {
+  fill: var(--pm-surface-field);
+  stroke: var(--pm-state-armed);
+  stroke-width: 2;
+  vector-effect: non-scaling-stroke;
+  cursor: grab;
+}
+.curve__handle:focus-visible { outline: none; stroke: var(--pm-text-primary); }
+.curve__handle--on { fill: var(--pm-state-armed); cursor: grabbing; }
+.curve__read {
+  margin: 0;
+  font-family: var(--pm-font-mono);
+  font-size: 10px;
+  line-height: 1.5;
+  color: var(--pm-text-muted);
+}
+
 /* ---- The Media Browser ----------------------------------------------------
    A dialog, not a mode: assets and their possession per node, summoned and
    dismissed. The overlay dims the console rather than hiding it — the

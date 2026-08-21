@@ -730,6 +730,19 @@ mod design_api {
                 .map_err(|e| JsValue::from_str(&e.to_string()))
         }
 
+        /// Add a mask under `parent` (the root when null) — format 1.3.
+        /// Returns `{ id, doc }` like `addBox`. A container swallows the mask;
+        /// a leaf gets one beside it, because a mask masks its SIBLINGS.
+        #[wasm_bindgen(js_name = addMask)]
+        pub fn add_mask(&self, parent: Option<String>) -> Result<String, JsValue> {
+            let (id, doc) = design::add_mask(&self.armed, parent.as_deref())
+                .map_err(|e| JsValue::from_str(&e))?;
+            let doc: serde_json::Value =
+                serde_json::from_str(&doc).map_err(|e| JsValue::from_str(&e.to_string()))?;
+            serde_json::to_string(&serde_json::json!({ "id": id, "doc": doc }))
+                .map_err(|e| JsValue::from_str(&e.to_string()))
+        }
+
         /// Delete a node and everything inside it. The root is refused with a
         /// sentence. Returns the edited document.
         #[wasm_bindgen(js_name = deleteNode)]

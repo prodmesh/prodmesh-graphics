@@ -11,7 +11,7 @@ Decisions and reasoning: [ADR 0005](../decisions/0005-the-pmg-scene-format.md).
 | Compiled scene | `.pmgscene` |
 | Template (scene + manifest) | `.pmgtemplate` |
 | Export bundle (with assets) | `.pmgpkg` |
-| Current version | `1.0`, `min_reader: 1` |
+| Current version | `1.3`, `min_reader: 1` — see §9.2 |
 
 ## 1. Encoding
 
@@ -79,6 +79,7 @@ upscale a 1080 raster to 2160; glyph antialiasing gives it away immediately.
   "id": "title",                 // STABLE — see §3.1
   "display_name": "Title line",  // free to change
   "kind": "box",                 // box | text | image | video | shape | mask | group
+                                 // `mask` is a shape that reveals — see §3.5
   "layout":    { /* §4 */ },
   "transform": { "translate": [0,0], "rotate": 0, "scale": [1,1],
                  "anchor": [0.5,0.5], "skew": [0,0] },
@@ -177,6 +178,57 @@ jitter without tabular figures.
 - A renderer **MUST refuse to render** an unknown `kind`: draw a magenta
   placeholder box and set `degraded: true` on the `SceneInstance`. Rendering
   nothing and looking fine is the dangerous behaviour.
+
+### 3.5 Masks (format 1.3)
+
+A node of `kind: "mask"` is a **shape, not ink**. It draws nothing itself;
+everything beside it in its container — its siblings and all their descendants —
+is multiplied by its coverage. Inside the shape they draw; outside it they do
+not.
+
+The shape is the same rounded rectangle a box node would have been drawn as:
+the node's solved rect, its `style.radius`, and its own `transform`. Mask and
+masked content have **independent transforms**, and that is the point — a wipe
+reveal is the mask sliding while the plate and its type stay put, which is a
+transform on one node and no relayout anywhere.
+
+```jsonc
+{ "id": "wipe", "kind": "mask",
+  "layout": { "width": {"Percent": 100}, "height": {"Percent": 100},
+              "position": "absolute" },
+  "style":  { "radius": 0 } }        // NO fill, stroke, shadow, or gradient
+```
+
+Rules, and the reason for each:
+
+- **A mask MUST carry no paint** — no `fill`, `gradient`, `stroke`, or `shadow`
+  — and no `content` and no `children`. The compiler refuses all of these. This
+  is what makes the older-reader fallback safe: a 1.2 reader does not know
+  masks, draws the node as an ordinary box, and an unpainted box draws
+  nothing — so it shows the masked content **unmasked**. Paint on the same node
+  would become a rectangle drawn across the graphic.
+- **`min_reader` does not change.** Showing too much is a degradation an old
+  node can survive; the manifest carries a `mask_needs_1_3` warning saying so at
+  publish, which is where somebody can act on it.
+- **One mask at a time.** A mask inside an already-masked subtree is a compile
+  error. Nesting would need the inner to intersect the outer, and the failure
+  mode of getting that wrong is *revealing more than intended*.
+- **`style.opacity` on the mask scales its coverage**, so a mask can fade in.
+- **A mask with no area reveals nothing.** A mask scaled to zero hides its
+  siblings rather than revealing them: a wipe animating up from zero must start
+  hidden.
+- **`visible_if` applies.** A mask conditioned away masks nothing, rather than
+  masking everything to an empty rect.
+
+**Not in v1, and deliberately:** an *inverted* mask (hide inside, reveal
+outside), a **feathered** edge, and masking by an arbitrary alpha — a glyph
+shape or an image's luma. The edge here is the same one-pixel analytic coverage
+ramp every other shape gets. Each of these is a real thing broadcast wants and
+each is additive later.
+
+**`clip` is a different mechanism** and the two compose. `clip` is a
+rectangular scissor in target pixels that removes fragments; a mask is a shaped
+coverage multiply. A node can have both.
 
 ## 4. Layout
 
@@ -405,7 +457,7 @@ compatibility mechanism here. You find out at 10am Saturday, not at 10:15 Sunday
 - **`major`** — anything a previous reader would misinterpret. `min_reader` is
   raised.
 
-Current version: **1.2**. 1.1 introduced `style.gradient` (a 1.0 reader
+Current version: **1.3**. 1.1 introduced `style.gradient` (a 1.0 reader
 ignores the field and renders the flat `fill` writers keep beside it). 1.2
 introduced theme tokens (ADR 0021): colours and `FontSpec` may carry a
 `token` naming the theme token their stored value was resolved from, and the
@@ -413,7 +465,13 @@ document carries `theme` — the content address of that theme. The values are
 REAL and every reader renders them; the token and stamp are provenance, so
 recompiling under a different theme rewrites the values. Resolution happens
 at compile, never at arm — that is what keeps `template_rev` naming its
-pixels.
+pixels. 1.3 gave `kind: "mask"` its meaning (§3.5): the kind was reserved from
+the start and a 1.2 reader draws such a node as an ordinary box, which is why
+the compiler refuses to let a mask carry any paint — an unpainted box draws
+nothing, so an older reader shows the masked content unmasked rather than
+painting a rectangle across it. A minor bump, and `min_reader` stays 1:
+revealing too much is a degradation an old node survives, and the manifest says
+so at publish.
 
 ### 9.3 Migration
 

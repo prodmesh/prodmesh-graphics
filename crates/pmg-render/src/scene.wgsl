@@ -45,6 +45,18 @@ struct Node {
     // x, y: unit direction (y-down). z: stop count; 0 means no gradient and
     // the fill path is bit-for-bit what it was before gradients existed.
     grad_dir     : vec4<f32>,
+    // The mask's world affine INVERTED — takes a world point back into the
+    // mask's own design space (format 1.3).
+    mask_inv     : vec4<f32>,
+    // x: corner radius. y: mode — 0 none, 1 mask, 2 hide everything.
+    // z: the mask's opacity. w: unused.
+    mask_meta    : vec4<f32>,
+    // The mask's world translation, subtracted before mask_inv is applied.
+    mask_t       : vec2<f32>,
+    // Centre and half extent of the mask's rect, in the mask's design space.
+    mask_center  : vec2<f32>,
+    mask_half    : vec2<f32>,
+    _mask_pad    : vec2<f32>,
 };
 
 @group(0) @binding(0) var<uniform> u : Node;
@@ -54,15 +66,24 @@ struct VsOut {
     // Position within the node's rect, in design-space pixels.
     @location(0)       local : vec2<f32>,
     @location(1)       uv    : vec2<f32>,
+    // The same point in WORLD design space — after this node's affine, before
+    // the map to clip space. Masks live in world space because the mask and the
+    // node it masks have different transforms, and usually only one of them is
+    // moving.
+    @location(2)       world : vec2<f32>,
 };
 
 // Apply the node's affine transform about its anchor, then map design space to
 // clip space. Done in the vertex shader so the fragment shader only ever deals
 // in the node's own local space — which is what keeps the SDF math simple and
 // exact.
-fn to_clip(p : vec2<f32>) -> vec4<f32> {
+fn to_world(p : vec2<f32>) -> vec2<f32> {
     let m = mat2x2<f32>(u.xform.x, u.xform.y, u.xform.z, u.xform.w);
-    let world = m * p + u.xform_t;
+    return m * p + u.xform_t;
+}
+
+fn to_clip(p : vec2<f32>) -> vec4<f32> {
+    let world = to_world(p);
     // Design space is y-down from the top-left; clip space is y-up centred.
     let ndc = vec2<f32>(
          (world.x / u.canvas.x) * 2.0 - 1.0,
@@ -110,6 +131,7 @@ fn vs_box(@builtin(vertex_index) i : u32) -> VsOut {
 
     var out : VsOut;
     out.pos   = to_clip(p);
+    out.world = to_world(p);
     // Local coordinates run from -half to +half, so the SDF is centred.
     out.local = (c - vec2<f32>(0.5, 0.5)) * grown;
     // The image sub-rect is a fraction of the RECT, not of the grown quad, so
@@ -123,6 +145,34 @@ fn vs_box(@builtin(vertex_index) i : u32) -> VsOut {
 fn sd_rounded_box(p : vec2<f32>, b : vec2<f32>, r : f32) -> f32 {
     let q = abs(p) - b + vec2<f32>(r, r);
     return length(max(q, vec2<f32>(0.0, 0.0))) + min(max(q.x, q.y), 0.0) - r;
+}
+
+// Mask coverage at a world point (format 1.3).
+//
+// A mask is a node whose SHAPE, not whose paint, is the point: everything drawn
+// through it is multiplied by this. The shape is the same rounded box the mask
+// node would have been drawn as, evaluated in the mask's own space — which is
+// what lets the mask and the masked content have independent transforms, and a
+// wipe reveal is exactly that: the mask sliding while the text stays put.
+//
+// Mode 0 returns exactly 1.0 before touching anything else, so an unmasked node
+// composites bit-for-bit as it did before masks existed.
+//
+// The AA ramp is the same linear coverage function the box edge uses, and it is
+// measured in the MASK's units — a scaled mask has a scaled edge ramp, exactly
+// as a scaled box does. There is no feather: a soft-edged wipe is a real thing
+// broadcast wants and it is a seam, not a v1 promise.
+fn mask_cov(world : vec2<f32>) -> f32 {
+    if (u.mask_meta.y < 0.5) {
+        return 1.0;
+    }
+    if (u.mask_meta.y > 1.5) {
+        return 0.0;
+    }
+    let m = mat2x2<f32>(u.mask_inv.x, u.mask_inv.y, u.mask_inv.z, u.mask_inv.w);
+    let p = m * (world - u.mask_t) - u.mask_center;
+    let d = sd_rounded_box(p, u.mask_half, u.mask_meta.x);
+    return clamp(0.5 - d, 0.0, 1.0) * u.mask_meta.z;
 }
 
 @fragment
@@ -197,7 +247,7 @@ fn fs_box(in : VsOut) -> @location(0) vec4<f32> {
     // through the hole (the shadow is of the box, not visible through it),
     // and a translucent fill must not have a dark ghost bleeding up through
     // it. The same rule CSS box-shadow settled on, for the same reasons.
-    return (front + shadow_pm * (1.0 - edge_cov)) * u.opacity;
+    return (front + shadow_pm * (1.0 - edge_cov)) * u.opacity * mask_cov(in.world);
 }
 
 // ---------------------------------------------------------------------------
@@ -220,6 +270,7 @@ struct GlyphVertex {
 fn vs_text(v : GlyphVertex) -> VsOut {
     var out : VsOut;
     out.pos   = to_clip(v.pos);
+    out.world = to_world(v.pos);
     out.local = v.pos;
     out.uv    = v.uv;
     return out;
@@ -228,7 +279,7 @@ fn vs_text(v : GlyphVertex) -> VsOut {
 @fragment
 fn fs_text(in : VsOut) -> @location(0) vec4<f32> {
     let coverage = textureSample(atlas_tex, atlas_smp, in.uv).r;
-    let a = coverage * u.color.a * u.opacity;
+    let a = coverage * u.color.a * u.opacity * mask_cov(in.world);
     return vec4<f32>(u.color.rgb * a, a);   // premultiplied
 }
 
@@ -242,14 +293,14 @@ fn fs_text(in : VsOut) -> @location(0) vec4<f32> {
 @fragment
 fn fs_text_stroke(in : VsOut) -> @location(0) vec4<f32> {
     let coverage = textureSample(atlas_tex, atlas_smp, in.uv).r;
-    let a = coverage * u.stroke_color.a * u.opacity;
+    let a = coverage * u.stroke_color.a * u.opacity * mask_cov(in.world);
     return vec4<f32>(u.stroke_color.rgb * a, a);
 }
 
 @fragment
 fn fs_text_shadow(in : VsOut) -> @location(0) vec4<f32> {
     let coverage = textureSample(atlas_tex, atlas_smp, in.uv).r;
-    let a = coverage * u.shadow_color.a * u.opacity;
+    let a = coverage * u.shadow_color.a * u.opacity * mask_cov(in.world);
     return vec4<f32>(u.shadow_color.rgb * a, a);
 }
 
@@ -266,7 +317,7 @@ fn fs_unknown(in : VsOut) -> @location(0) vec4<f32> {
     // Diagonal hatch, so it reads as "broken" rather than as a magenta box
     // someone might have meant.
     let stripe = fract((in.local.x + in.local.y) * 0.05);
-    let a = select(0.35, 0.85, stripe < 0.5) * u.opacity;
+    let a = select(0.35, 0.85, stripe < 0.5) * u.opacity * mask_cov(in.world);
     return vec4<f32>(vec3<f32>(1.0, 0.0, 1.0) * a, a);
 }
 
@@ -334,7 +385,7 @@ fn fs_image(in : VsOut) -> @location(0) vec4<f32> {
     let coverage = clamp(0.5 - max(d_corner, d_fit), 0.0, 1.0);
 
     // Already premultiplied, so opacity scales all four channels together.
-    return texel * coverage * u.opacity;
+    return texel * coverage * u.opacity * mask_cov(in.world);
 }
 
 // ---------------------------------------------------------------------------

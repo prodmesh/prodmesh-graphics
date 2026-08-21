@@ -64,6 +64,96 @@ pub fn validate(doc: &SceneDoc) -> Result<Vec<Warning>, SceneError> {
         }
     });
 
+    // --- Masks (§3.6, format 1.3) -----------------------------------------
+    //
+    // A mask node's SHAPE is the mask; its paint is meaningless and carrying
+    // any would be actively dangerous. A 1.2 reader does not know masks: it
+    // draws a mask node as an ordinary box, and an unpainted box draws
+    // nothing — so an older node shows the masked content unmasked, which is
+    // the degradation we can live with. Paint on the same node turns that into
+    // a rectangle drawn across the graphic, which is not.
+    //
+    // An error rather than a warning, and rather than silently dropping the
+    // paint: the designer is in an editor that can fix it now.
+    let mut bad_mask: Option<(String, String)> = None;
+    let mut note_mask = |id: &str, why: &str| {
+        if bad_mask.is_none() {
+            bad_mask = Some((id.to_string(), why.to_string()));
+        }
+    };
+    if doc.root.kind == NodeKind::Mask {
+        note_mask(
+            &doc.root.id,
+            "is the document root — a mask masks its siblings, and the root has none",
+        );
+    }
+    doc.root.walk(&mut |n| {
+        if n.kind != NodeKind::Mask {
+            return;
+        }
+        let s = &n.style;
+        if s.fill.is_some() || s.gradient.is_some() || s.stroke.is_some() || s.shadow.is_some() {
+            note_mask(
+                &n.id,
+                "carries paint — a mask is a shape, and a reader too old to \
+                 understand masks would draw that paint straight across the graphic",
+            );
+        }
+        if n.content.is_some() {
+            note_mask(
+                &n.id,
+                "carries content — a mask is a shape and nothing else",
+            );
+        }
+        if !n.children.is_empty() {
+            note_mask(
+                &n.id,
+                "has children — they would be masked by their own parent, which \
+                 is a shape with no meaning of its own to draw them into",
+            );
+        }
+    });
+    // Nested masks: the inner one would silently replace the outer, and losing
+    // a mask shows MORE than intended, which is the wrong direction to fail in.
+    fn masks_below(n: &crate::doc::Node, inside_masked: bool, out: &mut Option<String>) {
+        let here = n.children.iter().any(|c| c.kind == NodeKind::Mask);
+        if here && inside_masked && out.is_none() {
+            *out = Some(n.id.clone());
+        }
+        for c in &n.children {
+            masks_below(c, inside_masked || here, out);
+        }
+    }
+    let mut nested = None;
+    masks_below(&doc.root, false, &mut nested);
+    if let Some(id) = nested {
+        note_mask(
+            &id,
+            "is inside an already-masked subtree — v1 applies one mask at a time, \
+             and nesting them would drop the outer one silently",
+        );
+    }
+    if let Some((node, why)) = bad_mask {
+        return Err(SceneError::BadMask { node, why });
+    }
+    // A mask is a 1.3 feature and older readers ignore it. Said at publish, so
+    // "it looked right in Design and wrong on the old node" is a sentence
+    // nobody has to work out on a Sunday.
+    let mut any_mask = false;
+    doc.root.walk(&mut |n| {
+        if n.kind == NodeKind::Mask {
+            any_mask = true;
+        }
+    });
+    if any_mask {
+        warnings.push(Warning {
+            code: "mask_needs_1_3",
+            detail: "this template uses a mask; a reader older than format 1.3 shows \
+                     the masked content UNMASKED rather than refusing it"
+                .into(),
+        });
+    }
+
     // Gradient stop rules are a compile ERROR, not a warning: a designer made
     // this document in an editor that can fix it now, and a gradient whose
     // stops are out of order evaluates differently between any two readers

@@ -388,6 +388,45 @@ so both halves must be handed the same bytes; each prints the face's blake3 and
 comparing those two lines is the whole check. Handed different faces, the run
 measures two typefaces and reports it as a renderer difference.
 
+### The first corpus figure that is not bit-identical: a rotated mask, 2 pixels, 1/255
+*2026-08-20 · MacBook Pro M3 Max, macOS 26.3 · wgpu 30.0.0 · Chromium WebGPU · Arial, same bytes both sides*
+
+Masks (format 1.3) put a **`mat2x2` multiply in the fragment shader** for the
+first time: a world point is taken back into the mask's own space before the
+rounded-box SDF is evaluated, because the mask and the content it masks have
+independent transforms. Every other shape does its transform work in the
+VERTEX shader and evaluates its SDF in untransformed local space.
+
+Across 102 figures, 101 are bit-identical. `mask-transformed` — a mask rotated
+20° over an unrotated box — is not:
+
+```
+                    within 1/255   max delta   centroid shift   alpha mass
+mask-transformed      100.0000%      1/255      0.000000 px      0.0000%
+   differing pixels:  2 of 147 456 (0.0014%), blue channel only
+```
+
+**Inside the S1 bar** (≥99.9% within 1/255, max ≤2/255, zero geometric
+displacement) and worth writing down anyway, because it is the first non-zero
+this corpus has ever produced.
+
+**Likely cause, stated as a hypothesis and not as a measurement:** multiply-add
+contraction. The two WGSL frontends are free to fuse `a*b + c` into an FMA or
+not, and a per-fragment matrix multiply is where that first becomes visible.
+The axis-aligned mask figures are all 0/255 — there, a last-bit difference in
+the mask-space position lands inside a region whose coverage has already
+clamped to 0 or 1, so nothing shows. On an angled edge the coverage ramp is
+live and one step appears.
+
+**What was NOT the cause:** the mask matrix itself. The inverse is computed on
+the CPU in `pmg-render`, in Rust, and uploaded as bytes — both targets receive
+the same numbers.
+
+Not worth chasing into the shader. It is two pixels, in the accepted class
+("a shade one step off is a GPU backend difference we have already accepted",
+risk R1), with geometry exact. CI fails the corpus at >2/255, so if this ever
+grows, it fails rather than drifts.
+
 ### The GPU scene path renders a lower third in 13.9 ms against a 16.68 ms budget
 *2026-08-14 · MacBook Pro M3 Max, macOS 26.3 · wgpu 30 · 1920×1080p59.94*
 

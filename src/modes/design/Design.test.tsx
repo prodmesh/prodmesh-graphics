@@ -47,6 +47,7 @@ const h = vi.hoisted(() => {
       children: [
         { id: 'band', kind: 'box', layout: {}, transform: {}, style: {}, children: [] },
         { id: 'caption', kind: 'text', layout: {}, transform: {}, style: {}, children: [] },
+        { id: 'wipe', kind: 'mask', layout: {}, transform: {}, style: {}, children: [] },
       ],
     },
     timelines: [],
@@ -56,8 +57,10 @@ const h = vi.hoisted(() => {
   const facts = (id: string) =>
     JSON.stringify({
       id,
-      kind: id === 'caption' ? 'text' : 'box',
-      fill: style.fill,
+      kind: id === 'caption' ? 'text' : id === 'wipe' ? 'mask' : 'box',
+      // A mask has no paint at all — the compiler refuses it, so the facts
+      // must not offer it either.
+      fill: id === 'wipe' ? null : style.fill,
       gradient: style.gradient ?? undefined,
       stroke: style.stroke ?? undefined,
       shadow: style.shadow ?? undefined,
@@ -65,8 +68,8 @@ const h = vi.hoisted(() => {
       opacity: 1,
       absolute: false,
       clip: false,
-      width_mode: 'px',
-      height_mode: 'px',
+      width_mode: id === 'wipe' ? 'percent' : 'px',
+      height_mode: id === 'wipe' ? 'percent' : 'px',
       margin: [0, 0, 0, 0],
       padding: [0, 0, 0, 0],
       ...(id === 'caption' ? { text: { expr: 'Hi', family: 'Test', weight: 400, size: 32, align: 'start' } } : {}),
@@ -111,6 +114,9 @@ const h = vi.hoisted(() => {
       style.gradient = { angle: 180, stops: [[[1, 1, 1, 1], 0], [[0.3, 0.3, 0.3, 1], 1]] as [number[], number][] }
       return doc()
     }),
+    addMask: vi.fn((parent?: string) =>
+      JSON.stringify({ id: `${parent ?? 'root'}-mask`, doc: JSON.parse(doc()) }),
+    ),
     copyNode: vi.fn((id: string) => JSON.stringify({ id, kind: 'box' })),
     pasteNode: vi.fn((_t: string, payload: string, _beside: boolean) => {
       const inner = JSON.parse(payload) as { id: string }
@@ -449,5 +455,38 @@ describe('the theme manager and the apply sweep', () => {
     fireEvent.click(within(dialog).getByRole('button', { name: /Republish 1 template/ }))
     // The sweep line: republished, Items moved — the whole verdict in one row.
     await within(dialog).findByText(/Lower third: republished as swept · 1 Item moved/)
+  })
+})
+
+describe('masks', () => {
+  test('a mask is offered, lands where the selection is, and is selected once made', async () => {
+    await openTemplate()
+    selectInTree('band')
+    fireEvent.click(screen.getByRole('button', { name: /Add a mask/ }))
+    await waitFor(() => expect(h.session.addMask).toHaveBeenCalledWith('band'))
+  })
+
+  test('a mask offers geometry and NO paint — it is a shape, not ink', async () => {
+    await openTemplate()
+    selectInTree('wipe')
+    // The sentence, because an invisible node that offers no colours needs to
+    // say why once.
+    await screen.findByText(/reveals what falls inside its shape/)
+    // Shape and placement, yes.
+    expect(screen.getByLabelText('Corner radius')).toBeDefined()
+    expect(screen.getByLabelText('Node opacity')).toBeDefined()
+    // Paint, no — not the checkbox, not the colour, not the outline or shadow.
+    expect(screen.queryByRole('checkbox', { name: 'Fill' })).toBeNull()
+    expect(screen.queryByLabelText('Fill colour')).toBeNull()
+    expect(screen.queryByRole('checkbox', { name: 'Outline' })).toBeNull()
+    expect(screen.queryByRole('checkbox', { name: 'Shadow' })).toBeNull()
+  })
+
+  test('a percent axis says percent rather than pretending to hug its contents', async () => {
+    await openTemplate()
+    selectInTree('wipe')
+    const sizing = (await screen.findByLabelText('Width sizing')) as HTMLSelectElement
+    expect(sizing.value).toBe('percent')
+    expect([...sizing.options].map((o) => o.value)).toContain('percent')
   })
 })

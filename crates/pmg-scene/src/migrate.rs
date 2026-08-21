@@ -16,7 +16,7 @@ use crate::doc::{FormatVersion, SceneDoc};
 use crate::SceneError;
 
 /// The version this writer emits.
-pub const CURRENT: FormatVersion = FormatVersion { major: 1, minor: 2 };
+pub const CURRENT: FormatVersion = FormatVersion { major: 1, minor: 3 };
 
 /// Walk `doc` forward to [`CURRENT`], returning the names of the steps taken
 /// — empty when it was already current.
@@ -40,6 +40,10 @@ pub fn migrate(doc: &mut SceneDoc) -> Result<Vec<&'static str>, SceneError> {
         v1_1_to_v1_2(doc);
         applied.push("1.1-to-1.2");
     }
+    if doc.format_version.minor == 2 {
+        v1_2_to_v1_3(doc);
+        applied.push("1.2-to-1.3");
+    }
     Ok(applied)
 }
 
@@ -59,4 +63,16 @@ pub fn v1_0_to_v1_1(doc: &mut SceneDoc) {
 /// Also purely a stamp: every 1.1 document simply has no tokens.
 pub fn v1_1_to_v1_2(doc: &mut SceneDoc) {
     doc.format_version = FormatVersion { major: 1, minor: 2 };
+}
+
+/// 1.2 → 1.3: the version where `kind: "mask"` started meaning something.
+///
+/// A stamp again, and the fallback is why it can be. A 1.2 reader draws a mask
+/// node as an unpainted box — which is to say, nothing — and shows the content
+/// that should have been masked, unmasked. That is the reason the compiler
+/// REFUSES to let a mask node carry a fill, a gradient, a stroke, or a shadow:
+/// the moment it carries paint, an older reader draws a rectangle across the
+/// graphic instead of quietly revealing too much.
+pub fn v1_2_to_v1_3(doc: &mut SceneDoc) {
+    doc.format_version = FormatVersion { major: 1, minor: 3 };
 }

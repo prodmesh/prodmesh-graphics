@@ -779,8 +779,14 @@ pub fn node_facts(doc: &SceneDoc, id: &str) -> Result<NodeFacts, String> {
         }),
         _ => None,
     };
+    // "percent" is its own answer, not a flavour of "content": a mask arrives
+    // as 100% of its parent, and reporting that as "hugs what is inside" would
+    // have the editor describe the node as the opposite of what it is.
+    // `Auto` still reads as content — that IS how flexbox sizes it here, and
+    // renaming it would relabel every existing node for no gain.
     let mode = |d: &Dimension| match d {
         Dimension::Px(_) => "px".to_string(),
+        Dimension::Percent(_) => "percent".to_string(),
         _ => "content".to_string(),
     };
     Ok(NodeFacts {
@@ -1068,6 +1074,103 @@ pub fn apply_add_box(doc: &mut SceneDoc, parent: Option<&str>) -> Result<String,
         unknown: Default::default(),
     });
     Ok(id)
+}
+
+/// Add a mask under `parent` and return its id (format 1.3).
+///
+/// **A mask masks its siblings**, so where it lands is the whole question. A
+/// container swallows it — the mask goes inside and masks that container's
+/// contents; a leaf gets one BESIDE it, which is what "mask this text" means.
+/// The same rule paste follows, for the same reason: a text node cannot
+/// contain anything, so putting the mask inside it would mask nothing.
+///
+/// It arrives covering its parent exactly, so adding one changes NOTHING on
+/// screen. A mask that arrives smaller than its siblings would make the
+/// graphic half-vanish the instant the button is pressed, and the designer
+/// would learn to distrust the button rather than the mask.
+pub fn apply_add_mask(doc: &mut SceneDoc, parent: Option<&str>) -> Result<String, String> {
+    use pmg_scene::doc::NodeKind;
+
+    let target = parent.unwrap_or(&doc.root.id).to_string();
+    // A leaf gets a sibling; a container swallows.
+    let host = match find_node(&doc.root, &target) {
+        Some(n) if matches!(n.kind, NodeKind::Box) => target.clone(),
+        Some(_) => parent_id(&doc.root, &target).unwrap_or_else(|| doc.root.id.clone()),
+        None => return Err(format!("no node {target}")),
+    };
+
+    // The compiler refuses nested masks, and refusing HERE means the designer
+    // hears it from the button they pressed rather than from a publish.
+    if masked_already(&doc.root, &host, false) {
+        return Err(
+            "that is already inside a mask — v1 applies one mask at a time, and a second \
+             would drop the first"
+                .into(),
+        );
+    }
+    let h = find_node(&doc.root, &host).ok_or_else(|| format!("no node {host}"))?;
+    if h.children.iter().any(|c| matches!(c.kind, NodeKind::Mask)) {
+        return Err(format!(
+            "{} already has a mask — move or animate that one",
+            h.display_name.clone().unwrap_or_else(|| h.id.clone())
+        ));
+    }
+
+    let id = fresh_id(doc, "mask");
+    let h = find_node_mut(&mut doc.root, &host).ok_or_else(|| format!("no node {host}"))?;
+    h.children.insert(
+        0,
+        Node {
+            id: id.clone(),
+            display_name: Some("Mask".into()),
+            kind: NodeKind::Mask,
+            layout: pmg_scene::doc::Layout {
+                // Exactly its parent's box, and absolute so it never takes part
+                // in the flow it is masking.
+                width: Dimension::Percent(100.0),
+                height: Dimension::Percent(100.0),
+                position: pmg_scene::doc::Position::Absolute,
+                ..Default::default()
+            },
+            transform: Default::default(),
+            // No paint. The compiler enforces this, because it is what keeps an
+            // older reader from drawing the mask across the graphic.
+            style: Default::default(),
+            clip: false,
+            visible_if: None,
+            content: None,
+            children: vec![],
+            unknown: Default::default(),
+        },
+    );
+    doc.format_version = pmg_scene::migrate::CURRENT;
+    Ok(id)
+}
+
+/// The id of `child`'s parent.
+fn parent_id(n: &Node, child: &str) -> Option<String> {
+    if n.children.iter().any(|c| c.id == child) {
+        return Some(n.id.clone());
+    }
+    n.children.iter().find_map(|c| parent_id(c, child))
+}
+
+/// Is `id` inside a subtree that already has a mask?
+fn masked_already(n: &Node, id: &str, inherited: bool) -> bool {
+    let here = inherited
+        || n.children
+            .iter()
+            .any(|c| matches!(c.kind, pmg_scene::doc::NodeKind::Mask));
+    if n.id == id {
+        return inherited;
+    }
+    n.children.iter().any(|c| {
+        if c.id == id {
+            here
+        } else {
+            masked_already(c, id, here)
+        }
+    })
 }
 
 /// Add a text node under `parent` (the root when `None`) and return its id.
@@ -1482,6 +1585,9 @@ pub fn apply_set_dimension(
         Some(v) => Dimension::Px(v.max(1.0)),
         None => Dimension::Content,
     };
+    // Switching a percent axis to fixed or to content is an ordinary edit;
+    // there is no way back to percent from here, and none is offered, because
+    // only a mask arrives that way and it arrives correct.
     match axis {
         "width" => n.layout.width = dim,
         "height" => n.layout.height = dim,
@@ -2109,6 +2215,7 @@ mod tests {
             radius,
             opacity: 1.0,
             clip: false,
+            mask: None,
             content: RenderContent::Box,
         };
         let white = Some(Rgba {
@@ -2885,5 +2992,64 @@ mod tests {
 
         // And the whole document still compiles with the video field declared.
         assert!(pmg_scene::validate::compile(&doc).is_ok());
+    }
+    // --- Masks (format 1.3) ------------------------------------------------
+
+    fn doc_with_band() -> SceneDoc {
+        let mut doc = SceneDoc::blank("01TESTMASKEDIT0000000001", "Masked", 1920, 1080);
+        let band = apply_add_box(&mut doc, None).unwrap();
+        let text = apply_add_text(&mut doc, Some(&band)).unwrap();
+        (doc, band, text).0
+    }
+
+    #[test]
+    fn a_mask_arrives_covering_its_parent_so_nothing_vanishes() {
+        let mut doc = doc_with_band();
+        let band = doc.root.children[0].id.clone();
+        let id = apply_add_mask(&mut doc, Some(&band)).unwrap();
+        let m = find_node(&doc.root, &id).unwrap();
+        assert_eq!(m.kind, pmg_scene::doc::NodeKind::Mask);
+        assert_eq!(m.layout.width, Dimension::Percent(100.0));
+        assert_eq!(m.layout.height, Dimension::Percent(100.0));
+        assert!(m.style.fill.is_none(), "a mask carries no paint");
+        // And the document says it now needs a reader that knows masks.
+        assert_eq!(doc.format_version, pmg_scene::migrate::CURRENT);
+        // It publishes, which is the real claim.
+        pmg_scene::validate::compile(&doc).expect("a masked template publishes");
+    }
+
+    #[test]
+    fn masking_a_leaf_puts_the_mask_beside_it_not_inside_it() {
+        let mut doc = doc_with_band();
+        let band = doc.root.children[0].id.clone();
+        let text = doc.root.children[0].children[0].id.clone();
+        let id = apply_add_mask(&mut doc, Some(&text)).unwrap();
+        // Inside the BAND, beside the text — a text node contains nothing, so a
+        // mask inside it would mask nothing.
+        let b = find_node(&doc.root, &band).unwrap();
+        assert!(b.children.iter().any(|c| c.id == id));
+        let t = find_node(&doc.root, &text).unwrap();
+        assert!(t.children.is_empty());
+    }
+
+    #[test]
+    fn a_second_mask_is_refused_where_the_designer_pressed_the_button() {
+        let mut doc = doc_with_band();
+        let band = doc.root.children[0].id.clone();
+        apply_add_mask(&mut doc, Some(&band)).unwrap();
+        let again = apply_add_mask(&mut doc, Some(&band)).unwrap_err();
+        assert!(
+            again.contains("already has a mask"),
+            "the refusal explains itself: {again}"
+        );
+
+        // And one level down: a box INSIDE the masked band is already masked,
+        // so a mask of its own would silently drop the band's.
+        let inner = apply_add_box(&mut doc, Some(&band)).unwrap();
+        let nested = apply_add_mask(&mut doc, Some(&inner)).unwrap_err();
+        assert!(
+            nested.contains("one mask at a time"),
+            "the refusal explains itself: {nested}"
+        );
     }
 }

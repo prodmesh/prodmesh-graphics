@@ -1555,6 +1555,239 @@ pub fn all() -> Vec<Template> {
         degraded,
     ));
 
+    // --- Masks (format 1.3) ------------------------------------------------
+    //
+    // A mask node masks its SIBLINGS. Every figure here is therefore a group
+    // holding one mask plus the content it reveals, with an unmasked marker box
+    // outside the group so a figure that masked everything away is still
+    // distinguishable from a figure that failed to draw.
+    fn mask_node(id: &str, x: f32, y: f32, w: f32, h: f32, radius: f32) -> Node {
+        Node {
+            kind: NodeKind::Mask,
+            style: Style {
+                radius,
+                // No paint, ever: the compiler refuses it, because a reader too
+                // old to know masks would draw that paint across the graphic.
+                ..Default::default()
+            },
+            ..at(id, x, y, w, h, Style::default())
+        }
+    }
+    let marker = || at("marker", 16.0, 16.0, 48.0, 24.0, fill(GREEN));
+    let masked = |name: &'static str, mask: Node, kids: Vec<Node>| {
+        let mut children = vec![mask];
+        children.extend(kids);
+        doc_of(
+            name,
+            vec![
+                marker(),
+                Node {
+                    children,
+                    ..at(
+                        "group",
+                        0.0,
+                        0.0,
+                        CANVAS_W as f32,
+                        CANVAS_H as f32,
+                        Style::default(),
+                    )
+                },
+            ],
+        )
+    };
+
+    v.push(t(
+        "mask-reveals-part-of-a-box",
+        "the mask in its simplest form — a rect revealing the middle of a box",
+        masked(
+            "mask-reveals-part-of-a-box",
+            mask_node("m", 160.0, 96.0, 192.0, 96.0, 0.0),
+            vec![at("a", 96.0, 64.0, 320.0, 160.0, fill(RED))],
+        ),
+    ));
+    v.push(t(
+        "mask-rounded",
+        "a rounded mask — the same SDF the box path draws with, used as coverage",
+        masked(
+            "mask-rounded",
+            mask_node("m", 160.0, 84.0, 192.0, 120.0, 44.0),
+            vec![at("a", 96.0, 64.0, 320.0, 160.0, fill(RED))],
+        ),
+    ));
+    v.push(t(
+        "mask-edge-is-antialiased",
+        "a mask edge at a half-unit offset — the coverage ramp, not a hard cut",
+        masked(
+            "mask-edge-is-antialiased",
+            mask_node("m", 160.5, 96.5, 191.0, 95.0, 0.0),
+            vec![at("a", 96.0, 64.0, 320.0, 160.0, fill(CREAM))],
+        ),
+    ));
+    v.push(t(
+        "mask-larger-than-content",
+        "a mask that contains everything it masks — visually a no-op, and the \
+         figure that would catch a mask being applied inside out",
+        masked(
+            "mask-larger-than-content",
+            mask_node("m", 32.0, 24.0, 448.0, 240.0, 0.0),
+            vec![at("a", 96.0, 64.0, 320.0, 160.0, fill(RED))],
+        ),
+    ));
+    v.push(t(
+        "mask-transformed",
+        "a rotated mask over an unrotated box — mask and content have their own \
+         transforms, which is the whole reason masking happens in world space. \
+         The ONE figure in the corpus that is not bit-identical across targets: \
+         2 pixels of 147 456 differ by 1/255 in one channel, on the angled mask \
+         edge (2026-08-20, Metal). Inside the S1 bar and worth watching",
+        masked(
+            "mask-transformed",
+            Node {
+                transform: Transform2D {
+                    rotate: 20.0,
+                    ..Default::default()
+                },
+                ..mask_node("m", 128.0, 84.0, 256.0, 120.0, 0.0)
+            },
+            vec![at("a", 96.0, 64.0, 320.0, 160.0, fill(TEAL))],
+        ),
+    ));
+    v.push(t(
+        "mask-opacity",
+        "a mask at 40% — masking multiplies coverage, so the content is a \
+         translucent version of itself inside the shape and gone outside it",
+        masked(
+            "mask-opacity",
+            Node {
+                style: Style {
+                    opacity: 0.4,
+                    ..Default::default()
+                },
+                ..mask_node("m", 160.0, 96.0, 192.0, 96.0, 0.0)
+            },
+            vec![at("a", 96.0, 64.0, 320.0, 160.0, fill(RED))],
+        ),
+    ));
+    v.push(t(
+        "mask-over-image",
+        "an image through a mask — every fragment path multiplies by the same \
+         coverage, not just the box one",
+        {
+            let mut d = masked(
+                "mask-over-image",
+                mask_node("m", 128.0, 64.0, 224.0, 160.0, 40.0),
+                vec![image_node("i", Fit::Cover, 320.0, 200.0)],
+            );
+            d.assets = vec![pmg_scene::doc::AssetRef {
+                key: IMAGE_KEY.into(),
+                hash: "blake3:0000000000000000000000000000000000000000000000000000000000000000"
+                    .into(),
+                kind: "image".into(),
+            }];
+            d
+        },
+    ));
+    v.push(t(
+        "mask-and-clip",
+        "a clip and a mask on the same subtree — a rectangular scissor in target \
+         pixels and a shaped coverage multiply, which are different mechanisms \
+         and must compose",
+        masked(
+            "mask-and-clip",
+            mask_node("m", 96.0, 64.0, 200.0, 160.0, 0.0),
+            vec![Node {
+                clip: true,
+                children: vec![at("child", -20.0, -20.0, 400.0, 260.0, fill(AMBER))],
+                ..at("frame", 160.0, 84.0, 224.0, 120.0, fill(TEAL))
+            }],
+        ),
+    ));
+    v.push(t(
+        "mask-degenerate-hides-everything",
+        "a mask scaled to nothing. It has no area, so it reveals NOTHING — a \
+         wipe animating up from zero must start hidden, not start fully visible \
+         because a matrix could not be inverted. The green marker outside the \
+         masked group is what tells this apart from a figure that failed to draw",
+        masked(
+            "mask-degenerate-hides-everything",
+            Node {
+                transform: Transform2D {
+                    scale: [0.0, 1.0],
+                    ..Default::default()
+                },
+                ..mask_node("m", 160.0, 96.0, 192.0, 96.0, 0.0)
+            },
+            vec![at("a", 96.0, 64.0, 320.0, 160.0, fill(RED))],
+        ),
+    ));
+
+    // The wipe reveal, which is the reason masks exist at all: the mask slides
+    // and the content stays put, sampled mid-travel.
+    let mut wipe = {
+        let mut d = font_doc(
+            "mask-wipe-mid",
+            vec![
+                marker(),
+                Node {
+                    children: vec![
+                        mask_node("m", 56.0, 74.0, 400.0, 140.0, 0.0),
+                        Node {
+                            layout: Layout {
+                                direction: Direction::Column,
+                                justify: Justify::Center,
+                                padding: Edges {
+                                    top: 20.0,
+                                    right: 24.0,
+                                    bottom: 20.0,
+                                    left: 24.0,
+                                },
+                                position: Position::Absolute,
+                                margin: Edges {
+                                    top: 74.0,
+                                    left: 56.0,
+                                    ..Default::default()
+                                },
+                                ..px(400.0, 140.0)
+                            },
+                            style: fill([0.08, 0.10, 0.14, 1.0]),
+                            children: vec![text_node("line", "${line}", spec(34.0), Align::Start)],
+                            ..node("plate", NodeKind::Box)
+                        },
+                    ],
+                    ..at(
+                        "group",
+                        0.0,
+                        0.0,
+                        CANVAS_W as f32,
+                        CANVAS_H as f32,
+                        Style::default(),
+                    )
+                },
+            ],
+        );
+        d.fields = vec![field("line", "Wiped on, wiped off")];
+        d
+    };
+    wipe.timelines = vec![timeline(
+        vec![track(
+            "m/transform.translate.x",
+            -400.0,
+            0.0,
+            1000.0,
+            pmg_anim::Ease::Linear,
+        )],
+        1000.0,
+    )];
+    v.push(
+        t(
+            "mask-wipe-mid",
+            "the reveal masks exist for — the MASK animates while the plate and \
+             its type stay put, sampled half way across",
+            wipe,
+        )
+        .at_ms(500.0),
+    );
+
     // --- Themes ------------------------------------------------------------
     let mut themed = doc_of(
         "theme-tokens",
@@ -2273,6 +2506,91 @@ mod tests {
                 "stroke differs"
             );
         }
+    }
+
+    /// A mask node is in the instance (its transform is animated like any
+    /// other node's) but draws nothing, and its siblings carry its index.
+    #[test]
+    fn a_mask_is_present_but_not_painted() {
+        let t = by_name("mask-reveals-part-of-a-box").unwrap();
+        let a = arm(&t, None).unwrap();
+        let mi = a
+            .inst
+            .nodes
+            .iter()
+            .position(|n| n.id == "m")
+            .expect("the mask is in the instance");
+        assert!(matches!(
+            a.inst.nodes[mi].content,
+            crate::RenderContent::Mask
+        ));
+        let content = a.inst.nodes.iter().find(|n| n.id == "a").unwrap();
+        assert_eq!(
+            content.mask,
+            Some(mi),
+            "the masked sibling carries its index"
+        );
+        // And the marker OUTSIDE the masked group carries nothing.
+        let marker = a.inst.nodes.iter().find(|n| n.id == "marker").unwrap();
+        assert_eq!(marker.mask, None);
+    }
+
+    /// The mask applies to the whole subtree, not just to immediate siblings —
+    /// a plate and the text inside it must be wiped together or the type
+    /// survives the wipe.
+    #[test]
+    fn a_mask_reaches_descendants() {
+        let t = by_name("mask-wipe-mid").unwrap();
+        // No font here, so the text node contributes no glyphs; the plate is
+        // what this asserts on.
+        let d = t.doc.clone();
+        let plate_masked = {
+            let mut boxes_only = d.clone();
+            boxes_only.fields.clear();
+            strip_text(&mut boxes_only.root);
+            let t2 = Template {
+                doc: boxes_only,
+                needs_font: false,
+                ..t.clone()
+            };
+            let a = arm(&t2, None).unwrap();
+            a.inst
+                .nodes
+                .iter()
+                .find(|n| n.id == "plate")
+                .unwrap()
+                .mask
+                .is_some()
+        };
+        assert!(plate_masked, "the plate inside the masked group is masked");
+    }
+
+    fn strip_text(n: &mut Node) {
+        if matches!(n.kind, NodeKind::Text) {
+            n.content = None;
+            n.kind = NodeKind::Box;
+        }
+        for c in &mut n.children {
+            strip_text(c);
+        }
+    }
+
+    /// A mask that carries paint is refused, because an older reader would draw
+    /// that paint straight across the graphic — the whole reason the fallback
+    /// is safe.
+    #[test]
+    fn a_painted_mask_does_not_compile() {
+        let mut t = by_name("mask-rounded").unwrap();
+        fn paint(n: &mut Node) {
+            if matches!(n.kind, NodeKind::Mask) {
+                n.style.fill = Some(Rgba::flat(RED));
+            }
+            for c in &mut n.children {
+                paint(c);
+            }
+        }
+        paint(&mut t.doc.root);
+        assert!(pmg_scene::validate::compile(&t.doc).is_err());
     }
 
     #[test]

@@ -374,6 +374,14 @@ pub fn add_box(armed: &Armed, parent: Option<&str>) -> Result<(String, String), 
     Ok((id, edited_json(doc)?))
 }
 
+/// Add a mask under `parent` (format 1.3). A container swallows it; a leaf
+/// gets one beside it, because a mask masks its SIBLINGS.
+pub fn add_mask(armed: &Armed, parent: Option<&str>) -> Result<(String, String), String> {
+    let mut doc = armed.doc.clone();
+    let id = interact::apply_add_mask(&mut doc, parent)?;
+    Ok((id, edited_json(doc)?))
+}
+
 /// Delete a node and everything inside it. The root is refused with a
 /// sentence.
 pub fn delete_node(armed: &Armed, id: &str) -> Result<String, String> {

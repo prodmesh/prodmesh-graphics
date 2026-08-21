@@ -21,7 +21,7 @@
  * covers geometry, with no second history.
  */
 
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { Pause, Play, Plus, Trash2 } from 'lucide-react'
 import { Button, FormGroup, GroupHeader, Tag } from '../../components/console'
 import type { DesignSession, DocTimeline, Ease } from './useDesign'
@@ -50,6 +50,163 @@ const EASES: { name: string; ease: Ease }[] = [
 const easeName = (e: Ease | undefined): string => {
   const enc = JSON.stringify(e ?? 'linear')
   return EASES.find((p) => JSON.stringify(p.ease) === enc)?.name ?? 'Custom'
+}
+
+/**
+ * The curve editor — two control points, dragged.
+ *
+ * The format has carried arbitrary cubic Béziers since v1 and `pmg-anim` has
+ * evaluated them all along; until now the editor offered four names and showed
+ * anything else as "Custom", so a designer could pick a curve and never draw
+ * one. This is the drawing.
+ *
+ * CSS's convention exactly: control points in the unit square, x is time and y
+ * is progress, and **y may leave [0,1]** — an overshoot past the target and a
+ * settle back is the anticipation every broadcast lower third is built on, and
+ * clamping it away would quietly delete the only reason to hand-draw a curve.
+ * x is clamped, because a control point outside the time axis makes the curve
+ * a relation rather than a function and `pmg-anim`'s solver would have two
+ * answers to pick between.
+ *
+ * Committing happens on RELEASE, not per pointermove: an undo entry per pixel
+ * would make one drag cost fifty presses of Cmd+Z to undo.
+ */
+type Cubic = [number, number, number, number]
+
+/** Read and write a tuple slot by a computed index, without the compiler
+ *  having to believe the arithmetic stays in range. */
+const get4 = (v: Cubic, i: 0 | 1 | 2 | 3): number =>
+  i === 0 ? v[0] : i === 1 ? v[1] : i === 2 ? v[2] : v[3]
+const set4 = (v: Cubic, i: 0 | 1 | 2 | 3, n: number): Cubic => {
+  const out: Cubic = [v[0], v[1], v[2], v[3]]
+  out[i] = n
+  return out
+}
+
+function CurveEditor({
+  value,
+  onCommit,
+}: {
+  value: Cubic
+  onCommit: (v: Cubic) => void
+}) {
+  const [live, setLive] = useState<Cubic | null>(null)
+  const [drag, setDrag] = useState<0 | 1 | null>(null)
+  const svg = useRef<SVGSVGElement | null>(null)
+  const v = live ?? value
+
+  // Progress runs UP the box, so y is flipped for display. The overshoot band
+  // above and below is what makes an anticipation curve visible rather than
+  // clipped off the top of its own editor.
+  const PAD = 28
+  const SIZE = 120
+  const toPx = (x: number, y: number): [number, number] => [
+    PAD + x * SIZE,
+    PAD + (1 - y) * SIZE,
+  ]
+  const fromPx = (px: number, py: number): [number, number] => [
+    Math.max(0, Math.min(1, (px - PAD) / SIZE)),
+    Math.max(-0.5, Math.min(1.5, 1 - (py - PAD) / SIZE)),
+  ]
+
+  const at = (e: React.PointerEvent) => {
+    const el = svg.current
+    if (!el) return null
+    const r = el.getBoundingClientRect()
+    const box = PAD * 2 + SIZE
+    return fromPx(
+      ((e.clientX - r.left) / r.width) * box,
+      ((e.clientY - r.top) / r.height) * box,
+    )
+  }
+
+  const move = (e: React.PointerEvent) => {
+    if (drag === null) return
+    const p = at(e)
+    if (!p) return
+    const x = (drag * 2) as 0 | 2
+    setLive(set4(set4(v, x, p[0]), (x + 1) as 1 | 3, p[1]))
+  }
+
+  const release = () => {
+    if (drag !== null && live) onCommit(live)
+    setDrag(null)
+    setLive(null)
+  }
+
+  const [p1x, p1y] = toPx(v[0], v[1])
+  const [p2x, p2y] = toPx(v[2], v[3])
+  const [ax, ay] = toPx(0, 0)
+  const [bx, by] = toPx(1, 1)
+  const box = PAD * 2 + SIZE
+
+  return (
+    <div className="curve">
+      <svg
+        ref={svg}
+        className="curve__svg"
+        viewBox={`0 0 ${box} ${box}`}
+        role="group"
+        aria-label="Easing curve"
+        onPointerMove={move}
+        onPointerUp={release}
+        onPointerLeave={release}
+      >
+        <rect x={PAD} y={PAD} width={SIZE} height={SIZE} className="curve__box" />
+        <line x1={ax} y1={ay} x2={bx} y2={by} className="curve__diag" />
+        <line x1={ax} y1={ay} x2={p1x} y2={p1y} className="curve__arm" />
+        <line x1={bx} y1={by} x2={p2x} y2={p2y} className="curve__arm" />
+        <path
+          d={`M ${ax} ${ay} C ${p1x} ${p1y}, ${p2x} ${p2y}, ${bx} ${by}`}
+          className="curve__path"
+        />
+        {([0, 1] as const).map((i) => {
+          const [hx, hy] = i === 0 ? [p1x, p1y] : [p2x, p2y]
+          return (
+            <circle
+              key={i}
+              cx={hx}
+              cy={hy}
+              r={7}
+              className={drag === i ? 'curve__handle curve__handle--on' : 'curve__handle'}
+              role="slider"
+              tabIndex={0}
+              aria-label={`Curve handle ${i + 1}`}
+              aria-valuetext={`${get4(v, (i * 2) as 0 | 2).toFixed(2)}, ${get4(v, (i * 2 + 1) as 1 | 3).toFixed(2)}`}
+              onPointerDown={(e) => {
+                e.currentTarget.releasePointerCapture?.(e.pointerId)
+                setDrag(i)
+                setLive(v)
+              }}
+              onKeyDown={(e) => {
+                // The keyboard reaches the same curve. 0.02 per press, ten
+                // times that with Shift — a designer without a mouse is still
+                // a designer, and the handles are the only way in.
+                const step = (e.shiftKey ? 0.2 : 0.02) * (e.key === 'ArrowLeft' || e.key === 'ArrowDown' ? -1 : 1)
+                const axis = e.key === 'ArrowLeft' || e.key === 'ArrowRight' ? 0 : 1
+                if (!['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown'].includes(e.key)) return
+                e.preventDefault()
+                const j = (i * 2 + axis) as 0 | 1 | 2 | 3
+                const n = get4(v, j) + step
+                onCommit(
+                  set4(
+                    v,
+                    j,
+                    axis === 0
+                      ? Math.max(0, Math.min(1, n))
+                      : Math.max(-0.5, Math.min(1.5, n)),
+                  ),
+                )
+              }}
+            />
+          )
+        })}
+      </svg>
+      <p className="curve__read">
+        cubic-bezier({v.map((n) => n.toFixed(2)).join(', ')})
+      </p>
+    </div>
+  )
 }
 
 /** SVG geometry: the ruler's drawable width in viewBox units per row. */
@@ -358,6 +515,36 @@ export function TimelinePanel({
               {easeName(selKey.key.ease) === 'Custom' ? <option value="Custom">Custom</option> : null}
             </select>
           </FormGroup>
+          {/* The curve itself. A preset is a starting point to drag from, not
+              a cage: a key on Linear opens at the diagonal, which is what
+              linear IS as a cubic, so the first drag reads as continuous with
+              what was already there rather than as a jump. */}
+          {typeof selKey.key.ease === 'object' && 'steps' in selKey.key.ease ? (
+            <p className="design-console__dim">
+              This key steps in {selKey.key.ease.steps} jumps. Pick a curve above to shape it
+              instead.
+            </p>
+          ) : (
+            <CurveEditor
+              value={
+                typeof selKey.key.ease === 'object' && 'cubic' in selKey.key.ease
+                  ? selKey.key.ease.cubic
+                  : [0.33, 0.33, 0.67, 0.67]
+              }
+              onCommit={(cubic) =>
+                edit((s) =>
+                  s.setKey(
+                    timeline,
+                    selected,
+                    selKey.prop,
+                    selKey.t,
+                    selKey.key.v,
+                    JSON.stringify({ cubic }),
+                  ),
+                )
+              }
+            />
+          )}
           <Button
             variant="secondary"
             onClick={() => {
