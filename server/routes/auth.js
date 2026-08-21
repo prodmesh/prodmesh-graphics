@@ -58,6 +58,11 @@ router.get('/api/auth/me', (req, res) => {
     // Said out loud rather than inferred, so a UI cannot quietly present an
     // open server as a secured one.
     unconfigured: store.unconfigured(),
+    // The opposite failure, and it needs saying just as loudly: enforcement is
+    // on and NOBODY can administer this server. Every route refuses, including
+    // the ones that would fix it, and being refused everywhere with no pattern
+    // to it reads as the system being broken rather than as one missing row.
+    no_administrator: !store.unconfigured() && !store.administrable(),
   })
 })
 

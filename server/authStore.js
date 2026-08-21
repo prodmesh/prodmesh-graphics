@@ -250,6 +250,63 @@ export function setPin(username, pin) {
   return { id: user.id, username }
 }
 
+/**
+ * Put a user in the Administrators group, creating it if it is not there.
+ *
+ * The companion to `setPin`, and the half that was missing. `createUser` grants
+ * the first user the wildcard so that securing a server does not lock it — but
+ * that guard only covers accounts made by a server that HAS it. An account made
+ * before it, or a lone administrator someone removed from the group, leaves a
+ * server with enforcement on and nobody able to grant anything: every route
+ * refuses, including the ones that would fix it.
+ *
+ * No HTTP route, for the same reason as `setPin`. Physical access to the
+ * database is the authority.
+ */
+export function grantAdmin(username) {
+  const db = handle()
+  const user = db.prepare('SELECT id, username FROM users WHERE username = ?').get(username)
+  if (!user) return null
+
+  let group = db.prepare("SELECT id FROM groups WHERE name = 'Administrators'").get()
+  if (!group) group = { id: createGroup('Administrators', ['*']).id }
+
+  db.transaction(() => {
+    // A group called Administrators that does not hold the wildcard is the
+    // same lockout wearing the right name.
+    db.prepare('INSERT OR IGNORE INTO group_permissions (group_id, permission) VALUES (?, ?)')
+      .run(group.id, '*')
+    db.prepare('INSERT OR IGNORE INTO user_groups (user_id, group_id) VALUES (?, ?)')
+      .run(user.id, group.id)
+  })()
+  audit({ user: user.id, station: null, action: 'auth.grant_admin', result: 'ok', detail: 'console' })
+  return { id: user.id, username: user.username }
+}
+
+/**
+ * Can anybody administer this server?
+ *
+ * False means enforcement is ON and no account holds `graphics.users.manage` —
+ * so nobody can create a group, grant a permission, or add a user, and every
+ * route that could fix it refuses. It is a state a person has to be TOLD about:
+ * discovering it means being refused everywhere with no pattern to it, which
+ * reads as the system being broken rather than as one missing row.
+ *
+ * Deliberately NOT folded into `unconfigured()`. An open server is a posture
+ * someone chose; this is a server that has lost its administrator, and quietly
+ * reopening it would turn a misconfiguration into a way in.
+ */
+export function administrable() {
+  const rows = handle()
+    .prepare(
+      `SELECT DISTINCT gp.permission FROM users u
+         JOIN user_groups ug ON ug.user_id = u.id
+         JOIN group_permissions gp ON gp.group_id = ug.group_id`,
+    )
+    .all()
+  return rows.some((r) => r.permission === '*' || r.permission === 'graphics.users.manage')
+}
+
 export function logout(token) {
   handle().prepare('DELETE FROM sessions WHERE token_hash = ?').run(sha256(token ?? ''))
 }

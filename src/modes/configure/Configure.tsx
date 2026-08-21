@@ -476,21 +476,39 @@ function Users() {
               make sense. Losing it here would leave the operator staring at a
               door with no idea they hold the key. */}
           {note ? <p role="status">{note}</p> : null}
-          <p>This server will not show you its users.</p>
-          <p>Sign in as someone who holds <code>graphics.users.manage</code>.</p>
-          {/* Naming the missing authority and then leaving the operator to find
-              the door is half an answer. This is the door. */}
-          <Button
-            variant="secondary"
-            onClick={() =>
-              requestSignIn({
-                permission: 'graphics.users.manage',
-                label: 'Manage users and groups',
-              })
-            }
-          >
-            Sign in
-          </Button>
+          {me?.no_administrator ? (
+            // Signing in cannot fix this one, and offering it as the answer
+            // sends somebody round a loop that has no exit: no account holds
+            // the permission, so every attempt is refused the same way.
+            <>
+              <p>
+                <strong>No account on this server can manage users.</strong> Signing in as anybody
+                will be refused the same way.
+              </p>
+              <p>
+                Run <code>npm run grant-admin -- &lt;username&gt;</code> on the machine running the
+                server.
+              </p>
+            </>
+          ) : (
+            <>
+              <p>This server will not show you its users.</p>
+              <p>Sign in as someone who holds <code>graphics.users.manage</code>.</p>
+              {/* Naming the missing authority and then leaving the operator to
+                  find the door is half an answer. This is the door. */}
+              <Button
+                variant="secondary"
+                onClick={() =>
+                  requestSignIn({
+                    permission: 'graphics.users.manage',
+                    label: 'Manage users and groups',
+                  })
+                }
+              >
+                Sign in
+              </Button>
+            </>
+          )}
         </div>
       </section>
     )

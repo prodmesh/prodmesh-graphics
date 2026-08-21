@@ -190,7 +190,16 @@ export function AppShell() {
         <footer className="console__footer">
           <div className="console__footer-left">
             <span className="console__footer-mode">{mode.toUpperCase()} MODE</span>
-            {me?.unconfigured ? (
+            {me?.no_administrator ? (
+              // The failure that has no fix inside the browser. Saying which
+              // command puts it right is the difference between a state and a
+              // dead end — every route that could fix this refuses, including
+              // the one that would grant the permission.
+              <span className="console__footer-hint" role="status">
+                No account can manage users. Run{' '}
+                <code>npm run grant-admin -- &lt;username&gt;</code> on the server.
+              </span>
+            ) : me?.unconfigured ? (
               // Said out loud. An open server that never mentions it is a quiet
               // hole; a booth appliance locked behind a password nobody wrote
               // down is an outage. This is the third option (ADR 0013).

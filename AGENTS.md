@@ -218,6 +218,14 @@ specifically shaped to avoid. Do not re-derive them.
   later: it is the half that gets exercised the moment somebody uses the
   feature. Same shape as the footer that said "add a user in Configure" for
   four milestones while no such page existed.
+- **A safety guard in `createUser` does not protect rows that predate it.** The
+  first user gets the wildcard so that securing a server does not lock it — and
+  the rehearsal account, created forty minutes after that landed in the tree by
+  a server process started before it, held nothing at all. Sign-in worked and
+  every action was refused. Any guard of the form "the first X is special" only
+  covers Xs made by code that has it; the recovery path (`npm run grant-admin`)
+  is the part that covers the rest, and the server now REPORTS
+  `no_administrator` rather than letting it be discovered by refusal.
 - **A browser that posts raw bytes bypasses every convention in `api.ts`.**
   Two uploads in Design built their own `fetch`, so they sent no credentials
   and rendered `the server answered 401` instead of the server's sentence.

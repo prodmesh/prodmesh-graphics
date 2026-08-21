@@ -321,3 +321,71 @@ test('a group is listed with the permissions it actually holds', async () => {
   // the permissions live in another one.
   assert.deepEqual(admins.permissions, ['*'])
 })
+
+/**
+ * The lockout that `createUser`'s wildcard grant does NOT cover: an account
+ * made by an older build, or the only administrator taken out of the group.
+ * Enforcement is on, nobody holds `graphics.users.manage`, and every route that
+ * could put it right refuses. It happened for real on the rehearsal server.
+ */
+test('a server that has lost its administrator says so, rather than just refusing', async () => {
+  // A user in no group at all — which is exactly what the rehearsal database
+  // held: one account, zero groups, zero permissions.
+  store.createUser({ username: 'orphan', pin: '1234' })
+  db.handle().prepare('DELETE FROM user_groups').run()
+
+  const me = await req('GET', '/api/auth/me')
+  assert.equal(me.json.unconfigured, false, 'enforcement is on')
+  assert.equal(me.json.no_administrator, true)
+
+  // And it is not silently reopened. Quietly dropping enforcement because
+  // permissions are misconfigured would turn a broken row into a way in.
+  const refused = await req('POST', '/api/playlists', { name: 'nope' })
+  assert.equal(refused.status, 401)
+})
+
+test('granting an administrator from the console puts the server right', async () => {
+  store.createUser({ username: 'orphan', pin: '1234' })
+  db.handle().prepare('DELETE FROM user_groups').run()
+  assert.equal(store.administrable(), false)
+
+  assert.ok(store.grantAdmin('orphan'))
+  assert.equal(store.administrable(), true)
+  assert.equal((await req('GET', '/api/auth/me')).json.no_administrator, false)
+
+  // Live for a session that is ALREADY open: permissions are read per request,
+  // not baked into the token.
+  const login = await req('POST', '/api/auth/login', { username: 'orphan', pin: '1234' })
+  const r = await req('GET', '/api/users', null, { authorization: `Bearer ${login.json.token}` })
+  assert.equal(r.status, 200)
+
+  assert.equal(store.grantAdmin('nobody'), null)
+})
+
+test('an Administrators group that has lost the wildcard is repaired, not duplicated', async () => {
+  const g = store.createGroup('Administrators', [])
+  store.createUser({ username: 'orphan', pin: '1234', groups: [g.id] })
+  assert.equal(store.administrable(), false, 'a group named right holding nothing is the same lockout')
+
+  store.grantAdmin('orphan')
+  const groups = db.handle().prepare("SELECT id FROM groups WHERE name = 'Administrators'").all()
+  assert.equal(groups.length, 1, 'the existing group is repaired')
+  assert.deepEqual([...store.permissionsOf(db.handle().prepare('SELECT id FROM users WHERE username = ?').get('orphan').id)].sort(), [...store.PERMISSIONS].sort())
+})
+
+test('granting an administrator never becomes an HTTP route', async () => {
+  admin()
+  const login = await req('POST', '/api/auth/login', { username: 'jbeale', pin: '1234' })
+  const auth = { authorization: `Bearer ${login.json.token}` }
+  for (const [method, url] of [
+    ['POST', '/api/users/jbeale/admin'],
+    ['POST', '/api/auth/grant-admin'],
+  ]) {
+    const r = await fetch(`http://127.0.0.1:${port}${url}`, {
+      method,
+      headers: { 'content-type': 'application/json', ...auth },
+      body: JSON.stringify({}),
+    })
+    assert.equal(r.status, 404, `${method} ${url} must not exist`)
+  }
+})

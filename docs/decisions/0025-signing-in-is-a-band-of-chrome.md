@@ -81,18 +81,39 @@ reads as broken. Guessing wrong this way costs a clear sentence from the server;
 guessing wrong the other way makes a permitted operator believe they are locked
 out mid-service. The server is the boundary — this is guidance.
 
-### A forgotten PIN has a way back, and its authority is physical
+### A locked-out server has a way back, and its authority is physical
 
-`npm run reset-pin -- <username> <pin>` on the machine holding the database.
-The first user turns permissions on for good and is made an Administrator so
-that securing the server does not lock it (ADR 0013); the case that remained
-unrecoverable was that user forgetting the PIN, with nobody left who could grant
-anything.
+Two commands on the machine holding the database:
 
-There is **no HTTP route** to it, and that is the point. Physical access to the
-server is the authority, the same reasoning ADR 0013 uses for a booth being a
-controlled space. It drops every session the user holds, because the reason to
-run it is either a rotation or somebody who should not be signed in any more.
+- `npm run reset-pin -- <username> <pin>` — the first user forgot the PIN.
+- `npm run grant-admin -- <username>` — **nobody holds any authority at all.**
+
+The second one was found the hard way, on the rehearsal server, hours after the
+sign-in band was built. `createUser` grants the first user the wildcard so that
+securing a server does not lock it (ADR 0013) — but that guard only covers
+accounts created by a server that HAS it. The rehearsal account had been created
+forty minutes after the guard landed in the tree, by a server process started
+before it: one user, zero groups, zero permissions. Signing in worked perfectly
+and every single action was refused.
+
+The same state is reachable without a stale process — remove the only
+administrator from the group — so it is a case, not an accident of timing.
+
+There is **no HTTP route** to either, and that is the point. Physical access to
+the server is the authority, the same reasoning ADR 0013 uses for a booth being
+a controlled space. `reset-pin` drops every session the user holds, because the
+reason to run it is either a rotation or somebody who should not be signed in
+any more; `grant-admin` does not, because permissions are read from the database
+on every request and an open session picks the grant up on its next one.
+
+**And the server says when it is in that state.** `no_administrator` on
+`/api/auth/me` — enforcement on, nobody holding `graphics.users.manage` — which
+the footer and the Users page render as the command that fixes it. Being refused
+everywhere with no pattern to it reads as the system being broken; one sentence
+turns it into a state with an exit. It is deliberately **not** folded into
+`unconfigured()`: an open server is a posture somebody chose, and quietly
+reopening one that has lost its administrator would turn a missing row into a
+way in.
 
 ## The alternatives, and why they lose
 

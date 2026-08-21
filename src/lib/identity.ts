@@ -59,6 +59,8 @@ export type Me = {
   permissions: string[]
   /** Said out loud by the server, never inferred: no users exist yet. */
   unconfigured: boolean
+  /** Enforcement is on and no account can manage users. See ADR 0025. */
+  no_administrator?: boolean
 }
 
 export const stationToken = () => read(STATION_KEY)

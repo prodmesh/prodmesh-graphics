@@ -90,6 +90,18 @@ test('an open server offers no sign in, because there is nobody to sign in as', 
   expect(screen.queryByRole('button', { name: 'Sign in' })).toBeNull()
 })
 
+/**
+ * The lockout that happened for real: an account in no group, so enforcement is
+ * on and nobody can grant anything. Signing in cannot fix it, so offering that
+ * as the answer sends the operator round a loop with no exit.
+ */
+test('a server that has lost its administrator says so, and names the command', async () => {
+  me = { ...signedOut(), no_administrator: true }
+  await paint()
+  await screen.findByText(/No account can manage users/)
+  expect(screen.getByText('npm run grant-admin -- <username>')).toBeDefined()
+})
+
 test('a refused action opens the way in, and names the authority', async () => {
   await paint()
   await screen.findByRole('button', { name: 'Sign in' })
