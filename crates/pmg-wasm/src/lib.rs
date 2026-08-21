@@ -730,6 +730,12 @@ mod design_api {
                 .map_err(|e| JsValue::from_str(&e.to_string()))
         }
 
+        /// Change what kind of value a field holds — text, number, timer…
+        #[wasm_bindgen(js_name = setFieldType)]
+        pub fn set_field_type(&self, key: String, ty: String) -> Result<String, JsValue> {
+            design::set_field_type(&self.armed, &key, &ty).map_err(|e| JsValue::from_str(&e))
+        }
+
         /// Add a mask under `parent` (the root when null) — format 1.3.
         /// Returns `{ id, doc }` like `addBox`. A container swallows the mask;
         /// a leaf gets one beside it, because a mask masks its SIBLINGS.

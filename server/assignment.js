@@ -46,14 +46,24 @@ const colorOf = (o) => ({
   key_mode: o.key_mode ?? 'fill',
 })
 
-/** Field values → the protocol's closed DataValue set. */
-function toWireData(data) {
+/**
+ * Field values → the protocol's closed DataValue set.
+ *
+ * Exported because it is the whole of what an Item's data becomes on the wire,
+ * and a mapping that is wrong here is wrong on air with nothing in between to
+ * catch it. Pure, so a test needs no database.
+ */
+export function toWireData(data) {
   const out = {}
   for (const k of Object.keys(data).toSorted()) {
     const v = data[k]
     if (typeof v === 'number') out[k] = { Number: v }
     else if (typeof v === 'boolean') out[k] = { Bool: v }
     else if (typeof v === 'string' && /^blake3:[0-9a-f]{64}$/.test(v)) out[k] = { Asset: v }
+    // A timer sends its DECLARATION, never a number: the node computes the
+    // value from its own clock, which is what lets a countdown keep counting
+    // when this server is gone (ADR 0022).
+    else if (v && typeof v === 'object' && !Array.isArray(v) && v.timer) out[k] = { Timer: v.timer }
     else out[k] = { Text: String(v ?? '') }
   }
   return out

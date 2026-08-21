@@ -22,7 +22,7 @@
  */
 
 const HASH_RE = /^blake3:[0-9a-f]{64}$/
-const FIELD_TYPES = new Set(['text', 'number', 'bool', 'image', 'video', 'color', 'enum'])
+const FIELD_TYPES = new Set(['text', 'number', 'bool', 'image', 'video', 'color', 'enum', 'timer'])
 
 /** The scene-format major this server's node fleet is expected to read. */
 export const SCENE_READER_MAJOR = 1
@@ -113,6 +113,12 @@ export function validateManifest(m, blobHash) {
  *
  * @returns {string[]} human-readable problems, empty when the data is good.
  */
+/** The closed sets `pmg_scene::timer` defines. Restated here because the server
+ *  validates Item data and never parses a SceneDoc — and kept short enough that
+ *  a mismatch is obvious in review. */
+const TIMER_KINDS = ['clock', 'countdown', 'countup', 'elapsed']
+const TIMER_FORMATS = ['hh_mm_ss', 'h_mm_ss', 'mm_ss', 'm_ss', 'hh_mm', 'h_mm', 'h_mm_am_pm']
+
 export function validateItemData(manifest, data, { hasAsset = () => true } = {}) {
   const problems = []
   if (!data || typeof data !== 'object' || Array.isArray(data)) {
@@ -156,6 +162,30 @@ export function validateItemData(manifest, data, { hasAsset = () => true } = {})
           problems.push(`${f.label ?? f.key} must be one of: ${(f.options ?? []).join(', ')}.`)
         }
         break
+      case 'timer': {
+        // A timer value is a DECLARATION, not a string: the node computes the
+        // number from its own clock (ADR 0022). Validated closely here because
+        // this is the last place a person is looking at it — a malformed
+        // countdown discovered at 10:15 on Sunday is a countdown nobody can
+        // fix.
+        const t = v && typeof v === 'object' && !Array.isArray(v) ? v.timer : null
+        if (!t || typeof t !== 'object') {
+          problems.push(`${f.label ?? f.key} must be a timer.`)
+          break
+        }
+        if (!TIMER_KINDS.includes(t.kind)) {
+          problems.push(`${f.label ?? f.key}: “${t.kind}” is not a kind of timer.`)
+        }
+        if (!TIMER_FORMATS.includes(t.format)) {
+          problems.push(`${f.label ?? f.key}: “${t.format}” is not a timer format.`)
+        }
+        // `at` is what a countdown counts to; without one it counts to now and
+        // sits at zero, which looks exactly like a broken graphic.
+        if ((t.kind === 'countdown' || t.kind === 'countup') && !Number.isFinite(t.at)) {
+          problems.push(`${f.label ?? f.key} needs a time to count ${t.kind === 'countdown' ? 'to' : 'from'}.`)
+        }
+        break
+      }
       case 'image':
       case 'video':
         if (!HASH_RE.test(String(v))) {

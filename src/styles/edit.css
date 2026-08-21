@@ -182,3 +182,11 @@
 }
 
 .edit-console__actions { display: flex; gap: 8px; }
+
+/* ---- A timer field ---------------------------------------------------------
+   A declaration, not a value: what it counts and how it reads. The number
+   itself is the node's, computed from its own clock (ADR 0022). */
+
+.timer { display: flex; flex-direction: column; gap: 6px; }
+.timer > select,
+.timer > input { width: 100%; }

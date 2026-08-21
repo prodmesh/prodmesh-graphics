@@ -218,6 +218,58 @@ mod tests {
         TimerSpec { kind, at, format }
     }
 
+    /// The wire spelling, pinned.
+    ///
+    /// The server validates Item data and never parses a SceneDoc, so it
+    /// restates these names in `server/manifest.js`. That is a second copy of a
+    /// closed set, and this test is what stops the two drifting: if a rename
+    /// here does not break this, it breaks a countdown on a Sunday instead.
+    #[test]
+    fn the_json_names_are_what_the_server_validates_against() {
+        let json = |k: TimerKind, f: TimerFormat| {
+            serde_json::to_string(&TimerSpec {
+                kind: k,
+                at: Some(1),
+                format: f,
+            })
+            .unwrap()
+        };
+        assert_eq!(
+            json(TimerKind::Countdown, TimerFormat::MSs),
+            r#"{"kind":"countdown","at":1,"format":"m_ss"}"#
+        );
+        for (k, name) in [
+            (TimerKind::Clock, "clock"),
+            (TimerKind::Countdown, "countdown"),
+            (TimerKind::Countup, "countup"),
+            (TimerKind::Elapsed, "elapsed"),
+        ] {
+            assert!(json(k, TimerFormat::MSs).contains(&format!(r#""kind":"{name}""#)));
+        }
+        for (f, name) in [
+            (TimerFormat::HhMmSs, "hh_mm_ss"),
+            (TimerFormat::HMmSs, "h_mm_ss"),
+            (TimerFormat::MmSs, "mm_ss"),
+            (TimerFormat::MSs, "m_ss"),
+            (TimerFormat::HhMm, "hh_mm"),
+            (TimerFormat::HMm, "h_mm"),
+            (TimerFormat::HMmAmPm, "h_mm_am_pm"),
+        ] {
+            assert!(json(TimerKind::Clock, f).contains(&format!(r#""format":"{name}""#)));
+        }
+        // And `at` stays out of the encoding when there is none, so a clock's
+        // declaration does not carry a field it has no use for.
+        assert_eq!(
+            serde_json::to_string(&TimerSpec {
+                kind: TimerKind::Clock,
+                at: None,
+                format: TimerFormat::HMmAmPm,
+            })
+            .unwrap(),
+            r#"{"kind":"clock","format":"h_mm_am_pm"}"#
+        );
+    }
+
     #[test]
     fn a_countdown_counts_down_and_floors_at_zero() {
         let s = spec(TimerKind::Countdown, Some(T10), TimerFormat::MSs);

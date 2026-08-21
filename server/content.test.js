@@ -270,6 +270,80 @@ test('an image field must point at an asset the server actually holds', async ()
 })
 
 // ---------------------------------------------------------------------------
+// Timers (ADR 0022)
+//
+// A timer value is a DECLARATION the node evaluates from its own clock, so this
+// is the last place a person looks at it before Sunday. Validated closely for
+// that reason: a malformed countdown found at 10:15 is a countdown nobody can
+// fix.
+// ---------------------------------------------------------------------------
+
+const TIMER_FIELD = { fields: [{ key: 'starts_in', type: 'timer', label: 'Starts in' }] }
+
+test('a well-formed countdown passes', () => {
+  assert.deepEqual(
+    manifestMod.validateItemData(TIMER_FIELD, {
+      starts_in: { timer: { kind: 'countdown', at: 1_755_691_200_000, format: 'm_ss' } },
+    }),
+    [],
+  )
+})
+
+test('a countdown with no time to count to is refused, in words', () => {
+  const problems = manifestMod.validateItemData(TIMER_FIELD, {
+    starts_in: { timer: { kind: 'countdown', format: 'm_ss' } },
+  })
+  // Without one it counts to now and sits at zero, which looks exactly like a
+  // graphic that has broken.
+  assert.match(problems[0], /needs a time to count to/)
+})
+
+test('a clock needs no time to count to', () => {
+  assert.deepEqual(
+    manifestMod.validateItemData(TIMER_FIELD, {
+      starts_in: { timer: { kind: 'clock', format: 'h_mm_am_pm' } },
+    }),
+    [],
+  )
+})
+
+test('a kind or a format the node has no case for is named', () => {
+  assert.match(
+    manifestMod.validateItemData(TIMER_FIELD, {
+      starts_in: { timer: { kind: 'sundial', at: 1, format: 'm_ss' } },
+    })[0],
+    /is not a kind of timer/,
+  )
+  assert.match(
+    manifestMod.validateItemData(TIMER_FIELD, {
+      starts_in: { timer: { kind: 'countdown', at: 1, format: '%M:%S' } },
+    })[0],
+    /is not a timer format/,
+  )
+})
+
+test('a timer field will not take a plain string', () => {
+  // The number is the node's to compute; a string here would be a frozen one.
+  assert.match(manifestMod.validateItemData(TIMER_FIELD, { starts_in: '4:32' })[0], /must be a timer/)
+})
+
+test('a timer reaches the wire as a declaration, never as a number', async () => {
+  const { toWireData } = await import('./assignment.js')
+  const spec = { kind: 'countdown', at: 1_755_691_200_000, format: 'm_ss' }
+  assert.deepEqual(toWireData({ starts_in: { timer: spec } }), { starts_in: { Timer: spec } })
+  // And the rest of the closed set still maps as it did.
+  assert.deepEqual(
+    toWireData({ a: 'x', b: 2, c: true, d: 'blake3:' + 'a'.repeat(64) }),
+    {
+      a: { Text: 'x' },
+      b: { Number: 2 },
+      c: { Bool: true },
+      d: { Asset: 'blake3:' + 'a'.repeat(64) },
+    },
+  )
+})
+
+// ---------------------------------------------------------------------------
 // Ids
 // ---------------------------------------------------------------------------
 

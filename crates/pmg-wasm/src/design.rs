@@ -382,6 +382,13 @@ pub fn add_mask(armed: &Armed, parent: Option<&str>) -> Result<(String, String),
     Ok((id, edited_json(doc)?))
 }
 
+/// Change what kind of value a field holds.
+pub fn set_field_type(armed: &Armed, key: &str, ty: &str) -> Result<String, String> {
+    let mut doc = armed.doc.clone();
+    interact::apply_set_field_type(&mut doc, key, ty)?;
+    edited_json(doc)
+}
+
 /// Delete a node and everything inside it. The root is refused with a
 /// sentence.
 pub fn delete_node(armed: &Armed, id: &str) -> Result<String, String> {

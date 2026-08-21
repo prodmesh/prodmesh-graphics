@@ -1087,7 +1087,9 @@ function FieldsEditor({
   onEdit: (doc: Record<string, unknown>) => void
 }) {
   const fields =
-    (doc?.fields as { key: string; label: string; sample?: string; required?: boolean }[] | undefined) ?? []
+    (doc?.fields as
+      | { key: string; type?: string; label: string; sample?: string; required?: boolean }[]
+      | undefined) ?? []
   const [newKey, setNewKey] = useState('')
   const [problem, setProblem] = useState<string | null>(null)
 
@@ -1143,6 +1145,25 @@ function FieldsEditor({
             </button>
           </div>
           <div className="design-console__size">
+            <FormGroup label="Kind">
+              {/* The contract every Item binds against, so it is its own
+                  control rather than part of the label row. A `timer` is the
+                  one whose value an operator does not type: the node computes
+                  it from its own clock (ADR 0022). */}
+              <select
+                value={f.type ?? 'text'}
+                aria-label={`Field ${f.key} kind`}
+                onChange={(e) => run((s) => s.setFieldType(f.key, e.target.value))}
+              >
+                <option value="text">Text</option>
+                <option value="number">Number</option>
+                <option value="bool">Yes / no</option>
+                <option value="image">Picture</option>
+                <option value="video">Clip</option>
+                <option value="color">Colour</option>
+                <option value="timer">Timer — a countdown or a clock</option>
+              </select>
+            </FormGroup>
             <FormGroup label="Label">
               <input
                 key={`l:${f.key}:${f.label}`}

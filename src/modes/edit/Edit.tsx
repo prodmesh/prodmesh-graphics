@@ -60,6 +60,13 @@ type Field = {
   options?: string[]
 }
 
+/** The timer declaration an Item stores — mirrors `pmg_scene::timer::TimerSpec`. */
+type TimerSpec = {
+  kind: 'clock' | 'countdown' | 'countup' | 'elapsed'
+  at?: number
+  format: 'hh_mm_ss' | 'h_mm_ss' | 'mm_ss' | 'm_ss' | 'hh_mm' | 'h_mm' | 'h_mm_am_pm'
+}
+
 type TemplateSummary = { id: string; name: string; head_rev: string | null; revisions: number }
 type TemplateDetail = { id: string; name: string; head_rev: string | null; head: { manifest: { fields: Field[] } } | null }
 type PlaylistSummary = { id: string; name: string; mode: string; items: number }
@@ -772,8 +779,18 @@ function ItemEditor({
   const fields = detail?.head?.manifest?.fields ?? []
 
   const [label, setLabel] = useState(item?.label ?? '')
+  // Form state is strings, one shape for every field. A timer's value is the
+  // one object in an Item's data, so it rides as its own JSON and `coerce`
+  // parses it back on save — `String(v)` on it would store the literal text
+  // "[object Object]", which is exactly the sort of thing that gets found on a
+  // Sunday.
   const [data, setData] = useState<Record<string, string>>(
-    Object.fromEntries(Object.entries(item?.data ?? {}).map(([k, v]) => [k, String(v)])),
+    Object.fromEntries(
+      Object.entries(item?.data ?? {}).map(([k, v]) => [
+        k,
+        v !== null && typeof v === 'object' ? JSON.stringify(v) : String(v),
+      ]),
+    ),
   )
   // The outputs an operator can actually pick. Read from the node rather than
   // typed, because a layer name that does not exist on the output is a cue the
@@ -916,6 +933,8 @@ function FieldInput({
         // is the content address — the same identity the node stages by, so
         // choosing here IS choosing what plays.
         <MediaPicker kind={field.type} value={value} onChange={onChange} />
+      ) : field.type === 'timer' ? (
+        <TimerInput value={value} onChange={onChange} />
       ) : field.type === 'bool' ? (
         <input type="checkbox" checked={value === 'true'} onChange={(e) => onChange(String(e.target.checked))} />
       ) : field.type === 'enum' ? (
@@ -934,6 +953,78 @@ function FieldInput({
         />
       )}
     </FormGroup>
+  )
+}
+
+/**
+ * A timer, which is a DECLARATION rather than a value (ADR 0022).
+ *
+ * The node computes the number from its own clock, so what an operator sets
+ * here is what it counts and how it reads — never the number itself. The form
+ * state stays a JSON string like every other field's, and `coerce` parses it on
+ * the way out; that keeps one shape for the whole Item.
+ */
+function TimerInput({ value, onChange }: { value: string; onChange: (v: string) => void }) {
+  const spec = (() => {
+    try {
+      const p = JSON.parse(value || '{}') as { timer?: TimerSpec }
+      return p.timer ?? null
+    } catch {
+      return null
+    }
+  })()
+  const kind = spec?.kind ?? 'countdown'
+  const format = spec?.format ?? 'm_ss'
+  const at = spec?.at ?? null
+
+  const set = (next: Partial<TimerSpec>) => {
+    const merged: TimerSpec = { kind, format, ...(at != null ? { at } : {}), ...next }
+    // A clock and an elapsed timer count from something other than an instant,
+    // so carrying one would be a field nobody set and nobody can see.
+    if (merged.kind === 'clock' || merged.kind === 'elapsed') delete merged.at
+    onChange(JSON.stringify({ timer: merged }))
+  }
+
+  // <input type="datetime-local"> speaks local time with no zone; the
+  // declaration stores UTC milliseconds, so the two are converted here and
+  // nowhere else.
+  const localValue = at == null ? '' : new Date(at - new Date(at).getTimezoneOffset() * 60000).toISOString().slice(0, 16)
+
+  return (
+    <div className="timer">
+      <select value={kind} aria-label="Timer kind" onChange={(e) => set({ kind: e.target.value as TimerSpec['kind'] })}>
+        <option value="countdown">Counts down to a time</option>
+        <option value="countup">Counts up from a time</option>
+        <option value="clock">Shows the time of day</option>
+        <option value="elapsed">Counts up from the take</option>
+      </select>
+      {kind === 'countdown' || kind === 'countup' ? (
+        <input
+          type="datetime-local"
+          aria-label="Timer target time"
+          value={localValue}
+          onChange={(e) => {
+            const ms = e.target.value ? new Date(e.target.value).getTime() : null
+            set(ms != null && Number.isFinite(ms) ? { at: ms } : {})
+          }}
+        />
+      ) : null}
+      <select value={format} aria-label="Timer format" onChange={(e) => set({ format: e.target.value as TimerSpec['format'] })}>
+        <option value="m_ss">4:32</option>
+        <option value="mm_ss">04:32</option>
+        <option value="h_mm_ss">1:04:32</option>
+        <option value="hh_mm_ss">01:04:32</option>
+        <option value="h_mm">10:05</option>
+        <option value="hh_mm">10:05, padded</option>
+        <option value="h_mm_am_pm">10:05 AM</option>
+      </select>
+      {kind === 'countdown' && at == null ? (
+        <p className="edit-console__dim">
+          Pick the time it counts to. Without one it counts to now and sits at zero, which
+          looks exactly like a graphic that has broken.
+        </p>
+      ) : null}
+    </div>
   )
 }
 
@@ -973,7 +1064,16 @@ function coerce(fields: Field[], data: Record<string, string>) {
     if (raw == null || raw === '') continue
     if (f.type === 'number') out[f.key] = Number(raw)
     else if (f.type === 'bool') out[f.key] = raw === 'true'
-    else out[f.key] = raw
+    else if (f.type === 'timer') {
+      // The one field whose value is an object. A malformed one is dropped
+      // rather than sent: the server would refuse it anyway, and refusing here
+      // means the message names the field instead of the JSON.
+      try {
+        out[f.key] = JSON.parse(raw) as unknown
+      } catch {
+        continue
+      }
+    } else out[f.key] = raw
   }
   return out
 }

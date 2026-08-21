@@ -1668,6 +1668,41 @@ pub fn apply_add_field(doc: &mut SceneDoc, key: &str) -> Result<(), String> {
     Ok(())
 }
 
+/// Change what KIND of value a field holds.
+///
+/// Not part of `apply_update_field`, because it is a different act: label and
+/// sample are presentation, and the type is the contract every Item already
+/// bound against. Changing it invalidates values operators typed, which is why
+/// it is its own call an editor can warn about.
+///
+/// Only the types an editor can offer are accepted; an unknown one is a typo,
+/// not a forward-compatible document (the `Other` escape exists for READING
+/// documents from a newer writer, §3.4).
+pub fn apply_set_field_type(doc: &mut SceneDoc, key: &str, ty: &str) -> Result<(), String> {
+    use pmg_scene::doc::FieldType;
+    let parsed = match ty {
+        "text" => FieldType::Text,
+        "number" => FieldType::Number,
+        "bool" => FieldType::Bool,
+        "image" => FieldType::Image,
+        "video" => FieldType::Video,
+        "color" => FieldType::Color,
+        "enum" => FieldType::Enum,
+        "timer" => FieldType::Timer,
+        other => return Err(format!("no field type called {other}")),
+    };
+    let f = doc
+        .fields
+        .iter_mut()
+        .find(|f| f.key == key)
+        .ok_or_else(|| format!("no field {key}"))?;
+    f.ty = parsed;
+    // A timer is a 1.4 feature, and the editor that introduces one declares the
+    // version — the same rule fields and gradients follow.
+    doc.format_version = pmg_scene::migrate::CURRENT;
+    Ok(())
+}
+
 /// Edit a field's presentation: label, sample, required. Never the key — the
 /// key is what Items and bindings address, and renaming it would orphan both
 /// silently. A different key is a different field.
