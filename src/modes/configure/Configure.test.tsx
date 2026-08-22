@@ -24,7 +24,36 @@ const NODE = {
   api_port: 8520,
   status_url: 'http://10.0.1.42:8520/status',
   preview_url: 'http://10.0.1.42:8521/',
-  capabilities: { max_layers: 8, scene_reader_major: 1, decoders: ['prores'], outputs: [] },
+  capabilities: {
+    max_layers: 8,
+    scene_reader_major: 1,
+    decoders: ['prores'],
+    // What the node's own probe found (ADR 0024). This stood empty for four
+    // milestones, so Configure's device pickers offered "no card reported" on
+    // a machine with eight connectors in it.
+    outputs: [
+      {
+        device: 'DeckLink Quad (1)',
+        kind: 'decklink',
+        index: 0,
+        modes: ['1080p59.94', '1080i59.94'],
+        supports_key_fill: false,
+        has_genlock: true,
+        genlock_locked: false,
+        audio_pairs: 8,
+      },
+      {
+        device: 'DeckLink Quad (2)',
+        kind: 'decklink',
+        index: 1,
+        modes: ['1080p59.94', '1080i59.94'],
+        supports_key_fill: true,
+        has_genlock: true,
+        genlock_locked: false,
+        audio_pairs: 8,
+      },
+    ],
+  },
   state: {
     outputs: [
       { id: 'wall', fps: 59.94, late_frames: 3, layers: [{ name: 'Graphics', occupant: null }] },
@@ -150,4 +179,40 @@ test('a PIN under four digits does not offer the button', async () => {
   fireEvent.change(screen.getByLabelText('New username'), { target: { value: 'dan' } })
   fireEvent.change(screen.getByLabelText('New user PIN'), { target: { value: '12' } })
   expect((screen.getByRole('button', { name: 'Add user' }) as HTMLButtonElement).disabled).toBe(true)
+})
+
+/**
+ * The output editor is driven by what the NODE reports, and for four
+ * milestones the node reported nothing: `capabilities()` returned an empty
+ * list behind a comment saying a real probe would land later. Configure offered
+ * "no card reported" on a machine with a Quad 2 in it.
+ */
+test('the device pickers come from the node’s own probe, and the modes come from the connector', async () => {
+  await paint()
+  await screen.findByText('booth-1')
+  // Diagnostics and Output hardware are both folded away — this is for when
+  // something is wrong, not for every glance at the page.
+  for (const d of document.querySelectorAll('details.cfg-console__diag')) {
+    ;(d as HTMLDetailsElement).open = true
+  }
+  await act(async () => {})
+
+  await act(async () => {
+    fireEvent.change(screen.getByLabelText(/backend/), { target: { value: 'decklink' } })
+  })
+
+  const fill = (await screen.findByLabelText('Output wall device')) as HTMLSelectElement
+  expect([...fill.options].map((o) => o.textContent)).toEqual([
+    'DeckLink Quad (1) · genlock',
+    'DeckLink Quad (2) · key+fill · genlock',
+  ])
+
+  // Only what THIS connector says it can do. Offering a mode the card refuses
+  // is a choice that fails silently until the output is armed.
+  const mode = screen.getByLabelText('Output wall mode') as HTMLSelectElement
+  expect([...mode.options].map((o) => o.textContent)).toEqual([
+    'Choose a mode',
+    '1080p59.94',
+    '1080i59.94',
+  ])
 })

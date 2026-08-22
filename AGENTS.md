@@ -208,6 +208,14 @@ specifically shaped to avoid. Do not re-derive them.
   real check is `npm run build`, which runs `tsc -b` across the references and
   includes the test files. Two type errors reached a rehearsal build this way,
   after `tsc --noEmit` had reported clean several times.
+- **"A real one lands in M2" is a comment, not a plan.** `pmg-node`'s
+  `capabilities()` returned an empty output list behind exactly that note, and
+  four milestones later ADR 0024's Configure editor was built to read from it —
+  so the operator's device picker said "no card reported" on a machine with
+  eight DeckLink connectors, while `pmgctl decklink list` saw all of them. A
+  placeholder that returns *plausible emptiness* cannot fail a test and cannot
+  fail a build; the only thing that finds it is somebody looking for their
+  hardware. Grep for the placeholders before building the UI that consumes one.
 - **A permission boundary with only a server half is invisible until it
   isn't.** `requirePermission` was complete and tested from M2 — and the browser
   sent no station header, no bearer token, and had no sign-in anywhere. Nothing

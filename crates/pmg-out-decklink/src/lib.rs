@@ -49,6 +49,77 @@ pub use decklink_sys::KeyMode;
 /// and starts being a fault. At 59.94 this is about two seconds.
 const MAX_BACKOFFS: u32 = 480;
 
+/// What one DeckLink connector reports about itself.
+///
+/// **Discovered, never configured.** A capability an operator typed in is one
+/// that is wrong the day the card moves, and a DeckLink read through a
+/// mismatched SDK reports defaults rather than errors — so the honest source is
+/// a query, every boot (`docs/INTEGRATION-NOTES.md`).
+#[derive(Debug, Clone, Default)]
+pub struct DeviceCapability {
+    pub index: u32,
+    /// What the driver calls this connector, e.g. `DeckLink Quad (2)`.
+    pub display_name: String,
+    pub model_name: String,
+    /// The physical CARD. Two connectors on one card share a clock (ADR 0011),
+    /// which is what makes a fill+key pair legal; connectors on two cards are
+    /// out of phase and it looks fine until it does not.
+    pub card: i64,
+    pub supports_key_fill: bool,
+    pub has_genlock: bool,
+    pub genlock_locked: bool,
+    pub ref_format: Option<String>,
+    pub audio_channels: u32,
+    pub modes: Vec<String>,
+}
+
+/// Every DeckLink connector this machine has, with what each one can do.
+///
+/// Empty when the SDK is not linked (the stub build CI relies on), when no
+/// driver is loaded, or when the card genuinely is not there. Those are
+/// different situations for a person and the same one for this function; the
+/// node logs which, and `pmgctl decklink list` explains each in full.
+///
+/// Opening a device to read its modes is why this must run BEFORE the node
+/// opens its own outputs. A failure on one connector degrades that connector to
+/// "no modes reported" rather than losing the whole list — a card that answers
+/// seven of eight questions should still offer the seven.
+pub fn probe() -> Vec<DeviceCapability> {
+    let count = match decklink_sys::device_count() {
+        Ok(n) => n,
+        Err(e) => {
+            tracing::info!("no DeckLink devices to report: {e}");
+            return Vec::new();
+        }
+    };
+    (0..count)
+        .filter_map(|i| {
+            let info = decklink_sys::device_info(i)
+                .map_err(|e| tracing::warn!("DeckLink {i} would not describe itself: {e}"))
+                .ok()?;
+            let dev = decklink_sys::Device::open(i).ok();
+            let reference = dev.as_ref().and_then(|d| d.reference());
+            Some(DeviceCapability {
+                index: i as u32,
+                display_name: info.display_name,
+                model_name: info.model_name,
+                // Both ids encode the sub-device in their low bits; the card is
+                // the high part. Measured on a Quad 2: 0x5005_00..03 and
+                // 0x5007_00..03 are two cards of four connectors.
+                card: info.topological_id >> 8,
+                supports_key_fill: info.supports_key_fill,
+                has_genlock: info.has_reference_input,
+                genlock_locked: reference.as_ref().is_some_and(|r| r.locked),
+                ref_format: reference.map(|r| r.format).filter(|f| !f.is_empty()),
+                audio_channels: info.max_audio_channels.max(0) as u32,
+                modes: dev
+                    .map(|d| d.modes().into_iter().map(|m| m.name).collect())
+                    .unwrap_or_default(),
+            })
+        })
+        .collect()
+}
+
 /// An open DeckLink output, optionally with a paired key port.
 pub struct Sender {
     fill: decklink_sys::Output,
@@ -347,4 +418,41 @@ pub fn selftest() -> Result<(), String> {
     // Nothing to check without hardware, and a node with no DeckLink installed
     // must still pass its own selftest — the absence is a deployment fact.
     Ok(())
+}
+
+#[cfg(test)]
+mod probe_tests {
+    use super::*;
+
+    /// The stub build — no vendor SDK — must report an empty list rather than
+    /// failing. That configuration is supported and CI relies on it; a probe
+    /// that panicked without a card would take the node down on every machine
+    /// that has none.
+    #[test]
+    fn probing_without_hardware_is_an_empty_list_not_a_failure() {
+        let found = probe();
+        for d in &found {
+            // Whatever came back has to be usable as an identity: an unnamed
+            // connector in a picker is a row nobody can choose between.
+            assert!(!d.display_name.is_empty(), "a connector must name itself");
+            assert!(d.audio_channels <= 64, "audio channels look like a default, not a report");
+        }
+    }
+
+    /// Connectors on ONE card share a clock (ADR 0011). Grouping is what makes
+    /// a legal fill+key pair identifiable, and grouping on the wrong id invents
+    /// eight single-connector "cards" — measured on a Quad 2, where
+    /// `persistent_id` increments per connector and `topological_id` does not.
+    #[test]
+    fn connectors_are_grouped_by_card_not_by_connector() {
+        let found = probe();
+        if found.len() < 2 {
+            return; // nothing to group; the machine has no multi-port card
+        }
+        let cards: std::collections::BTreeSet<i64> = found.iter().map(|d| d.card).collect();
+        assert!(
+            cards.len() < found.len(),
+            "every connector reported its own card id — grouping is on the wrong field",
+        );
+    }
 }

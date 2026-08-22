@@ -509,11 +509,45 @@ fn main() -> Result<()> {
 /// rather than errors (`docs/INTEGRATION-NOTES.md`), so the honest source is a
 /// query, every boot.
 fn capabilities(_rt: &runtime::Runtime) -> pmg_proto::Capabilities {
+    // The DeckLink probe. This is where Configure's device pickers come from
+    // (ADR 0024) — it stood empty for four milestones behind a comment saying a
+    // real probe would land later, so the operator's editor offered "no card
+    // reported" on a machine with eight connectors in it.
+    //
+    // Runs BEFORE the runtime opens its own outputs: reading a connector's
+    // modes means opening it, and a connector this node is already driving
+    // would refuse.
+    let outputs: Vec<_> = pmg_out_decklink::probe()
+        .into_iter()
+        .map(|d| pmg_proto::OutputCapability {
+            device: d.display_name,
+            kind: "decklink".into(),
+            index: d.index,
+            modes: d.modes,
+            supports_key_fill: d.supports_key_fill,
+            // Which connector pairs with which is NOT reported by the SDK, and
+            // guessing it would let Configure offer a fill+key pair spanning
+            // two cards — out of phase, and it looks fine. The card id travels
+            // instead, and the operator names the key connector.
+            paired_port: None,
+            has_genlock: d.has_genlock,
+            genlock_locked: d.genlock_locked,
+            ref_format: d.ref_format,
+            audio_pairs: d.audio_channels / 2,
+        })
+        .collect();
+    if outputs.is_empty() {
+        // Said out loud in the log, because "no card reported" in a browser
+        // three rooms away is indistinguishable from a cable falling out.
+        tracing::info!("no DeckLink connectors reported — run `pmgctl decklink list` to find out why");
+    } else {
+        tracing::info!(connectors = outputs.len(), "DeckLink capabilities reported");
+    }
     pmg_proto::Capabilities {
-        // NDI has no enumerable hardware; a real DeckLink probe lands with
-        // pmg-out-decklink in M2. Reporting a fabricated output list here would
-        // be worse than reporting none.
-        outputs: Vec::new(),
+        // NDI has no enumerable hardware — a sender is a name, not a port — so
+        // there is nothing to list for it, and a window output is always
+        // available. Neither absence means anything is wrong.
+        outputs,
         gpu: None,
         decoders: Vec::new(),
         max_layers: 8,

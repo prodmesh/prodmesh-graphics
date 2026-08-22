@@ -54,7 +54,19 @@ const PATTERNS: { id: string; label: string; proves: string }[] = [
 ]
 
 type Capabilities = {
-  outputs?: { device: string; kind: string; supports_key_fill: boolean; has_genlock: boolean }[]
+  /** One connector, as the node's own probe found it — never as anyone typed it. */
+  outputs?: {
+    device: string
+    kind: string
+    index?: number
+    /** The display modes this connector reports. Empty before a node connects. */
+    modes?: string[]
+    supports_key_fill: boolean
+    has_genlock: boolean
+    genlock_locked?: boolean
+    ref_format?: string | null
+    audio_pairs?: number
+  }[]
   gpu?: { adapter: string; backend: string } | null
   max_layers?: number
   scene_reader_major?: number
@@ -329,19 +341,38 @@ function OutputHardware({ node }: { node: FullNode }) {
                 </select>
               </FormGroup>
               <FormGroup label="Mode">
+                {/* Only what THIS connector says it can do. The raster still
+                    travels with the name — the node keeps no mode table, and
+                    two tables that must agree is one more than there should be
+                    — but offering a mode the card will refuse at open time is a
+                    choice that fails silently until the output is armed. */}
                 <select
                   value={o.mode ?? ''}
                   aria-label={`Output ${o.id} mode`}
                   onChange={(e) => {
                     const m = MODES.find((x) => x.name === e.target.value)
-                    // The raster travels with the name: the node does not keep
-                    // a table of modes, and two tables that must agree is one
-                    // more than there should be.
                     set(i, m ? { mode: m.name, width: m.width, height: m.height, fps_num: m.fps_num, fps_den: m.fps_den } : { mode: '' })
                   }}
                 >
                   <option value="">Choose a mode</option>
-                  {MODES.map((m) => <option key={m.name} value={m.name}>{m.name}</option>)}
+                  {(() => {
+                    const card = devices[o.device ?? 0]
+                    // Before a node has reported, every mode we know how to
+                    // describe. A picker that empties itself because nothing
+                    // has connected yet reads as broken.
+                    const reported = card?.modes ?? []
+                    const offered = reported.length
+                      ? MODES.filter((m) => reported.includes(m.name))
+                      : MODES
+                    return offered.map((m) => <option key={m.name} value={m.name}>{m.name}</option>)
+                  })()}
+                  {/* A mode already saved that this connector does not offer —
+                      the card was swapped, or the config came from elsewhere.
+                      Kept visible and named, because silently dropping it would
+                      make the field look empty rather than wrong. */}
+                  {o.mode && !MODES.some((m) => m.name === o.mode) ? (
+                    <option value={o.mode}>{o.mode} — not offered by this connector</option>
+                  ) : null}
                 </select>
               </FormGroup>
             </>
