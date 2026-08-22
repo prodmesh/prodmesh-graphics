@@ -218,6 +218,14 @@ specifically shaped to avoid. Do not re-derive them.
   later: it is the half that gets exercised the moment somebody uses the
   feature. Same shape as the footer that said "add a user in Configure" for
   four milestones while no such page existed.
+- **An id that identifies a THING cannot address a PLACE.** The rundown cursor
+  stored an item id, which was exactly right while an Item could appear in a
+  playlist only once. The moment a chorus could come round twice (ADR 0026),
+  `running.findIndex(r => r.id === cursor.item)` found the first one — so
+  advancing past the second chorus jumped backwards to the first, and the rail
+  lit the wrong row. Anything that marks a position needs the position's own
+  id; `next`/`previous` stayed ITEM ids beside it, because their consumers fire
+  cues and a cue names a thing. Two ids for two questions.
 - **A safety guard in `createUser` does not protect rows that predate it.** The
   first user gets the wildcard so that securing a server does not lock it — and
   the rehearsal account, created forty minutes after that landed in the tree by

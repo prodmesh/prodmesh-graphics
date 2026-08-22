@@ -42,7 +42,7 @@ const REV = `blake3:${'0'.repeat(64)}`
 /** Three items, so an order is actually observable. */
 function seed() {
   const d = db.handle()
-  d.exec(`DELETE FROM rundown_cursor; DELETE FROM rundown_playlists; DELETE FROM playlist_items;
+  d.exec(`DELETE FROM rundown_cursor; DELETE FROM rundown_playlists; DELETE FROM playlist_entries;
           DELETE FROM rundowns; DELETE FROM playlists; DELETE FROM items;
           DELETE FROM templates; DELETE FROM template_revisions;`)
   d.prepare(`INSERT INTO templates (id,name,created_at,updated_at) VALUES ('t1','T',0,0)`).run()
@@ -50,20 +50,28 @@ function seed() {
     `INSERT INTO template_revisions (template_rev,template_id,name,min_reader,manifest,published_at)
      VALUES (?, 't1','T',1,'{"fields":[]}',0)`,
   ).run(REV)
-  for (const [id, label] of [['i1', 'Welcome'], ['i2', 'Pastor Dan'], ['i3', 'Closing']]) {
+  // Items belong to a playlist now (ADR 0026); the seed makes the two homes
+  // the service below arranges from.
+  d.prepare(`INSERT INTO playlists (id,name,mode,created_at,updated_at) VALUES ('p1','Welcome','cue',0,0)`).run()
+  d.prepare(`INSERT INTO playlists (id,name,mode,created_at,updated_at) VALUES ('p2','Message','cue',0,0)`).run()
+  for (const [id, label, home] of [
+    ['i1', 'Welcome', 'p1'],
+    ['i2', 'Pastor Dan', 'p1'],
+    ['i3', 'Closing', 'p2'],
+  ]) {
     d.prepare(
-      `INSERT INTO items (id,label,template_id,template_rev,data,destination,created_at,updated_at)
-       VALUES (?, ?, 't1', ?, '{}', '{"layer":"Lower Third"}', 0, 0)`,
-    ).run(id, label, REV)
+      `INSERT INTO items (id,label,template_id,template_rev,data,destination,created_at,updated_at,playlist_id)
+       VALUES (?, ?, 't1', ?, '{}', '{"layer":"Lower Third"}', 0, 0, ?)`,
+    ).run(id, label, REV, home)
   }
 }
 
 beforeEach(seed)
 
 async function service() {
-  const pl = (await req('POST', '/api/playlists', { name: 'Welcome' })).json
+  const pl = { id: 'p1' }
+  const pl2 = { id: 'p2' }
   await req('PUT', `/api/playlists/${pl.id}/items`, { items: ['i1', 'i2'] })
-  const pl2 = (await req('POST', '/api/playlists', { name: 'Message' })).json
   await req('PUT', `/api/playlists/${pl2.id}/items`, { items: ['i3'] })
   const rd = (await req('POST', '/api/rundowns', { name: 'Sunday 09:00' })).json
   await req('PUT', `/api/rundowns/${rd.id}/playlists`, { playlists: [pl.id, pl2.id] })
@@ -133,10 +141,37 @@ test('a playlist cannot reference an item that does not exist', async () => {
   assert.match(r.json.label, /not on this server/)
 })
 
-test('the same item twice in one playlist is refused', async () => {
+/**
+ * The reverse of what this used to assert, and the reverse is the point
+ * (ADR 0026): a chorus that comes round three times is ONE piece of content in
+ * three places, so fixing a typo in it fixes all three.
+ */
+test('the same item twice in one playlist is the point, and each place is its own entry', async () => {
+  const { pl, rd } = await service()
+  const r = await req('PUT', `/api/playlists/${pl.id}/items`, { items: ['i1', 'i2', 'i1'] })
+  assert.equal(r.status, 200)
+  assert.deepEqual(r.json.items.map((i) => i.label), ['Welcome', 'Pastor Dan', 'Welcome'])
+  const entries = r.json.items.map((i) => i.entry_id)
+  assert.equal(new Set(entries).size, 3, 'three places, three entries')
+
+  // And the cursor can tell them apart, which is the whole reason entries
+  // exist: addressed by item, moving on from the second "Welcome" would jump
+  // backwards to the first.
+  const order = rundown.order(rd.id)
+  const secondWelcome = order.findLastIndex((o) => o.id === 'i1')
+  await req('PUT', `/api/rundowns/${rd.id}/cursor`, { entry: order[secondWelcome].entry_id })
+  const c = (await req('GET', `/api/rundowns/${rd.id}/cursor`)).json
+  assert.equal(c.index, secondWelcome)
+  assert.equal(c.item, 'i1')
+})
+
+test('an item from another playlist cannot be arranged into this one', async () => {
   const { pl } = await service()
-  const r = await req('PUT', `/api/playlists/${pl.id}/items`, { items: ['i1', 'i1'] })
+  // Two songs that both say "Verse 1" are two pieces of content; sharing one
+  // between playlists is how a fix to tonight's set silently edits last week's.
+  const r = await req('PUT', `/api/playlists/${pl.id}/items`, { items: ['i1', 'i3'] })
   assert.equal(r.status, 422)
+  assert.match(r.json.label, /belongs to the playlist/)
 })
 
 test('deleting an item removes it from the running order', async () => {
@@ -214,13 +249,32 @@ test('the mode travels with the rundown, because the keyboard depends on it', as
 // the Chorus to go back."* Under time pressure, with the band playing.
 // ---------------------------------------------------------------------------
 
+/** A song's own slides. An Item belongs to one playlist (ADR 0026). */
+function song(name, labels) {
+  const d = db.handle()
+  const pl = d.prepare('SELECT id FROM playlists WHERE name = ?').get(name)
+  const ids = []
+  labels.forEach((label, i) => {
+    const id = `${pl.id}-${i}`
+    d.prepare(
+      `INSERT INTO items (id,label,template_id,template_rev,data,destination,created_at,updated_at,playlist_id)
+       VALUES (?, ?, 't1', ?, '{}', '{"layer":"Lower Third"}', 0, 0, ?)`,
+    ).run(id, label, REV, pl.id)
+    ids.push(id)
+  })
+  return { id: pl.id, items: ids }
+}
+
 test('a playlist entry can name its section, and a bare id list still works', async () => {
-  const pl = (await req('POST', '/api/playlists', { name: 'Song', mode: 'follow' })).json
+  const made = (await req('POST', '/api/playlists', { name: 'Song', mode: 'follow' })).json
+  const pl = song('Song', ['Verse 1', 'Chorus', 'Bridge'])
+  const [i1, i2, i3] = pl.items
+  void made
   const r = await req('PUT', `/api/playlists/${pl.id}/items`, {
     items: [
-      { item: 'i1', section: 'Verse 1' },
-      { item: 'i2', section: 'Chorus 1' },
-      'i3',
+      { item: i1, section: 'Verse 1' },
+      { item: i2, section: 'Chorus 1' },
+      i3,
     ],
   })
   assert.equal(r.status, 200)
@@ -228,12 +282,14 @@ test('a playlist entry can name its section, and a bare id list still works', as
 })
 
 test('jumping to a section lands on its first entry', async () => {
-  const pl = (await req('POST', '/api/playlists', { name: 'Song', mode: 'follow' })).json
+  await req('POST', '/api/playlists', { name: 'Song', mode: 'follow' })
+  const pl = song('Song', ['Verse 1', 'Chorus', 'Chorus again'])
+  const [i1, i2, i3] = pl.items
   await req('PUT', `/api/playlists/${pl.id}/items`, {
     items: [
-      { item: 'i1', section: 'Verse 1' },
-      { item: 'i2', section: 'Chorus 1' },
-      { item: 'i3', section: 'Chorus 1' },
+      { item: i1, section: 'Verse 1' },
+      { item: i2, section: 'Chorus 1' },
+      { item: i3, section: 'Chorus 1' },
     ],
   })
   const rd = (await req('POST', '/api/rundowns', { name: 'Sunday' })).json
@@ -243,7 +299,7 @@ test('jumping to a section lands on its first entry', async () => {
   assert.equal(r.status, 200)
   // The FIRST slide of the chorus, not the last one sung. "Go back to the
   // chorus" means start it again.
-  assert.equal(r.json.item, 'i2')
+  assert.equal(r.json.item, i2)
 })
 
 test('a section this rundown does not have is refused by name', async () => {
@@ -285,4 +341,106 @@ test('deleting a rundown leaves its playlists alone', async () => {
   assert.equal((await req('GET', `/api/playlists/${p.json.id}`)).status, 200)
 
   assert.equal((await req('DELETE', '/api/rundowns/nope')).status, 404)
+})
+
+// ---------------------------------------------------------------------------
+// The library: ownership, copies, moves, tags. ADR 0026.
+
+test('an item is created into a playlist, and lands in its arrangement', async () => {
+  seed()
+  const r = await req('POST', '/api/items', {
+    playlist_id: 'p1',
+    template_id: 't1',
+    template_rev: REV,
+    label: 'Verse 2',
+    data: {},
+    destinations: [{ output: 'lt', layer: 'Lower Third', template_rev: REV, mode: 'auto' }],
+  })
+  assert.equal(r.status, 201, r.json?.label ?? '')
+  const pl = (await req('GET', '/api/playlists/p1')).json
+  // An Item that exists but is nowhere in the order is one somebody has to go
+  // and find.
+  assert.ok(pl.items.some((i) => i.label === 'Verse 2'))
+})
+
+test('an item created into nowhere is refused', async () => {
+  seed()
+  const r = await req('POST', '/api/items', {
+    template_id: 't1',
+    template_rev: REV,
+    label: 'Homeless',
+    data: {},
+    destinations: [{ output: 'lt', layer: 'Lower Third', template_rev: REV, mode: 'auto' }],
+  })
+  assert.equal(r.status, 422)
+  assert.match(r.json.label, /belongs to a playlist/)
+})
+
+test('copying an item makes a SECOND item, and editing one leaves the other alone', async () => {
+  seed()
+  const copy = await req('POST', '/api/items/i1/copy', { playlist_id: 'p2' })
+  assert.equal(copy.status, 201)
+  assert.notEqual(copy.json.id, 'i1')
+
+  await req('PATCH', `/api/items/${copy.json.id}`, { label: 'Welcome (wide)' })
+  // Two songs that both say "Verse 1" are two pieces of content. A shared
+  // instance across playlists is how a fix to tonight's set silently edits
+  // last week's.
+  assert.equal((await req('GET', '/api/items/i1')).json.label, 'Welcome')
+
+  // And it is in the target's arrangement, not floating.
+  assert.ok((await req('GET', '/api/playlists/p2')).json.items.some((i) => i.id === copy.json.id))
+})
+
+test('moving an item takes its places in the arrangement with it', async () => {
+  seed()
+  await req('PUT', '/api/playlists/p1/items', { items: ['i1', 'i2'] })
+  const moved = await req('POST', '/api/items/i2/move', { playlist_id: 'p2' })
+  assert.equal(moved.status, 200)
+
+  const from = (await req('GET', '/api/playlists/p1')).json
+  const to = (await req('GET', '/api/playlists/p2')).json
+  // Leaving entries behind would leave the old playlist pointing at content it
+  // no longer owns.
+  assert.deepEqual(from.items.map((i) => i.id), ['i1'])
+  assert.ok(to.items.some((i) => i.id === 'i2'))
+  assert.deepEqual(to.items.map((i) => i.position), [...to.items.keys()])
+
+  assert.equal((await req('POST', '/api/items/i2/move', { playlist_id: 'p2' })).status, 422)
+})
+
+test('tags are free strings on a playlist, and every one typed is offered back', async () => {
+  seed()
+  const r = await req('PUT', '/api/playlists/p1/tags', { tags: ['Christmas', ' Hymn ', 'Christmas', ''] })
+  assert.equal(r.status, 200)
+  // Trimmed, de-duplicated, and blanks dropped: a tag list that accumulates
+  // "Hymn" and "Hymn " is a filter that quietly misses half its playlists.
+  assert.deepEqual(r.json.tags, ['Christmas', 'Hymn'])
+
+  await req('PUT', '/api/playlists/p2/tags', { tags: ['Hymn'] })
+  assert.deepEqual((await req('GET', '/api/tags')).json.tags, [
+    { tag: 'Christmas', playlists: 1 },
+    { tag: 'Hymn', playlists: 2 },
+  ])
+
+  const lists = (await req('GET', '/api/playlists')).json.playlists
+  assert.deepEqual(lists.find((p) => p.id === 'p1').tags, ['Christmas', 'Hymn'])
+})
+
+test('search finds an item by its label and by what was typed into it', async () => {
+  seed()
+  db.handle()
+    .prepare("UPDATE items SET data = '{\"line\":\"Amazing grace how sweet the sound\"}' WHERE id = 'i2'")
+    .run()
+
+  const byLabel = (await req('GET', '/api/items?q=closing')).json.items
+  assert.deepEqual(byLabel.map((i) => i.id), ['i3'])
+
+  // The question "which song has that line?" is the one a search has to answer;
+  // it is why "All items" could go.
+  const byText = (await req('GET', '/api/items?q=sweet%20the%20sound')).json.items
+  assert.deepEqual(byText.map((i) => i.id), ['i2'])
+  assert.equal(byText[0].playlist_name, 'Welcome')
+
+  assert.deepEqual((await req('GET', '/api/items?playlist=p2')).json.items.map((i) => i.id), ['i3'])
 })

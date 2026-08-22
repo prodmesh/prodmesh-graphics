@@ -25,16 +25,24 @@ const NODE = {
   state: { outputs: [{ id: 'out-0' }] },
 }
 
-const item = (id: string, label: string, section: string | null = null) => ({
+/**
+ * An Item at a PLACE in a playlist. The entry is what identifies the place —
+ * the same Item may sit in several (ADR 0026) — so the fixture carries one and
+ * a test that matched on the item id alone cannot pass by accident.
+ */
+const item = (id: string, label: string, section: string | null = null, entry = `e-${id}`) => ({
   id, take_id: null, label, template_id: 't1', template_rev: 'blake3:aa',
-  data: {}, destination: { layer: 'Lower Third' }, section, updated_at: 0,
+  data: {}, destination: { layer: 'Lower Third' }, section, updated_at: 0, entry_id: entry,
 })
 
 const RUNDOWN = {
   id: 'rd1',
   name: 'Sunday',
   playlists: [{ id: 'p1', name: 'Opening', mode: 'cue', items: [item('i1', 'Welcome'), item('i2', 'Pastor Dan')] }],
-  cursor: { rundown: 'rd1', item: 'i2', index: 1, total: 2, label: 'Pastor Dan', next: null, previous: 'i1' },
+  cursor: {
+    rundown: 'rd1', item: 'i2', entry: 'e-i2', index: 1, total: 2, label: 'Pastor Dan',
+    next: null, previous: 'i1', next_entry: null, previous_entry: 'e-i1',
+  },
 }
 
 /** The fixture's single playlist, so tests can vary its playout mode. */
@@ -288,4 +296,54 @@ describe('jump to a section — the rundown calls this required', () => {
     expect(cue).toBeDefined()
     expect((cue!.body as { item: string }).item).toBe('i2')
   })
+})
+
+/**
+ * A chorus that comes round three times is one Item in three places (ADR 0026).
+ * Everything that marks a place — the cursor, the running numbers, the slide
+ * grid — has to tell them apart, or the second chorus lights up the first.
+ */
+test('a repeated item is three places, and the cursor marks only the one it is on', async () => {
+  const chorus = item('i1', 'Chorus', 'Chorus', 'e-1')
+  // Labelled to suit the shared paint() helper, which waits for this row.
+  const verse = item('i2', 'Pastor Dan', 'Verse 2', 'e-2')
+  const again = { ...item('i1', 'Chorus', 'Chorus', 'e-3') }
+  const before = RUNDOWN.playlists[0]!.items
+  const cursorBefore = { ...RUNDOWN.cursor }
+  RUNDOWN.playlists[0]!.items = [chorus, verse, again]
+  RUNDOWN.cursor = {
+    ...RUNDOWN.cursor,
+    item: 'i1',
+    entry: 'e-3',
+    index: 2,
+    total: 3,
+    label: 'Chorus',
+    previous: 'i2',
+    previous_entry: 'e-2',
+    next: null,
+    next_entry: null,
+  }
+  try {
+    serve()
+    await paint()
+    await screen.findAllByText('Chorus')
+
+    // Three rows, numbered 01 02 03 — a Map keyed by item id would have
+    // collapsed the two choruses into one number, and React would have warned
+    // about duplicate keys besides.
+    const rows = [...document.querySelectorAll('.c-rundownitem')]
+    expect(rows.length).toBe(3)
+    expect(rows.map((r) => r.querySelector('.c-rundownitem__id')?.textContent)).toEqual([
+      '01', '02', '03',
+    ])
+
+    // Exactly one row is armed, and it is the LAST — matching on the item id
+    // would have armed the first chorus instead.
+    const armedIndex = rows.findIndex((r) => r.className.includes('armed'))
+    expect(rows.filter((r) => r.className.includes('armed')).length).toBe(1)
+    expect(armedIndex).toBe(2)
+  } finally {
+    RUNDOWN.playlists[0]!.items = before
+    RUNDOWN.cursor = cursorBefore
+  }
 })

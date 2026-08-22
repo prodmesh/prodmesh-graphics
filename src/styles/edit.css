@@ -240,3 +240,97 @@
   font-size: 12px;
   padding: 0 8px;
 }
+
+/* ---- The library rail: filter, tags, search (ADR 0026) ----------------------
+   "All items" used to be the way in. At a hundred songs of thirty slides it is
+   thousands of rows, which is not a way to find anything. */
+
+.edit-console__filter,
+.edit-console__search,
+.edit-console__tagadd {
+  box-sizing: border-box;
+  height: 28px;
+  border: 0;
+  outline: none;
+  border-radius: var(--pm-radius-4);
+  background: var(--pm-surface-field);
+  color: var(--pm-text-primary);
+  font-family: var(--pm-font-ui);
+  font-size: 12px;
+  padding: 0 10px;
+}
+.edit-console__filter { width: 100%; }
+.edit-console__search { width: 100%; max-width: 520px; height: 34px; font-size: 13px; }
+
+.edit-console__tagfilter { display: flex; flex-wrap: wrap; gap: 4px; }
+.edit-console__tagchip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  border: 0;
+  cursor: pointer;
+  border-radius: var(--pm-radius-pill);
+  background: var(--pm-surface-raised);
+  box-shadow: var(--pm-hairline);
+  color: var(--pm-text-secondary);
+  font-family: var(--pm-font-ui);
+  font-size: 11px;
+  padding: 3px 9px;
+}
+.edit-console__tagchip > span { font-family: var(--pm-font-mono); font-size: 10px; color: var(--pm-text-idle); }
+.edit-console__tagchip:hover { background: var(--pm-surface-hover); }
+.edit-console__tagchip--on {
+  background: var(--pm-state-armed-bg);
+  color: var(--pm-text-primary);
+  box-shadow: var(--pm-ring-armed);
+}
+
+.edit-console__found { display: block; width: 100%; border: 0; background: none; padding: 0; text-align: left; }
+
+/* ---- A playlist's tags ---------------------------------------------------- */
+.edit-console__tags { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin-bottom: 4px; }
+.edit-console__tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  border-radius: var(--pm-radius-pill);
+  background: var(--pm-surface-raised);
+  box-shadow: var(--pm-hairline);
+  color: var(--pm-text-secondary);
+  font-size: 11px;
+  padding: 3px 4px 3px 10px;
+}
+.edit-console__tag button {
+  border: 0;
+  background: none;
+  cursor: pointer;
+  color: var(--pm-text-idle);
+  display: inline-flex;
+  padding: 2px;
+}
+.edit-console__tag button:hover { color: var(--pm-text-primary); }
+.edit-console__tagadd { width: 90px; height: 24px; background: transparent; box-shadow: var(--pm-hairline); }
+.edit-console__tagadd:focus { background: var(--pm-surface-field); }
+
+/* ---- Repeats: one Item in several places ---------------------------------- */
+.edit-console__item-repeat {
+  margin-left: 8px;
+  font-family: var(--pm-font-mono);
+  font-size: 10px;
+  letter-spacing: var(--pm-tracking-caps);
+  text-transform: uppercase;
+  color: var(--pm-state-armed);
+}
+.edit-console__addbtn-n { margin-left: 6px; font-family: var(--pm-font-mono); color: var(--pm-text-idle); }
+.edit-console__copyto {
+  height: 26px;
+  border: 0;
+  outline: none;
+  border-radius: var(--pm-radius-4);
+  background: var(--pm-surface-field);
+  color: var(--pm-text-primary);
+  font-family: var(--pm-font-ui);
+  font-size: 11px;
+  padding: 0 6px;
+}
+.edit-console__list-title--plain { background: none; padding-left: 0; margin-left: 0; }

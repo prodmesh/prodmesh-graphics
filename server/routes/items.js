@@ -141,12 +141,49 @@ function writeDestinations(db, itemId, dests) {
   }
 }
 
+/**
+ * Items, optionally filtered.
+ *
+ * `?playlist=` — one playlist's Items, which is the normal case now that an
+ * Item belongs to one (ADR 0026).
+ * `?q=` — search by label and by the text of any field, across every playlist,
+ * with the playlist named. This is what replaced "All items": a hundred songs
+ * of thirty slides is thousands of rows, and a list that long is not a way to
+ * find anything. A capped result set, because a search that returns everything
+ * has not searched.
+ */
 router.get('/api/items', (req, res) => {
   const db = handle()
-  const rows = req.query.template
-    ? db.prepare('SELECT * FROM items WHERE template_id = ? ORDER BY id').all(req.query.template)
-    : db.prepare('SELECT * FROM items ORDER BY id').all()
-  res.json({ items: rows.map((r) => hydrate(r, db)) })
+  const q = String(req.query.q ?? '').trim().toLowerCase()
+  let rows
+  if (req.query.template) {
+    rows = db.prepare('SELECT * FROM items WHERE template_id = ? ORDER BY id').all(req.query.template)
+  } else if (req.query.playlist) {
+    rows = db.prepare('SELECT * FROM items WHERE playlist_id = ? ORDER BY created_at').all(req.query.playlist)
+  } else {
+    rows = db.prepare('SELECT * FROM items ORDER BY id').all()
+  }
+  if (q) {
+    // Label first, then the values a person actually typed into the Item. The
+    // field KEYS are not searched: matching "title" against every item that has
+    // a title field would bury the one whose title says what was asked for.
+    rows = rows.filter((r) => {
+      if (r.label.toLowerCase().includes(q)) return true
+      try {
+        return Object.values(JSON.parse(r.data)).some((v) => String(v).toLowerCase().includes(q))
+      } catch {
+        return false
+      }
+    })
+    rows = rows.slice(0, 200)
+  }
+  const names = new Map(db.prepare('SELECT id, name FROM playlists').all().map((p) => [p.id, p.name]))
+  res.json({
+    items: rows.map((r) => ({
+      ...hydrate(r, db),
+      playlist_name: r.playlist_id ? (names.get(r.playlist_id) ?? null) : null,
+    })),
+  })
 })
 
 router.get('/api/items/:id', (req, res) => {
@@ -184,10 +221,19 @@ router.post('/api/items', mayEdit, (req, res) => {
     return fail(res, 422, 'validation_failed', problems[0], { problems })
   }
 
+  // An Item belongs to a playlist (ADR 0026). Refused rather than defaulted:
+  // an Item created into nowhere is content that exists and cannot be reached,
+  // which is the state migration 16 had to clean up once already.
+  const playlistId = String(body.playlist_id ?? '').trim()
+  if (!playlistId || !db.prepare('SELECT 1 FROM playlists WHERE id = ?').get(playlistId)) {
+    return fail(res, 422, 'validation_failed', 'An item belongs to a playlist. Choose one to add it to.')
+  }
+
   const id = body.id ?? newId()
   const now = Date.now()
   const row = {
     id,
+    playlist_id: playlistId,
     take_id: body.take_id ?? null,
     label: String(body.label ?? '').trim() || r.name,
     template_id: r.template_id,
@@ -198,10 +244,23 @@ router.post('/api/items', mayEdit, (req, res) => {
     updated_at: now,
   }
   db.prepare(
-    `INSERT INTO items (id, take_id, label, template_id, template_rev, data, destination, created_at, updated_at)
-     VALUES (@id, @take_id, @label, @template_id, @template_rev, @data, @destination, @created_at, @updated_at)`,
+    `INSERT INTO items (id, playlist_id, take_id, label, template_id, template_rev, data, destination,
+                        created_at, updated_at)
+     VALUES (@id, @playlist_id, @take_id, @label, @template_id, @template_rev, @data, @destination,
+             @created_at, @updated_at)`,
   ).run(row)
   writeDestinations(db, id, dests)
+  // A new Item lands at the end of its playlist's arrangement. An Item that
+  // exists but is nowhere in the order is one somebody has to go and find.
+  if (body.arrange !== false) {
+    const next = db
+      .prepare('SELECT COALESCE(MAX(position), -1) + 1 AS n FROM playlist_entries WHERE playlist_id = ?')
+      .get(playlistId).n
+    db.prepare(
+      `INSERT INTO playlist_entries (entry_id, playlist_id, item_id, position, section)
+       VALUES (?, ?, ?, ?, NULL)`,
+    ).run(newId(), playlistId, id, next)
+  }
   // Content changed: nodes whose assignment this touches get the new one NOW,
   // not at their next reconnect. The digest short-circuit keeps this from
   // churning nodes the change does not reach.
@@ -255,6 +314,86 @@ router.patch('/api/items/:id', mayEdit, (req, res) => {
   reofferAll()
   res.json(hydrate(db.prepare('SELECT * FROM items WHERE id = ?').get(cur.id), db))
 })
+
+/**
+ * Copy an Item into another playlist, or move it there.
+ *
+ * A copy is a NEW Item (ADR 0026). Two songs that both say "Verse 1" are two
+ * pieces of content, and a shared instance across playlists is how a fix to
+ * tonight's set silently edits last week's. Sharing is right INSIDE one
+ * playlist — a chorus that comes round three times — and that is repeats, not
+ * this.
+ *
+ * A move takes the Item and its places in the arrangement with it, because
+ * leaving entries behind would leave the old playlist pointing at content it no
+ * longer owns.
+ */
+for (const verb of ['copy', 'move']) {
+  router.post(`/api/items/:id/${verb}`, mayEdit, (req, res) => {
+    const db = handle()
+    const item = db.prepare('SELECT * FROM items WHERE id = ?').get(req.params.id)
+    if (!item) return fail(res, 404, 'not_found', 'There is no item with that id.')
+
+    const to = String(req.body?.playlist_id ?? '').trim()
+    if (!to || !db.prepare('SELECT 1 FROM playlists WHERE id = ?').get(to)) {
+      return fail(res, 422, 'validation_failed', 'Choose a playlist to put it in.')
+    }
+    if (to === item.playlist_id) {
+      return fail(res, 422, 'validation_failed', 'It is already in that playlist.')
+    }
+
+    const now = Date.now()
+    const append = (itemId) => {
+      const next = db
+        .prepare('SELECT COALESCE(MAX(position), -1) + 1 AS n FROM playlist_entries WHERE playlist_id = ?')
+        .get(to).n
+      db.prepare(
+        `INSERT INTO playlist_entries (entry_id, playlist_id, item_id, position, section)
+         VALUES (?, ?, ?, ?, NULL)`,
+      ).run(newId(), to, itemId, next)
+    }
+
+    let result
+    db.transaction(() => {
+      if (verb === 'move') {
+        db.prepare('UPDATE items SET playlist_id = ?, updated_at = ? WHERE id = ?').run(to, now, item.id)
+        db.prepare('UPDATE playlist_entries SET playlist_id = ? WHERE item_id = ?').run(to, item.id)
+        // Positions in the new home are whatever they were in the old one;
+        // renumber so the arrangement stays a dense list.
+        db.prepare(
+          `UPDATE playlist_entries SET position = (
+             SELECT COUNT(*) FROM playlist_entries x
+              WHERE x.playlist_id = playlist_entries.playlist_id
+                AND (x.position < playlist_entries.position
+                     OR (x.position = playlist_entries.position AND x.entry_id < playlist_entries.entry_id))
+           ) WHERE playlist_id = ?`,
+        ).run(to)
+        result = db.prepare('SELECT * FROM items WHERE id = ?').get(item.id)
+      } else {
+        const copy = newId()
+        db.prepare(
+          `INSERT INTO items (id, playlist_id, take_id, label, template_id, template_rev, data,
+                              destination, created_at, updated_at)
+           SELECT ?, ?, NULL, label, template_id, template_rev, data, destination, ?, ?
+             FROM items WHERE id = ?`,
+          // take_id is the integrator-visible alias and it is UNIQUE. A copy is
+          // a different Item and must not answer to the original's name.
+        ).run(copy, to, now, now, item.id)
+        db.prepare(
+          `INSERT INTO item_destinations (item_id, ordinal, node_id, output, layer, template_rev,
+                                          mode, blank, screen_id)
+           SELECT ?, ordinal, node_id, output, layer, template_rev, mode, blank, screen_id
+             FROM item_destinations WHERE item_id = ?`,
+        ).run(copy, item.id)
+        append(copy)
+        result = db.prepare('SELECT * FROM items WHERE id = ?').get(copy)
+      }
+    })()
+
+    reofferAll()
+    res.status(verb === 'copy' ? 201 : 200).json(hydrate(result, db))
+  })
+}
 
 router.delete('/api/items/:id', mayEdit, (req, res) => {
   const info = handle().prepare('DELETE FROM items WHERE id = ?').run(req.params.id)

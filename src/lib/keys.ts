@@ -17,6 +17,12 @@ export const keys = {
 
   items: () => '/api/items',
   item: (id: string) => `/api/items/${id}`,
+  /** Items whose label or typed values contain `q`, across every playlist. */
+  itemSearch: (q: string) => `/api/items?q=${encodeURIComponent(q)}`,
+  /** One playlist's own Items, arranged or not (ADR 0026). */
+  playlistItems: (id: string) => `/api/items?playlist=${id}`,
+  /** Every tag anybody has typed, with how many playlists carry it. */
+  tags: () => '/api/tags',
 
   playlists: () => '/api/playlists',
   playlist: (id: string) => `/api/playlists/${id}`,

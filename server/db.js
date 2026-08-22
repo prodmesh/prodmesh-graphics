@@ -16,6 +16,7 @@
 import Database from 'better-sqlite3'
 import fs from 'node:fs'
 import path from 'node:path'
+import { newId } from './ids.js'
 
 /**
  * The schema version, which is the number of migrations. Derived rather than
@@ -485,6 +486,137 @@ const MIGRATIONS = [
         // A media blob that will not parse is not a reason to fail a migration.
       }
     }
+  },
+
+  // 16 — an Item belongs to ONE playlist, and a playlist may repeat one.
+  //
+  // Two changes that are really one idea, which is why they land together
+  // (ADR 0026).
+  //
+  // **Ownership.** An Item was free-floating and joined to playlists many to
+  // many, so "All items" was the only complete view of the library — and at a
+  // hundred songs of thirty slides each, that view is thousands of rows with
+  // no structure. An Item now belongs to the playlist it was written for.
+  // Copying one into another playlist makes a second Item, which is the honest
+  // answer: two songs that both say "Verse 1" are two pieces of content, and
+  // editing one must not silently change the other.
+  //
+  // **Repeats.** Inside ONE playlist the opposite is true. A chorus that comes
+  // round three times is one piece of content in three places, and fixing a
+  // typo in it must fix all three. The old primary key `(playlist_id,
+  // item_id)` made that impossible to express. Entries get their own id so the
+  // same Item can appear more than once — and the CURSOR moves to entries,
+  // because "the cursor is on the chorus" stops being an answer the moment the
+  // chorus is in the running order twice.
+  (d) => {
+    d.exec(`
+      CREATE TABLE playlist_entries (
+        entry_id    TEXT PRIMARY KEY,
+        playlist_id TEXT NOT NULL REFERENCES playlists(id) ON DELETE CASCADE,
+        item_id     TEXT NOT NULL REFERENCES items(id) ON DELETE CASCADE,
+        position    INTEGER NOT NULL,
+        section     TEXT
+      );
+      CREATE INDEX playlist_entries_order ON playlist_entries(playlist_id, position);
+    `)
+    const entry = d.prepare(
+      `INSERT INTO playlist_entries (entry_id, playlist_id, item_id, position, section)
+       VALUES (?, ?, ?, ?, ?)`,
+    )
+    for (const r of d.prepare('SELECT * FROM playlist_items ORDER BY playlist_id, position').all()) {
+      entry.run(newId(), r.playlist_id, r.item_id, r.position, r.section ?? null)
+    }
+
+    d.exec(`ALTER TABLE items ADD COLUMN playlist_id TEXT REFERENCES playlists(id) ON DELETE CASCADE`)
+
+    // An Item in several playlists becomes several Items — one per playlist,
+    // which is what "belongs to one" MEANS. The first keeps the id, so every
+    // rundown cursor, cue log entry and integrator `take_id` that already names
+    // it still resolves.
+    const copyItem = d.prepare(
+      `INSERT INTO items (id, take_id, label, template_id, template_rev, data, destination,
+                          created_at, updated_at, playlist_id)
+       SELECT ?, NULL, label, template_id, template_rev, data, destination, created_at, ?, ?
+         FROM items WHERE id = ?`,
+    )
+    const copyDests = d.prepare(
+      `INSERT INTO item_destinations (item_id, ordinal, node_id, output, layer, template_rev,
+                                      mode, blank, screen_id)
+       SELECT ?, ordinal, node_id, output, layer, template_rev, mode, blank, screen_id
+         FROM item_destinations WHERE item_id = ?`,
+    )
+    const now = Date.now()
+    for (const item of d.prepare('SELECT id FROM items').all()) {
+      const homes = d
+        .prepare('SELECT DISTINCT playlist_id FROM playlist_entries WHERE item_id = ? ORDER BY playlist_id')
+        .all(item.id)
+        .map((r) => r.playlist_id)
+      if (homes.length === 0) continue
+      d.prepare('UPDATE items SET playlist_id = ? WHERE id = ?').run(homes[0], item.id)
+      for (const other of homes.slice(1)) {
+        const copy = newId()
+        copyItem.run(copy, now, other, item.id)
+        copyDests.run(copy, item.id)
+        d.prepare('UPDATE playlist_entries SET item_id = ? WHERE playlist_id = ? AND item_id = ?')
+          .run(copy, other, item.id)
+      }
+    }
+
+    // An Item in NO playlist has nowhere to live under the new rule, and
+    // deleting somebody's content to satisfy a schema is not a migration. They
+    // go somewhere named, visible, and ordinary.
+    const orphans = d.prepare('SELECT id FROM items WHERE playlist_id IS NULL').all()
+    if (orphans.length) {
+      const unfiled = newId()
+      d.prepare('INSERT INTO playlists (id, name, mode, created_at, updated_at) VALUES (?, ?, ?, ?, ?)')
+        .run(unfiled, 'Unfiled', 'cue', now, now)
+      orphans.forEach((o, i) => {
+        d.prepare('UPDATE items SET playlist_id = ? WHERE id = ?').run(unfiled, o.id)
+        entry.run(newId(), unfiled, o.id, i, null)
+      })
+    }
+
+    // The cursor addresses an ENTRY. With repeats, "the cursor is on item X"
+    // finds the first X — so advancing past the second chorus would jump
+    // backwards to the first.
+    d.exec(`ALTER TABLE rundown_cursor ADD COLUMN entry_id TEXT`)
+    for (const c of d.prepare('SELECT * FROM rundown_cursor').all()) {
+      const found = d
+        .prepare(
+          `SELECT pe.entry_id FROM rundown_playlists rp
+             JOIN playlist_entries pe ON pe.playlist_id = rp.playlist_id
+            WHERE rp.rundown_id = ? AND pe.item_id = ?
+            ORDER BY rp.position, pe.position LIMIT 1`,
+        )
+        .get(c.rundown_id, c.item_id)
+      if (found) {
+        d.prepare('UPDATE rundown_cursor SET entry_id = ? WHERE rundown_id = ?')
+          .run(found.entry_id, c.rundown_id)
+      }
+    }
+
+    d.exec(`DROP TABLE playlist_items`)
+  },
+
+  // 17 — a playlist's tags.
+  //
+  // A hundred songs is a hundred playlists, and a rail of a hundred names is a
+  // scroll. Tags are on the PLAYLIST rather than the Item because that is what
+  // the rail filters: tagging all thirty slides of a song "Christmas" would be
+  // thirty edits saying one thing.
+  //
+  // Free strings, no tag table. A tag list nobody can add to without an admin
+  // screen is a tag list nobody uses; the set is whatever has been typed, and
+  // it is offered back as suggestions.
+  (d) => {
+    d.exec(`
+      CREATE TABLE playlist_tags (
+        playlist_id TEXT NOT NULL REFERENCES playlists(id) ON DELETE CASCADE,
+        tag         TEXT NOT NULL,
+        PRIMARY KEY (playlist_id, tag)
+      );
+      CREATE INDEX playlist_tags_tag ON playlist_tags(tag);
+    `)
   },
 ]
 

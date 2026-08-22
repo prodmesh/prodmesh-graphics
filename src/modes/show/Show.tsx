@@ -161,14 +161,19 @@ function RundownConsole({
   })
 
   const armed = r.at ? (items.find((i) => i.id === r.at!.id) ?? r.at) : null
-  const cursorPlaylist = r.rundown?.playlists.find((p) => p.items.some((i) => i.id === r.cursor?.item))
+  // By ENTRY, not by item: a chorus that comes round three times is in the
+  // running order three times, and matching on the item finds the first one
+  // (ADR 0026).
+  const cursorPlaylist = r.rundown?.playlists.find((p) =>
+    p.items.some((i) => i.entry_id === r.cursor?.entry),
+  )
 
   if (!r.rundown) return null
 
   // A running position per entry, so the rail reads like a cue sheet.
   let position = 0
   const numbered = new Map<string, string>()
-  for (const it of r.running) numbered.set(it.id, String(++position).padStart(2, '0'))
+  for (const it of r.running) numbered.set(it.entry_id, String(++position).padStart(2, '0'))
 
   return (
     <div className="show-console">
@@ -241,12 +246,12 @@ function RundownConsole({
                     trailing={`${p.items.length} items · ${p.mode ?? 'cue'}`}
                   />
                   {p.items.map((it) => {
-                    const atCursor = r.cursor?.item === it.id
+                    const atCursor = r.cursor?.entry === it.entry_id
                     const showing = r.onAir.has(it.id)
                     return (
                       <RundownItem
-                        key={it.id}
-                        id={numbered.get(it.id)}
+                        key={it.entry_id}
+                        id={numbered.get(it.entry_id)}
                         title={it.label}
                         subtitle={it.section ?? undefined}
                         state={showing ? 'air' : atCursor ? 'armed' : 'idle'}
@@ -257,7 +262,7 @@ function RundownConsole({
                               ? { label: r.follow ? 'NEXT' : 'ARMED', tone: 'armed' }
                               : undefined
                         }
-                        onClick={() => r.jumpItem(it.id)}
+                        onClick={() => r.jumpEntry(it.entry_id)}
                       />
                     )
                   })}
@@ -302,17 +307,19 @@ function RundownConsole({
               ) : null}
               <div className="show-console__grid">
                 {cursorPlaylist.items.map((it, n) => {
-                  const cursorIdx = cursorPlaylist.items.findIndex((x) => x.id === r.cursor?.item)
+                  const cursorIdx = cursorPlaylist.items.findIndex(
+                    (x) => x.entry_id === r.cursor?.entry,
+                  )
                   const state = r.onAir.has(it.id)
                     ? 'air'
-                    : r.cursor?.item === it.id
+                    : r.cursor?.entry === it.entry_id
                       ? 'armed'
                       : cursorIdx >= 0 && n < cursorIdx
                         ? 'past'
                         : 'upcoming'
                   return (
                     <SlideTile
-                      key={it.id}
+                      key={it.entry_id}
                       num={String(n + 1).padStart(2, '0')}
                       line1={it.label}
                       line2={it.section ?? undefined}
@@ -325,7 +332,7 @@ function RundownConsole({
                             : undefined
                       }
                       disabled={!node.reachable}
-                      onClick={() => r.jumpItem(it.id)}
+                      onClick={() => r.jumpEntry(it.entry_id)}
                     />
                   )
                 })}

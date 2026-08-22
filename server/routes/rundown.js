@@ -28,6 +28,25 @@ const idsOf = (body, key) =>
 
 router.get('/api/playlists', (_req, res) => res.json({ playlists: rundown.listPlaylists() }))
 
+/** Every tag anybody has typed, with how many playlists carry it. */
+router.get('/api/tags', (_req, res) => res.json({ tags: rundown.listTags() }))
+
+/**
+ * Replace a playlist's tags.
+ *
+ * Free strings and no tag table: a vocabulary nobody can add to without an
+ * admin screen is a vocabulary nobody uses. The set on offer is whatever has
+ * been typed (`GET /api/tags`).
+ */
+router.put('/api/playlists/:id/tags', mayEdit, (req, res) => {
+  if (!rundown.getPlaylist(req.params.id)) {
+    return fail(res, 404, 'not_found', 'There is no playlist with that id.')
+  }
+  const tags = Array.isArray(req.body?.tags) ? req.body.tags : null
+  if (!tags) return fail(res, 422, 'validation_failed', 'Send the tags as a list.')
+  res.json(rundown.setPlaylistTags(req.params.id, tags))
+})
+
 router.get('/api/playlists/:id', (req, res) => {
   const p = rundown.getPlaylist(req.params.id)
   if (!p) return fail(res, 404, 'not_found', 'There is no playlist with that id.')
@@ -85,7 +104,9 @@ router.put('/api/playlists/:id/items', mayEdit, (req, res) => {
   const raw = Array.isArray(req.body?.items) ? req.body.items : null
   if (!raw) return fail(res, 422, 'validation_failed', 'Send the items in the order you want them.')
   const entries = raw.map((e) =>
-    typeof e === 'string' ? { item: e } : { item: e?.item, section: e?.section ?? null },
+    typeof e === 'string'
+      ? { item: e }
+      : { entry: e?.entry ?? null, item: e?.item, section: e?.section ?? null },
   )
   const ids = entries.map((e) => e.item)
   if (ids.some((id) => typeof id !== 'string' || !id)) {
@@ -99,14 +120,35 @@ router.put('/api/playlists/:id/items', mayEdit, (req, res) => {
   if (missing.length) {
     return fail(res, 422, 'validation_failed', `${missing.length} of those items are not on this server.`)
   }
-  if (new Set(ids).size !== ids.length) {
-    // The same item twice in one playlist makes "take next" ambiguous about
-    // where the cursor should land.
-    return fail(res, 422, 'validation_failed', 'An item can only appear once in a playlist.')
+  // The same Item twice is now the POINT (ADR 0026): a chorus that comes round
+  // three times is one piece of content in three places, so a typo is fixed
+  // once. It used to be refused because the cursor was addressed by item and
+  // "take next" had no answer; the cursor addresses an ENTRY now.
+  //
+  // Every Item must belong to THIS playlist. Arranging somebody else's content
+  // into your song is how one edit silently changes two services.
+  const foreign = ids.filter((id) => {
+    const owner = db.prepare('SELECT playlist_id FROM items WHERE id = ?').get(id)?.playlist_id
+    return owner && owner !== req.params.id
+  })
+  if (foreign.length) {
+    return fail(
+      res,
+      422,
+      'validation_failed',
+      'An item belongs to the playlist it was written for. Copy it into this one instead.',
+    )
   }
   res.json(rundown.setPlaylistItems(req.params.id, entries))
 })
 
+/**
+ * Delete a playlist AND the Items it owns (ADR 0026).
+ *
+ * Cascading is right now that an Item belongs to one playlist: leaving its
+ * items behind would leave content nothing can reach. The browser says how
+ * many before it asks.
+ */
 router.delete('/api/playlists/:id', mayEdit, (req, res) => {
   const info = handle().prepare('DELETE FROM playlists WHERE id = ?').run(req.params.id)
   if (!info.changes) return fail(res, 404, 'not_found', 'There is no playlist with that id.')
@@ -205,7 +247,17 @@ router.put('/api/rundowns/:id/cursor', requirePermission('graphics.operate'), (r
     if (!first) {
       return fail(res, 422, 'validation_failed', `This rundown has no section called “${req.body.section}”.`)
     }
-    return res.json(rundown.setCursor(req.params.id, first.id))
+    return res.json(rundown.setCursor(req.params.id, first.entry_id))
+  }
+  // An ENTRY is the unambiguous jump: with repeats, an item id names a place
+  // only when it appears once. Both are accepted — Show clicks an entry, a
+  // hardware surface knows an item — and an item lands on its first entry.
+  if (typeof req.body?.entry === 'string') {
+    const inOrder = rundown.order(req.params.id).some((r) => r.entry_id === req.body.entry)
+    if (!inOrder) {
+      return fail(res, 422, 'validation_failed', 'That entry is not in this rundown.')
+    }
+    return res.json(rundown.setCursor(req.params.id, req.body.entry))
   }
   if (typeof req.body?.item === 'string') {
     const inOrder = rundown.order(req.params.id).some((r) => r.id === req.body.item)
@@ -214,5 +266,5 @@ router.put('/api/rundowns/:id/cursor', requirePermission('graphics.operate'), (r
     }
     return res.json(rundown.setCursor(req.params.id, req.body.item))
   }
-  fail(res, 422, 'validation_failed', 'Send an item or a section to jump to, or a delta to move by.')
+  fail(res, 422, 'validation_failed', 'Send an item, an entry or a section to jump to, or a delta to move by.')
 })

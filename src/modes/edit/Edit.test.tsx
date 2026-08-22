@@ -8,12 +8,36 @@
  */
 
 import { afterEach, beforeEach, expect, test, vi } from 'vitest'
-import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { Edit } from './Edit'
 import { _reset as resetQuery } from '../../lib/useQuery'
 
 const TEMPLATES = [{ id: 'tpl-1', name: 'Lower Third', head_rev: 'blake3:rev' }]
-const PLAYLISTS = [{ id: 'pl-1', name: 'Amazing Grace', items: 0, mode: 'cue' }]
+const PLAYLISTS = [{ id: 'pl-1', name: 'Amazing Grace', items: 2, mode: 'cue', tags: ['Hymn'] }]
+
+const entry = (id: string, label: string, entryId: string) => ({
+  id,
+  entry_id: entryId,
+  take_id: null,
+  label,
+  template_id: 'tpl-1',
+  template_rev: 'blake3:rev',
+  data: {},
+  destination: { layer: 'Lower Third' },
+  destinations: [],
+  section: null,
+  updated_at: 0,
+})
+
+// One song: a verse and a chorus, with the chorus arranged twice (ADR 0026).
+const CHORUS = entry('it-2', 'Chorus', 'e-2')
+const PLAYLIST = {
+  id: 'pl-1',
+  name: 'Amazing Grace',
+  mode: 'cue',
+  tags: ['Hymn'],
+  items: [entry('it-1', 'Verse 1', 'e-1'), CHORUS, { ...CHORUS, entry_id: 'e-3' }],
+}
 
 let rundowns: { id: string; name: string }[]
 let sent: { url: string; method: string; body: unknown }[]
@@ -53,7 +77,10 @@ beforeEach(() => {
         return json({ id: 'rd-3' }, 201)
       }
       if (u === '/api/templates') return json({ templates: TEMPLATES })
-      if (u === '/api/items') return json({ items: [] })
+      if (u.startsWith('/api/items?playlist=')) return json({ items: [PLAYLIST.items[0], CHORUS] })
+      if (u.startsWith('/api/items')) return json({ items: [] })
+      if (u === '/api/tags') return json({ tags: [{ tag: 'Hymn', playlists: 1 }] })
+      if (u === '/api/playlists/pl-1') return json(PLAYLIST)
       if (u === '/api/playlists') return json({ playlists: PLAYLISTS })
       if (u === '/api/rundowns') return json({ rundowns })
       if (u.startsWith('/api/rundowns/')) return json(rundownDetail(u.split('/').pop()!))
@@ -131,9 +158,17 @@ test('deleting a rundown asks first, and says the playlists survive', async () =
   expect(sent.some((c) => c.method === 'DELETE')).toBe(false)
 })
 
+/** An item belongs to a playlist, so a new one needs one open (ADR 0026). */
+const openPlaylist = async () => {
+  // The name is in the rail AND in the rundown's "add a playlist" list.
+  fireEvent.click((await screen.findAllByText('Amazing Grace'))[0]!)
+  await screen.findByLabelText('Playlist name')
+}
+
 test('a destination stacks its controls in one column, one per line', async () => {
   await paint()
-  fireEvent.click(await screen.findByText('New item'))
+  await openPlaylist()
+  fireEvent.click(screen.getByText('New item'))
   await screen.findByText('Where it goes')
 
   // Three selects sharing a 360px inspector gave each about 100px, so "Fires
@@ -147,4 +182,71 @@ test('a destination stacks its controls in one column, one per line', async () =
   // And the remove control left the control row for the card's own header, so
   // it stops competing with a select for horizontal room.
   expect(document.querySelector('.edit-console__dest-head')).toBeTruthy()
+})
+
+// ---------------------------------------------------------------------------
+// The library. ADR 0026.
+
+test('the rail filters by name and by tag, and there is no All items list', async () => {
+  await paint()
+  await screen.findAllByText('Amazing Grace')
+
+  // The list of every Item is gone: at a hundred songs of thirty slides it is
+  // thousands of rows, which is not a way to find anything.
+  expect(screen.queryByText('All items')).toBeNull()
+  expect(screen.getByText('Find an item…')).toBeDefined()
+
+  fireEvent.change(screen.getByLabelText('Filter playlists'), { target: { value: 'nothing' } })
+  await waitFor(() => expect(screen.getByText(/Nothing matches/)).toBeDefined())
+
+  fireEvent.change(screen.getByLabelText('Filter playlists'), { target: { value: 'amaz' } })
+  await waitFor(() => expect(screen.getAllByText('Amazing Grace').length).toBeGreaterThan(0))
+
+  // The tag came from the server's own list of what has been typed. Scoped to
+  // the filter group — the playlist row's meta line names its tags too.
+  const chip = within(screen.getByRole('group', { name: 'Filter by tag' })).getByRole('button')
+  fireEvent.click(chip)
+  expect(chip.getAttribute('aria-pressed')).toBe('true')
+})
+
+test('a repeated item is one item in several places, and each place says so', async () => {
+  await paint()
+  await openPlaylist()
+
+  // Three entries, two of them the same Item — and that is the point: a typo
+  // fixed once is fixed everywhere it appears.
+  const rows = document.querySelectorAll('.edit-console__entry')
+  expect(rows.length).toBe(3)
+  expect(screen.getByText('1 of 2')).toBeDefined()
+  expect(screen.getByText('2 of 2')).toBeDefined()
+
+  // Removing one place leaves the other singing.
+  const removals = screen.getAllByLabelText(/Remove Chorus from the arrangement/)
+  expect(removals.length).toBe(2)
+})
+
+test('a new item needs a playlist, because it belongs to one', async () => {
+  await paint()
+  await screen.findByText('Find an item…')
+  // Nothing is open: an Item created into nowhere is content that exists and
+  // cannot be reached.
+  expect((screen.getByText('New item').closest('button') as HTMLButtonElement).disabled).toBe(true)
+
+  await openPlaylist()
+  expect((screen.getByText('New item').closest('button') as HTMLButtonElement).disabled).toBe(false)
+})
+
+test('the playlist carries the tags, and one can be added by typing it', async () => {
+  await paint()
+  await openPlaylist()
+
+  expect(screen.getByLabelText('Remove tag Hymn')).toBeDefined()
+  const add = screen.getByLabelText('Add a tag')
+  fireEvent.change(add, { target: { value: 'Christmas' } })
+  await act(async () => {
+    fireEvent.keyDown(add, { key: 'Enter' })
+  })
+
+  const put = sent.find((c) => c.method === 'PUT' && c.url.endsWith('/tags'))
+  expect(put?.body).toEqual({ tags: ['Hymn', 'Christmas'] })
 })

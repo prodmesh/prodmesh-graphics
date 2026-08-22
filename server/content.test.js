@@ -176,6 +176,12 @@ beforeEach(() => {
   // from items, screens are referenced BY destinations and reference templates
   // themselves. Items, then screens, then templates.
   d.exec('DELETE FROM items; DELETE FROM screens; DELETE FROM templates; DELETE FROM template_revisions;')
+  // An Item belongs to a playlist (ADR 0026), so the tests need one to put
+  // them in. Fixed id, so every `POST /api/items` below can name it.
+  d.prepare(
+    `INSERT OR REPLACE INTO playlists (id,name,mode,created_at,updated_at)
+     VALUES ('pl-test','Test playlist','cue',0,0)`,
+  ).run()
 })
 
 test('publishing stores the scene opaquely and the manifest as the record', async () => {
@@ -222,6 +228,7 @@ test('a publish whose manifest and bytes disagree is refused', async () => {
 test('an item pins the revision it was created against', async () => {
   const { m } = await publishFixture()
   const made = await req('POST', '/api/items', {
+    playlist_id: 'pl-test',
     template_id: m.template_id,
     label: 'Pastor Dan',
     data: { name: 'Pastor Dan Whitfield', title: 'Lead Pastor' },
@@ -233,11 +240,12 @@ test('an item pins the revision it was created against', async () => {
 test('item data is validated against the pinned schema at save time', async () => {
   const { m } = await publishFixture()
 
-  const missing = await req('POST', '/api/items', { template_id: m.template_id, data: {} })
+  const missing = await req('POST', '/api/items', { playlist_id: 'pl-test', template_id: m.template_id, data: {} })
   assert.equal(missing.status, 422)
   assert.match(missing.json.label, /required/i)
 
   const typo = await req('POST', '/api/items', {
+    playlist_id: 'pl-test',
     template_id: m.template_id,
     data: { name: 'A', tilte: 'typo' },
   })
@@ -247,6 +255,7 @@ test('item data is validated against the pinned schema at save time', async () =
   const nameField = m.fields.find((f) => f.key === 'name')
   if (nameField?.max_len) {
     const long = await req('POST', '/api/items', {
+    playlist_id: 'pl-test',
       template_id: m.template_id,
       data: { name: 'x'.repeat(nameField.max_len + 1) },
     })
@@ -296,6 +305,7 @@ test('an Item can name a screen instead of the wiring, and reads back as the pla
   const { m } = await publishFixture()
   const screen = await makeScreen()
   const created = await req('POST', '/api/items', {
+    playlist_id: 'pl-test',
     label: 'Verse',
     template_id: m.template_id,
     data: { name: 'Pastor Dan', title: 'Lead Pastor' },
@@ -315,6 +325,7 @@ test('moving a screen moves every Item that points at it, with no Item edited', 
   const { m } = await publishFixture()
   const screen = await makeScreen({ name: 'Moving Wall' })
   const created = await req('POST', '/api/items', {
+    playlist_id: 'pl-test',
     label: 'Verse',
     template_id: m.template_id,
     data: { name: 'Pastor Dan', title: 'Lead Pastor' },
@@ -340,6 +351,7 @@ test('a screen supplies the default treatment, and the Item still PINS the revis
   const screen = await makeScreen({ name: 'Treated Wall', template_id: m.template_id })
 
   const created = await req('POST', '/api/items', {
+    playlist_id: 'pl-test',
     label: 'Verse',
     template_id: m.template_id,
     data: { name: 'Pastor Dan', title: 'Lead Pastor' },
@@ -363,6 +375,7 @@ test('deleting a screen Items point at is refused, and the Items are named', asy
   const { m } = await publishFixture()
   const screen = await makeScreen({ name: 'Busy Wall' })
   await req('POST', '/api/items', {
+    playlist_id: 'pl-test',
     label: 'Announcement',
     template_id: m.template_id,
     data: { name: 'Pastor Dan', title: 'Lead Pastor' },
@@ -390,6 +403,7 @@ test('two screens cannot share a name — it is what an operator picks from a li
 test('the wiring stays legal: a destination with no screen still works', async () => {
   const { m } = await publishFixture()
   const created = await req('POST', '/api/items', {
+    playlist_id: 'pl-test',
     label: 'Direct',
     template_id: m.template_id,
     data: { name: 'Pastor Dan', title: 'Lead Pastor' },
@@ -493,6 +507,7 @@ test('ids sort in creation order', () => {
 test('an item created the old way becomes a list of one', async () => {
   const { m } = await publishFixture()
   const made = await req('POST', '/api/items', {
+    playlist_id: 'pl-test',
     template_id: m.template_id,
     data: { name: 'Pastor Dan', title: 'Lead Pastor' },
     destination: { output: 'out-0', layer: 'Lower Third' },
@@ -507,6 +522,7 @@ test('an item created the old way becomes a list of one', async () => {
 test('the same words go to the key feed and to the wall', async () => {
   const { m } = await publishFixture()
   const made = await req('POST', '/api/items', {
+    playlist_id: 'pl-test',
     template_id: m.template_id,
     data: { name: 'Pastor Dan', title: 'Lead Pastor' },
     destinations: [
@@ -533,6 +549,7 @@ test('a blank destination is an instruction, not an absence', async () => {
   // nothing of the Item's data — and must not be confused with a feed that
   // simply failed.
   const made = await req('POST', '/api/items', {
+    playlist_id: 'pl-test',
     template_id: m.template_id,
     data: { name: 'Pastor Dan', title: 'Lead Pastor' },
     destinations: [
@@ -548,6 +565,7 @@ test('a destination can be available on request rather than automatic', async ()
   const { m } = await publishFixture()
   // "Lower thirds always have a full screen version we can take if we need to."
   const made = await req('POST', '/api/items', {
+    playlist_id: 'pl-test',
     template_id: m.template_id,
     data: { name: 'Pastor Dan', title: 'Lead Pastor' },
     destinations: [
@@ -565,6 +583,7 @@ test('a destination can be available on request rather than automatic', async ()
 test('every destination template must accept the data, and the failure names which', async () => {
   const { m } = await publishFixture()
   const bad = await req('POST', '/api/items', {
+    playlist_id: 'pl-test',
     template_id: m.template_id,
     data: { name: 'Pastor Dan', title: 'Lead Pastor' },
     destinations: [
@@ -579,6 +598,7 @@ test('every destination template must accept the data, and the failure names whi
 test('a patch that only changes data does not drop the other destinations', async () => {
   const { m } = await publishFixture()
   const made = await req('POST', '/api/items', {
+    playlist_id: 'pl-test',
     template_id: m.template_id,
     data: { name: 'Pastor Dan', title: 'Lead Pastor' },
     destinations: [
@@ -602,6 +622,7 @@ test('an assignment carries only the destinations this node can serve', async ()
   const asg = await import('./assignment.js')
 
   await req('POST', '/api/items', {
+    playlist_id: 'pl-test',
     id: 'both-feeds',
     template_id: m.template_id,
     data: { name: 'Pastor Dan', title: 'Lead Pastor' },
@@ -611,6 +632,7 @@ test('an assignment carries only the destinations this node can serve', async ()
     ],
   })
   await req('POST', '/api/items', {
+    playlist_id: 'pl-test',
     id: 'wall-only',
     template_id: m.template_id,
     data: { name: 'Wall', title: 'Only' },
@@ -633,6 +655,7 @@ test('a blank destination stages no template', async () => {
   const { m } = await publishFixture()
   const asg = await import('./assignment.js')
   await req('POST', '/api/items', {
+    playlist_id: 'pl-test',
     id: 'blanks-the-wall',
     template_id: m.template_id,
     data: { name: 'Full screen', title: 'Graphic' },
@@ -670,6 +693,7 @@ function insertRevision(rev, manifestPatch = {}) {
 test('update-items moves this template’s pins and leaves other templates’ alone', async () => {
   const { m } = await publishFixture()
   const made = await req('POST', '/api/items', {
+    playlist_id: 'pl-test',
     template_id: m.template_id,
     label: 'Pastor Dan',
     data: { name: 'Pastor Dan Whitfield' },
@@ -710,6 +734,7 @@ test('update-items moves this template’s pins and leaves other templates’ al
 test('an item that cannot fill the new revision is refused by name and stays put', async () => {
   const { m } = await publishFixture()
   const made = await req('POST', '/api/items', {
+    playlist_id: 'pl-test',
     template_id: m.template_id,
     label: 'Pastor Dan',
     data: { name: 'Pastor Dan Whitfield' },
@@ -734,6 +759,7 @@ test('an item that cannot fill the new revision is refused by name and stays put
 test('the revisions listing carries manifests and who is pinned where', async () => {
   const { m } = await publishFixture()
   await req('POST', '/api/items', {
+    playlist_id: 'pl-test',
     template_id: m.template_id,
     label: 'Pastor Dan',
     data: { name: 'Pastor Dan Whitfield' },

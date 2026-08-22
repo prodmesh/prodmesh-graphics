@@ -31,7 +31,7 @@
  */
 
 import { useCallback, useEffect, useState } from 'react'
-import { AlertTriangle, ChevronDown, ChevronUp, FolderPlus, ListOrdered, Pencil, Plus, Trash2, X } from 'lucide-react'
+import { AlertTriangle, ChevronDown, ChevronUp, Copy, CornerUpRight, FolderPlus, Pencil, Plus, Search, Trash2, X } from 'lucide-react'
 import { useQuery, invalidate } from '../../lib/useQuery'
 import { useTopic } from '../../lib/stream'
 import { keys, topics } from '../../lib/keys'
@@ -69,12 +69,13 @@ type TimerSpec = {
 
 type TemplateSummary = { id: string; name: string; head_rev: string | null; revisions: number }
 type TemplateDetail = { id: string; name: string; head_rev: string | null; head: { manifest: { fields: Field[] } } | null }
-type PlaylistSummary = { id: string; name: string; mode: string; items: number }
+type PlaylistSummary = { id: string; name: string; mode: string; items: number; tags?: string[] }
 type PlaylistDetail = {
   id: string
   name: string
   mode: string
-  items: (Item & { section?: string | null })[]
+  tags?: string[]
+  items: Entry[]
 }
 type RundownDetail = { id: string; name: string; playlists: PlaylistDetail[] }
 
@@ -88,18 +89,32 @@ function moved<T>(list: T[], index: number, delta: number): T[] {
   return copy
 }
 
+/** An Item at a place in a playlist. The entry identifies the place. */
+type Entry = Item & { entry_id: string; section?: string | null }
+
 export function Edit() {
   const { data: templates } = useQuery<{ templates: TemplateSummary[] }>(keys.templates())
   const { data: items } = useQuery<{ items: Item[] }>(keys.items())
   const { data: playlists } = useQuery<{ playlists: PlaylistSummary[] }>(keys.playlists())
 
-  const [listSel, setListSel] = useState<string | 'all'>('all')
+  const [listSel, setListSel] = useState<string | 'find'>('find')
   const [editing, setEditing] = useState<string | 'new' | null>(null)
+  const [filter, setFilter] = useState('')
+  const [tag, setTag] = useState<string | null>(null)
 
   const publishable = (templates?.templates ?? []).filter((t) => t.head_rev)
   const all = items?.items ?? []
   const lists = playlists?.playlists ?? []
-  const currentList = listSel !== 'all' && lists.some((p) => p.id === listSel) ? listSel : 'all'
+  const currentList = listSel !== 'find' && lists.some((p) => p.id === listSel) ? listSel : 'find'
+
+  // A hundred songs is a hundred rows. Name match, then tag — both plain, both
+  // instant, and neither of them a mode the operator has to leave.
+  const needle = filter.trim().toLowerCase()
+  const shown = lists.filter(
+    (p) =>
+      (!needle || p.name.toLowerCase().includes(needle)) &&
+      (!tag || (p.tags ?? []).includes(tag)),
+  )
 
   const addPlaylist = useCallback(async () => {
     const p = await post<PlaylistSummary>(keys.playlists(), {
@@ -124,7 +139,11 @@ export function Edit() {
     <div className="edit-console">
       <div className="console__toolbar">
         <div className="console__toolbar-group">
-          <Button onClick={() => setEditing('new')}>
+          <Button
+            disabled={currentList === 'find'}
+            title={currentList === 'find' ? 'Open a playlist first — an item belongs to one' : undefined}
+            onClick={() => setEditing('new')}
+          >
             <Plus size={14} aria-hidden /> New item
           </Button>
           <span className="console__toolbar-note">
@@ -150,41 +169,61 @@ export function Edit() {
             }
           />
           <PanelBody>
+            {/* "All items" used to live here. At a hundred songs of thirty
+                slides each it is thousands of rows, which is not a way to find
+                anything — so the way in is a search, and the rail is the
+                library. */}
             <NavItem
-              title="All items"
-              meta={`${all.length} items`}
-              icon={<ListOrdered size={16} aria-hidden />}
-              active={currentList === 'all'}
-              onClick={() => setListSel('all')}
+              title="Find an item…"
+              meta="across every playlist"
+              icon={<Search size={16} aria-hidden />}
+              active={currentList === 'find'}
+              onClick={() => setListSel('find')}
             />
-            {lists.map((p) => (
+
+            <input
+              className="edit-console__filter"
+              value={filter}
+              placeholder="Filter playlists"
+              aria-label="Filter playlists"
+              onChange={(e) => setFilter(e.target.value)}
+            />
+            <TagFilter picked={tag} onPick={setTag} />
+
+            {shown.map((p) => (
               <NavItem
                 key={p.id}
                 title={p.name}
-                meta={`${p.items} items  ·  ${p.mode}`}
+                meta={[`${p.items} items`, p.mode, ...(p.tags ?? [])].join('  ·  ')}
                 active={currentList === p.id}
                 onClick={() => setListSel(p.id)}
               />
             ))}
+            {lists.length && !shown.length ? (
+              <p className="edit-console__dim">Nothing matches. Clear the filter to see them all.</p>
+            ) : null}
             <RundownRail playlists={lists} />
           </PanelBody>
         </Panel>
 
         <div className="console__center edit-console__center">
-          {currentList === 'all' ? (
-            <AllItems
-              items={all}
+          {currentList === 'find' ? (
+            <FindItems
               templates={publishable}
               editing={editing}
-              onEdit={setEditing}
+              onOpen={(itemId, playlistId) => {
+                setListSel(playlistId)
+                setEditing(itemId)
+              }}
             />
           ) : (
             <PlaylistView
               id={currentList}
-              allItems={all}
               templates={publishable}
+              playlists={lists}
               editing={editing}
               onEdit={setEditing}
+              onGo={setListSel}
             />
           )}
         </div>
@@ -212,6 +251,7 @@ export function Edit() {
                 itemId={editing === 'new' ? null : editing}
                 item={editing === 'new' ? null : (all.find((i) => i.id === editing) ?? null)}
                 templates={publishable}
+                playlistId={currentList === 'find' ? null : currentList}
                 onDone={() => setEditing(null)}
               />
             ) : (
@@ -407,62 +447,259 @@ function RundownRail({ playlists }: { playlists: PlaylistSummary[] }) {
 // ---------------------------------------------------------------------------
 // Centre: every item, or one playlist's ordered entries.
 
-function AllItems({
-  items,
+/**
+ * The tags anybody has typed, as a one-of filter.
+ *
+ * Free strings and no admin screen (ADR 0026): a vocabulary nobody can add to
+ * is a vocabulary nobody uses, so the set on offer is simply what has been
+ * typed on some playlist.
+ */
+function TagFilter({ picked, onPick }: { picked: string | null; onPick: (t: string | null) => void }) {
+  const { data } = useQuery<{ tags: { tag: string; playlists: number }[] }>(keys.tags())
+  const tags = data?.tags ?? []
+  if (!tags.length) return null
+  return (
+    <div className="edit-console__tagfilter" role="group" aria-label="Filter by tag">
+      {tags.map((t) => (
+        <button
+          key={t.tag}
+          type="button"
+          aria-pressed={picked === t.tag}
+          className={
+            picked === t.tag ? 'edit-console__tagchip edit-console__tagchip--on' : 'edit-console__tagchip'
+          }
+          onClick={() => onPick(picked === t.tag ? null : t.tag)}
+        >
+          {t.tag}
+          <span>{t.playlists}</span>
+        </button>
+      ))}
+    </div>
+  )
+}
+
+/**
+ * "Which song has that line?"
+ *
+ * This is what replaced the All items list. A permanent view of every Item is
+ * thousands of rows at the scale this is being loaded to; a search costs
+ * nothing when it is not being used and answers the question the list was
+ * actually being scrolled for. The server searches labels and the values a
+ * person typed, and names the playlist each result lives in.
+ */
+function FindItems({
   templates,
   editing,
-  onEdit,
+  onOpen,
 }: {
-  items: Item[]
   templates: TemplateSummary[]
   editing: string | 'new' | null
-  onEdit: (id: string) => void
+  onOpen: (itemId: string, playlistId: string) => void
 }) {
+  const [q, setQ] = useState('')
+  const [live, setLive] = useState('')
+  useEffect(() => {
+    // Typed, not per keystroke: a search that fires on every letter is a search
+    // that races itself.
+    const t = setTimeout(() => setLive(q.trim()), 200)
+    return () => clearTimeout(t)
+  }, [q])
+
+  const { data } = useQuery<{ items: (Item & { playlist_id?: string; playlist_name?: string })[] }>(
+    live.length >= 2 ? keys.itemSearch(live) : null,
+  )
+  const found = data?.items ?? []
+
   return (
     <div className="edit-console__list">
       <div className="edit-console__list-head">
-        <span className="edit-console__list-title">All items</span>
-        <span className="edit-console__dim">
-          An Item may carry several destinations. The Take fires every ready destination at once.
-        </span>
+        <span className="edit-console__list-title edit-console__list-title--plain">Find an item</span>
       </div>
-      {items.length === 0 ? (
-        <p className="edit-console__dim">Nothing yet.</p>
+      <input
+        className="edit-console__search"
+        autoFocus
+        value={q}
+        placeholder="Words in an item — its name, or anything typed into it"
+        aria-label="Search items"
+        onChange={(e) => setQ(e.target.value)}
+      />
+      {live.length < 2 ? (
+        <p className="edit-console__dim">
+          Type at least two letters. Every playlist is searched, and each result says which one it
+          is in.
+        </p>
+      ) : found.length === 0 ? (
+        <p className="edit-console__dim">Nothing matches “{live}”.</p>
       ) : (
-        items.map((it, i) => (
-          <ItemRow
+        found.map((it) => (
+          <button
             key={it.id}
-            item={it}
-            index={String(i + 1).padStart(2, '0')}
-            templates={templates}
-            selected={editing === it.id}
-            onClick={() => onEdit(it.id)}
-          />
+            type="button"
+            className="edit-console__found"
+            onClick={() => it.playlist_id && onOpen(it.id, it.playlist_id)}
+          >
+            <ItemRow
+              item={it}
+              index={it.playlist_name ?? ''}
+              templates={templates}
+              selected={editing === it.id}
+              onClick={() => it.playlist_id && onOpen(it.id, it.playlist_id)}
+            />
+          </button>
         ))
       )}
     </div>
   )
 }
 
+/**
+ * A playlist's tags, typed as free strings (ADR 0026).
+ *
+ * On the PLAYLIST rather than the Item, because the rail filters songs:
+ * tagging thirty slides "Christmas" would be thirty edits saying one thing.
+ */
+function TagsEditor({ playlist }: { playlist: PlaylistDetail }) {
+  const [adding, setAdding] = useState('')
+  const tags = playlist.tags ?? []
+
+  const commit = async (next: string[]) => {
+    await put(`${keys.playlist(playlist.id)}/tags`, { tags: next })
+    invalidate(keys.playlist(playlist.id))
+    invalidate(keys.playlists())
+    invalidate(keys.tags())
+  }
+
+  return (
+    <div className="edit-console__tags">
+      {tags.map((t) => (
+        <span key={t} className="edit-console__tag">
+          {t}
+          <button
+            type="button"
+            aria-label={`Remove tag ${t}`}
+            onClick={() => void commit(tags.filter((x) => x !== t))}
+          >
+            <X size={11} aria-hidden />
+          </button>
+        </span>
+      ))}
+      <input
+        className="edit-console__tagadd"
+        value={adding}
+        placeholder="+ tag"
+        aria-label="Add a tag"
+        onChange={(e) => setAdding(e.target.value)}
+        onKeyDown={(e) => {
+          if (e.key !== 'Enter') return
+          e.preventDefault()
+          const t = adding.trim()
+          setAdding('')
+          if (t && !tags.includes(t)) void commit([...tags, t])
+        }}
+      />
+    </div>
+  )
+}
+
+/**
+ * Copy this Item into another playlist, or move it there.
+ *
+ * A copy is a NEW Item. Two songs that both say "Verse 1" are two pieces of
+ * content, and sharing one across playlists is how a fix to tonight's set
+ * silently edits last week's (ADR 0026). Sharing belongs INSIDE a playlist,
+ * where it is a repeat.
+ */
+function CopyMove({
+  item,
+  from,
+  playlists,
+  onMoved,
+}: {
+  item: Item
+  from: string
+  playlists: PlaylistSummary[]
+  onMoved: (playlistId: string) => void
+}) {
+  const [open, setOpen] = useState<'copy' | 'move' | null>(null)
+  const others = playlists.filter((p) => p.id !== from)
+  if (!others.length) return null
+
+  const go = async (verb: 'copy' | 'move', to: string) => {
+    await post(`${keys.item(item.id)}/${verb}`, { playlist_id: to })
+    invalidate(keys.playlist(from))
+    invalidate(keys.playlist(to))
+    invalidate(keys.playlistItems(from))
+    invalidate(keys.playlistItems(to))
+    invalidate(keys.playlists())
+    invalidate(keys.items())
+    invalidate(keys.rundowns())
+    setOpen(null)
+    if (verb === 'move') onMoved(to)
+  }
+
+  return (
+    <>
+      <button
+        type="button"
+        className="edit-console__iconbtn"
+        aria-label={`Copy ${item.label} to another playlist`}
+        onClick={() => setOpen(open === 'copy' ? null : 'copy')}
+      >
+        <Copy size={13} aria-hidden />
+      </button>
+      <button
+        type="button"
+        className="edit-console__iconbtn"
+        aria-label={`Move ${item.label} to another playlist`}
+        onClick={() => setOpen(open === 'move' ? null : 'move')}
+      >
+        <CornerUpRight size={13} aria-hidden />
+      </button>
+      {open ? (
+        <select
+          className="edit-console__copyto"
+          value=""
+          autoFocus
+          aria-label={open === 'copy' ? `Copy ${item.label} into` : `Move ${item.label} into`}
+          onChange={(e) => e.target.value && void go(open, e.target.value)}
+          onBlur={() => setOpen(null)}
+        >
+          <option value="">{open === 'copy' ? 'Copy into…' : 'Move into…'}</option>
+          {others.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
+        </select>
+      ) : null}
+    </>
+  )
+}
+
 function PlaylistView({
   id,
-  allItems,
   templates,
+  playlists,
   editing,
   onEdit,
+  onGo,
 }: {
   id: string
-  allItems: Item[]
   templates: TemplateSummary[]
+  playlists: PlaylistSummary[]
   editing: string | 'new' | null
   onEdit: (id: string) => void
+  onGo: (playlistId: string) => void
 }) {
   const { data: playlist } = useQuery<PlaylistDetail>(keys.playlist(id))
+  // The playlist's own Items, arranged or not. A chorus dropped from tonight's
+  // arrangement is still the song's chorus (ADR 0026).
+  const { data: owned } = useQuery<{ items: Item[] }>(keys.playlistItems(id))
   const contents = playlist?.items ?? []
-  const inList = new Set(contents.map((i) => i.id))
+  const library = owned?.items ?? []
+  // How many places each Item occupies, so a repeat is visible as a repeat
+  // rather than as a row somebody may think they are seeing twice by mistake.
+  const occurrences = new Map<string, number>()
+  for (const e of contents) occurrences.set(e.id, (occurrences.get(e.id) ?? 0) + 1)
 
   const save = useCallback(
-    async (entries: { item: string; section?: string | null }[]) => {
+    async (entries: { entry?: string; item: string; section?: string | null }[]) => {
       await put(`${keys.playlist(id)}/items`, { items: entries })
       invalidate(keys.playlist(id))
       invalidate(keys.playlists())
@@ -471,7 +708,11 @@ function PlaylistView({
     [id],
   )
 
-  const entryOf = (it: Item & { section?: string | null }) => ({
+  // An entry keeps its id through a reorder. Minting a new one every time
+  // somebody dragged a row would move the operator's cursor with it, which is
+  // the kind of thing only ever noticed mid-service.
+  const entryOf = (it: Entry) => ({
+    entry: it.entry_id,
     item: it.id,
     section: it.section ?? null,
   })
@@ -542,14 +783,25 @@ function PlaylistView({
         </span>
       </div>
 
+      <TagsEditor playlist={playlist} />
+
       {contents.length === 0 ? (
-        <p className="edit-console__dim">Empty. Add items from the pool below.</p>
+        <p className="edit-console__dim">
+          {library.length
+            ? 'Nothing arranged yet. Put its items in order below.'
+            : 'Empty. Start with New item — an item belongs to the playlist it is written for.'}
+        </p>
       ) : (
         contents.map((it, i) => (
-          <div key={it.id} className="edit-console__entry">
+          <div key={it.entry_id} className="edit-console__entry">
             <ItemRow
               item={it}
               index={String(i + 1).padStart(2, '0')}
+              repeat={
+                (occurrences.get(it.id) ?? 1) > 1
+                  ? `${contents.filter((x, n) => x.id === it.id && n <= i).length} of ${occurrences.get(it.id)}`
+                  : undefined
+              }
               templates={templates}
               selected={editing === it.id}
               onClick={() => onEdit(it.id)}
@@ -567,6 +819,7 @@ function PlaylistView({
                 }}
               />
               <div className="edit-console__entry-btns">
+                <CopyMove item={it} from={id} playlists={playlists} onMoved={onGo} />
                 <button
                   type="button"
                   className="edit-console__iconbtn"
@@ -588,8 +841,11 @@ function PlaylistView({
                 <button
                   type="button"
                   className="edit-console__iconbtn"
-                  aria-label={`Remove ${it.label}`}
-                  onClick={() => void save(contents.filter((x) => x.id !== it.id).map(entryOf))}
+                  aria-label={`Remove ${it.label} from the arrangement`}
+                  // THIS place, not every place: removing the second chorus
+                  // must leave the first one singing. The Item itself survives
+                  // either way — it is still the song's chorus.
+                  onClick={() => void save(contents.filter((_, n) => n !== i).map(entryOf))}
                 >
                   <X size={13} aria-hidden />
                 </button>
@@ -599,22 +855,30 @@ function PlaylistView({
         ))
       )}
 
-      {allItems.filter((it) => !inList.has(it.id)).length ? (
+      {library.length ? (
         <div className="edit-console__pool">
-          <GroupHeader label="Add to this playlist" />
+          {/* This playlist's OWN items — every one of them, including the ones
+              already in the order. Adding one again is how a chorus comes round
+              a second time, and it is the same Item, so a typo fixed once is
+              fixed everywhere it appears (ADR 0026). */}
+          <GroupHeader label="Arrange again" trailing={`${library.length} in this playlist`} />
+          <p className="edit-console__dim">
+            The same item, in another place. Edit it once and every place it appears follows.
+          </p>
           <div className="edit-console__pool-btns">
-            {allItems
-              .filter((it) => !inList.has(it.id))
-              .map((it) => (
-                <button
-                  key={it.id}
-                  type="button"
-                  className="edit-console__addbtn"
-                  onClick={() => void save([...contents.map(entryOf), { item: it.id }])}
-                >
-                  <Plus size={12} aria-hidden /> {it.label}
-                </button>
-              ))}
+            {library.map((it) => (
+              <button
+                key={it.id}
+                type="button"
+                className="edit-console__addbtn"
+                onClick={() => void save([...contents.map(entryOf), { item: it.id }])}
+              >
+                <Plus size={12} aria-hidden /> {it.label}
+                {(occurrences.get(it.id) ?? 0) > 0 ? (
+                  <span className="edit-console__addbtn-n">×{occurrences.get(it.id)}</span>
+                ) : null}
+              </button>
+            ))}
           </div>
         </div>
       ) : null}
@@ -630,10 +894,13 @@ function PlaylistView({
 function ItemRow({
   item,
   index,
+  repeat,
   templates,
   selected,
   onClick,
 }: {
+  /** "2 of 3" when this Item is arranged more than once in this playlist. */
+  repeat?: string
   item: Item
   index: string
   templates: TemplateSummary[]
@@ -653,7 +920,12 @@ function ItemRow({
     >
       <span className="edit-console__item-index">{index}</span>
       <span className="edit-console__item-body">
-        <span className="edit-console__item-title">{item.label}</span>
+        <span className="edit-console__item-title">
+          {item.label}
+          {/* Said out loud, because two identical rows in a list read as a
+              mistake until something says they are the same thing on purpose. */}
+          {repeat ? <span className="edit-console__item-repeat">{repeat}</span> : null}
+        </span>
         <span className="edit-console__item-kind">{template?.name ?? 'unknown template'}</span>
         {dests.map((d, n) => (
           <span key={n} className="edit-console__item-dest">
@@ -912,10 +1184,13 @@ function ItemEditor({
   itemId,
   item,
   templates,
+  playlistId,
   onDone,
 }: {
   itemId: string | null
   item: Item | null
+  /** The playlist a NEW item is written for (ADR 0026). */
+  playlistId: string | null
   templates: TemplateSummary[]
   onDone: () => void
 }) {
@@ -1010,6 +1285,9 @@ function ItemEditor({
     try {
       const body = {
         template_id: templateId,
+        // An Item belongs to the playlist it was written for. Sent on create
+        // only: moving one is its own act, not a side effect of a save.
+        ...(itemId ? {} : { playlist_id: playlistId }),
         label: label || undefined,
         data: coerce(fields, data),
         // Resolved to a REVISION here, because a destination pins the revision
@@ -1029,6 +1307,12 @@ function ItemEditor({
       if (itemId) await patch(keys.item(itemId), body)
       else await post(keys.items(), body)
       invalidate(keys.items())
+      if (playlistId) {
+        invalidate(keys.playlist(playlistId))
+        invalidate(keys.playlistItems(playlistId))
+        invalidate(keys.playlists())
+        invalidate(keys.rundowns())
+      }
       onDone()
     } catch (e) {
       // The server validated against the PINNED revision's schema and answered
@@ -1043,7 +1327,7 @@ function ItemEditor({
     } finally {
       setSaving(false)
     }
-  }, [templateId, label, data, dests, templates, fields, itemId, onDone])
+  }, [templateId, label, data, dests, templates, fields, itemId, playlistId, onDone])
 
   return (
     <form

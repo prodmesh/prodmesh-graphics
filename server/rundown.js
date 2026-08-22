@@ -45,20 +45,35 @@ function reorder(db, table, keyColumn, keyValue, memberColumn, members) {
 }
 
 /**
- * Replace a playlist's entries, each optionally in a named section.
+ * Replace a playlist's entries — its arrangement.
  *
- * Separate from `reorder` because only playlist entries carry a section — a
- * rundown's playlists do not — and widening the generic helper to serve one
- * caller would put a column name it does not own into every table it touches.
+ * Separate from `reorder` because an entry is not a membership: it carries a
+ * section, and the same Item may appear more than once (ADR 0026). That is
+ * what makes a chorus that comes round three times one piece of content in
+ * three places.
+ *
+ * **An entry keeps its id when the caller sends one back.** Regenerating ids
+ * on every reorder would move the operator's cursor every time somebody
+ * dragged a row in Edit, which is the kind of thing that is only ever noticed
+ * mid-service.
  */
-function reorderWithSections(db, playlistId, entries) {
+function reorderEntries(db, playlistId, entries) {
   db.transaction(() => {
-    db.prepare('DELETE FROM playlist_items WHERE playlist_id = ?').run(playlistId)
-    const insert = db.prepare(
-      `INSERT INTO playlist_items (playlist_id, item_id, position, section)
-       VALUES (?, ?, ?, ?)`,
+    const keep = new Set(
+      db
+        .prepare('SELECT entry_id FROM playlist_entries WHERE playlist_id = ?')
+        .all(playlistId)
+        .map((r) => r.entry_id),
     )
-    entries.forEach((e, i) => insert.run(playlistId, e.item, i, e.section ?? null))
+    db.prepare('DELETE FROM playlist_entries WHERE playlist_id = ?').run(playlistId)
+    const insert = db.prepare(
+      `INSERT INTO playlist_entries (entry_id, playlist_id, item_id, position, section)
+       VALUES (?, ?, ?, ?, ?)`,
+    )
+    entries.forEach((e, i) => {
+      const id = e.entry && keep.has(e.entry) ? e.entry : newId()
+      insert.run(id, playlistId, e.item, i, e.section ?? null)
+    })
   })()
 }
 
@@ -70,10 +85,34 @@ export function listPlaylists() {
   const db = handle()
   return db
     .prepare(
-      `SELECT p.*, (SELECT COUNT(*) FROM playlist_items pi WHERE pi.playlist_id = p.id) AS items
+      `SELECT p.*,
+              (SELECT COUNT(*) FROM playlist_entries pe WHERE pe.playlist_id = p.id) AS items,
+              (SELECT GROUP_CONCAT(tag, char(31)) FROM playlist_tags t WHERE t.playlist_id = p.id) AS tags
          FROM playlists p ORDER BY p.updated_at DESC`,
     )
     .all()
+    // Unit-separator joined and split back here: SQLite has no array type, and
+    // a comma would make a tag containing one into two.
+    .map((p) => ({ ...p, tags: p.tags ? p.tags.split('\u001f').sort() : [] }))
+}
+
+/** Every tag anybody has typed, with how many playlists carry it. */
+export function listTags() {
+  return handle()
+    .prepare('SELECT tag, COUNT(*) AS playlists FROM playlist_tags GROUP BY tag ORDER BY tag')
+    .all()
+}
+
+export function setPlaylistTags(id, tags) {
+  const db = handle()
+  const clean = [...new Set(tags.map((t) => String(t).trim()).filter(Boolean))]
+  db.transaction(() => {
+    db.prepare('DELETE FROM playlist_tags WHERE playlist_id = ?').run(id)
+    const ins = db.prepare('INSERT INTO playlist_tags (playlist_id, tag) VALUES (?, ?)')
+    for (const t of clean) ins.run(id, t)
+    db.prepare('UPDATE playlists SET updated_at = ? WHERE id = ?').run(Date.now(), id)
+  })()
+  return getPlaylist(id)
 }
 
 export function getPlaylist(id) {
@@ -82,19 +121,38 @@ export function getPlaylist(id) {
   if (!p) return null
   const items = db
     .prepare(
-      `SELECT i.*, pi.position, pi.section FROM playlist_items pi
-         JOIN items i ON i.id = pi.item_id
-        WHERE pi.playlist_id = ? ORDER BY pi.position`,
+      `SELECT i.*, pe.entry_id, pe.position, pe.section FROM playlist_entries pe
+         JOIN items i ON i.id = pe.item_id
+        WHERE pe.playlist_id = ? ORDER BY pe.position`,
     )
     .all(id)
+  const tags = db
+    .prepare('SELECT tag FROM playlist_tags WHERE playlist_id = ? ORDER BY tag')
+    .all(id)
+    .map((r) => r.tag)
   return {
     ...p,
+    tags,
     items: items.map((i) => ({
       ...i,
       data: JSON.parse(i.data),
       destination: JSON.parse(i.destination),
     })),
   }
+}
+
+/**
+ * Every Item this playlist owns, whether or not the arrangement uses it.
+ *
+ * A chorus dropped from tonight's arrangement is still the song's chorus, and
+ * losing it because nothing currently points at it would make removing a row
+ * a destructive act nobody expects.
+ */
+export function playlistLibrary(id) {
+  return handle()
+    .prepare('SELECT * FROM items WHERE playlist_id = ? ORDER BY created_at')
+    .all(id)
+    .map((i) => ({ ...i, data: JSON.parse(i.data), destination: JSON.parse(i.destination) }))
 }
 
 /**
@@ -131,14 +189,14 @@ export function setPlaylistMode(id, mode) {
   return info.changes ? getPlaylist(id) : null
 }
 
-/** Replace a playlist's contents and order in one go. */
+/** Replace a playlist's arrangement — which Items, in what order, repeats and all. */
 export function setPlaylistItems(id, entries) {
   const db = handle()
   // A bare id list is still accepted: most playlists have no sections, and
   // requiring every caller to wrap ids in objects would be ceremony for the
   // common case.
   const normalised = entries.map((e) => (typeof e === 'string' ? { item: e } : e))
-  reorderWithSections(db, id, normalised)
+  reorderEntries(db, id, normalised)
   db.prepare('UPDATE playlists SET updated_at = ? WHERE id = ?').run(Date.now(), id)
   return getPlaylist(id)
 }
@@ -209,43 +267,80 @@ export function setRundownPlaylists(id, playlistIds) {
 export function order(rundownId) {
   return handle()
     .prepare(
-      `SELECT i.id, i.label, pi.section, pi.playlist_id, p.name AS playlist_name
+      `SELECT pe.entry_id, i.id, i.label, pe.section, pe.playlist_id, p.name AS playlist_name
          FROM rundown_playlists rp
          JOIN playlists p ON p.id = rp.playlist_id
-         JOIN playlist_items pi ON pi.playlist_id = rp.playlist_id
-         JOIN items i ON i.id = pi.item_id
+         JOIN playlist_entries pe ON pe.playlist_id = rp.playlist_id
+         JOIN items i ON i.id = pe.item_id
         WHERE rp.rundown_id = ?
-        ORDER BY rp.position, pi.position`,
+        ORDER BY rp.position, pe.position`,
     )
     .all(rundownId)
 }
 
+/**
+ * Where the operator is, as an ENTRY rather than an Item (ADR 0026).
+ *
+ * With repeats, "the cursor is on the chorus" is not an answer: a chorus that
+ * comes round three times is at three places in the running order, and finding
+ * it by item id finds the first one — so advancing past the second would jump
+ * backwards to the first. The entry is the position; the item is what is there.
+ *
+ * `item` is still reported, because every consumer takes by item and none of
+ * them should have to learn a second identifier to do it.
+ */
 export function getCursor(rundownId) {
   const row = handle()
-    .prepare('SELECT item_id FROM rundown_cursor WHERE rundown_id = ?')
+    .prepare('SELECT entry_id, item_id FROM rundown_cursor WHERE rundown_id = ?')
     .get(rundownId)
   const running = order(rundownId)
-  const itemId = row?.item_id ?? running[0]?.id ?? null
-  const at = running.findIndex((r) => r.id === itemId)
+  // No cursor row at all — nobody has navigated yet — starts at the top.
+  // A cursor that HAS been set and no longer resolves reports -1 rather than
+  // sliding to a neighbour: moving an operator's place without telling them is
+  // worse than saying honestly that the thing they were on is gone.
+  let at = row ? -1 : running.length ? 0 : -1
+  if (row?.entry_id) at = running.findIndex((r) => r.entry_id === row.entry_id)
+  // Falling back to the item covers a cursor written before entries existed,
+  // and an entry rewritten by a reorder that did not send its id back.
+  if (at < 0 && row?.item_id) at = running.findIndex((r) => r.id === row.item_id)
+  const here = at >= 0 ? running[at] : null
   return {
     rundown: rundownId,
-    item: itemId,
+    entry: here?.entry_id ?? null,
+    item: here?.id ?? null,
     index: at,
     total: running.length,
-    playlist: at >= 0 ? running[at].playlist_id : null,
-    label: at >= 0 ? running[at].label : null,
+    playlist: here?.playlist_id ?? null,
+    label: here?.label ?? null,
+    // `next` and `previous` are ITEM ids: every consumer of them fires a cue,
+    // and a cue names an item. The entry variants beside them are where the
+    // cursor would LAND, which is a different question the moment an item is
+    // in the running order twice.
     next: at >= 0 && at + 1 < running.length ? running[at + 1].id : null,
     previous: at > 0 ? running[at - 1].id : null,
+    next_entry: at >= 0 && at + 1 < running.length ? running[at + 1].entry_id : null,
+    previous_entry: at > 0 ? running[at - 1].entry_id : null,
   }
 }
 
-export function setCursor(rundownId, itemId) {
+/**
+ * Put the cursor somewhere. Accepts an entry id or an item id.
+ *
+ * An item id still works because Show takes by item and a GPI surface names
+ * one; it lands on the FIRST entry holding that item, which is the only
+ * defensible reading of an ambiguous instruction.
+ */
+export function setCursor(rundownId, target) {
+  const running = order(rundownId)
+  const found =
+    running.find((r) => r.entry_id === target) ?? running.find((r) => r.id === target) ?? null
   handle()
     .prepare(
-      `INSERT INTO rundown_cursor (rundown_id, item_id, updated_at) VALUES (?, ?, ?)
-       ON CONFLICT(rundown_id) DO UPDATE SET item_id = excluded.item_id, updated_at = excluded.updated_at`,
+      `INSERT INTO rundown_cursor (rundown_id, item_id, entry_id, updated_at) VALUES (?, ?, ?, ?)
+       ON CONFLICT(rundown_id) DO UPDATE SET
+         item_id = excluded.item_id, entry_id = excluded.entry_id, updated_at = excluded.updated_at`,
     )
-    .run(rundownId, itemId, Date.now())
+    .run(rundownId, found?.id ?? target, found?.entry_id ?? null, Date.now())
   const cursor = getCursor(rundownId)
   publish(`rundown:${rundownId}:cursor`, cursor)
   return cursor
@@ -266,7 +361,7 @@ export function moveCursor(rundownId, delta) {
   // Clamped, not wrapped. Falling off the end of a service and landing back at
   // the welcome slide is a worse surprise than a button that does nothing.
   const next = Math.max(0, Math.min(running.length - 1, at + delta))
-  return setCursor(rundownId, running[next].id)
+  return setCursor(rundownId, running[next].entry_id)
 }
 
 export function registerTopics() {

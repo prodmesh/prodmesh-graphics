@@ -28,14 +28,22 @@ export type Cursor = {
   index: number
   total: number
   label: string | null
+  /** WHERE the cursor is. An item id cannot say, once a chorus repeats. */
+  entry: string | null
   next: string | null
   previous: string | null
+  next_entry: string | null
+  previous_entry: string | null
 }
 
 export type Playlist = { id: string; name: string; mode: string; items: SectionedItem[] }
 
-/** An Item as it sits in a playlist, with the section that entry belongs to. */
-export type SectionedItem = Item & { section?: string | null }
+/**
+ * An Item as it sits in a playlist: its ENTRY id, and the section that entry
+ * belongs to. The same Item may sit in several entries — a chorus that comes
+ * round three times — so the entry is what identifies a place (ADR 0026).
+ */
+export type SectionedItem = Item & { entry_id: string; section?: string | null }
 
 export type RundownDetail = {
   id: string
@@ -96,7 +104,7 @@ export function useRundown({
   // operator crosses a boundary mid-service. That is a real cognitive cost and
   // the persistent indicator is the mitigation, not a decoration. It is never
   // a toggle on this screen: mode is a property of the content (ADR 0017).
-  const at = running.find((i) => i.id === cursor?.item)
+  const at = running.find((i) => i.entry_id === cursor?.entry) ?? running.find((i) => i.id === cursor?.item)
   const mode = at?.mode ?? 'cue'
   const known = MODES.includes(mode)
   const follow = known && mode === 'follow'
@@ -115,8 +123,8 @@ export function useRundown({
   )
 
   const moveTo = useCallback(
-    async (itemId: string) => {
-      await put(`${keys.rundown(rundownId)}/cursor`, { item: itemId })
+    async (entryId: string) => {
+      await put(`${keys.rundown(rundownId)}/cursor`, { entry: entryId })
       invalidate(keys.rundown(rundownId))
     },
     [rundownId],
@@ -214,12 +222,15 @@ export function useRundown({
    * and takes nothing. In Follow, navigating IS taking (ADR 0017), so landing
    * on a slide fires it.
    */
-  const jumpItem = useCallback(
-    (itemId: string) => {
-      if (follow) fireAt(itemId)
-      void moveTo(itemId)
+  const jumpEntry = useCallback(
+    (entryId: string) => {
+      // Fire the ITEM at that entry; move the cursor to the ENTRY. Two ids for
+      // two questions — what goes on air, and where the operator now is.
+      const there = running.find((i) => i.entry_id === entryId)
+      if (follow && there) fireAt(there.id)
+      void moveTo(entryId)
     },
-    [follow, fireAt, moveTo],
+    [follow, fireAt, moveTo, running],
   )
 
   /**
@@ -309,6 +320,6 @@ export function useRundown({
     takeNext,
     fireAt,
     jumpSection,
-    jumpItem,
+    jumpEntry,
   }
 }
