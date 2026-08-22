@@ -618,6 +618,42 @@ const MIGRATIONS = [
       CREATE INDEX playlist_tags_tag ON playlist_tags(tag);
     `)
   },
+
+  // 18 — named arrangements (ADR 0027).
+  //
+  // The playlist's own entry order is **Main**: every slide, in the song's
+  // order, with its groups named by `section`. An arrangement is an ordered
+  // list of GROUP NAMES over that — "Chorus, Verse 1, Chorus" — and it holds
+  // no slides of its own.
+  //
+  // That is the whole point. An arrangement that stored slides would be a
+  // second copy of the song, and the first typo would prove it: fixing the
+  // chorus in Main would leave every arrangement still singing the old words.
+  // Naming groups instead means an arrangement follows Main by construction —
+  // add a line to the chorus and every arrangement using it grows one.
+  (d) => {
+    d.exec(`
+      CREATE TABLE arrangements (
+        id          TEXT PRIMARY KEY,
+        playlist_id TEXT NOT NULL REFERENCES playlists(id) ON DELETE CASCADE,
+        name        TEXT NOT NULL,
+        created_at  INTEGER NOT NULL
+      );
+      CREATE INDEX arrangements_playlist ON arrangements(playlist_id, name);
+
+      CREATE TABLE arrangement_groups (
+        arrangement_id TEXT NOT NULL REFERENCES arrangements(id) ON DELETE CASCADE,
+        position       INTEGER NOT NULL,
+        section        TEXT NOT NULL,
+        PRIMARY KEY (arrangement_id, position)
+      );
+
+      -- Which arrangement THIS service wants of THIS song. NULL is Main, which
+      -- is what every existing row means and what most rows will keep meaning.
+      ALTER TABLE rundown_playlists
+        ADD COLUMN arrangement_id TEXT REFERENCES arrangements(id) ON DELETE SET NULL;
+    `)
+  },
 ]
 
 /**

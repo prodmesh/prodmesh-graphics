@@ -31,11 +31,19 @@ const entry = (id: string, label: string, entryId: string) => ({
 
 // One song: a verse and a chorus, with the chorus arranged twice (ADR 0026).
 const CHORUS = entry('it-2', 'Chorus', 'e-2')
+const ARRANGEMENT = { id: 'arr-1', name: 'Short', groups: ['Chorus'] }
 const PLAYLIST = {
   id: 'pl-1',
   name: 'Amazing Grace',
   mode: 'cue',
   tags: ['Hymn'],
+  arrangement: null as string | null,
+  arrangements: [ARRANGEMENT],
+  groups: [
+    { name: 'Verse 1', slides: 1 },
+    { name: 'Chorus', slides: 1 },
+  ],
+  ungrouped: [] as string[],
   items: [entry('it-1', 'Verse 1', 'e-1'), CHORUS, { ...CHORUS, entry_id: 'e-3' }],
 }
 
@@ -80,6 +88,9 @@ beforeEach(() => {
       if (u.startsWith('/api/items?playlist=')) return json({ items: [PLAYLIST.items[0], CHORUS] })
       if (u.startsWith('/api/items')) return json({ items: [] })
       if (u === '/api/tags') return json({ tags: [{ tag: 'Hymn', playlists: 1 }] })
+      if (u.startsWith('/api/playlists/pl-1?arrangement=')) {
+        return json({ ...PLAYLIST, arrangement: 'arr-1', items: [CHORUS] })
+      }
       if (u === '/api/playlists/pl-1') return json(PLAYLIST)
       if (u === '/api/playlists') return json({ playlists: PLAYLISTS })
       if (u === '/api/rundowns') return json({ rundowns })
@@ -249,4 +260,61 @@ test('the playlist carries the tags, and one can be added by typing it', async (
 
   const put = sent.find((c) => c.method === 'PUT' && c.url.endsWith('/tags'))
   expect(put?.body).toEqual({ tags: ['Hymn', 'Christmas'] })
+})
+
+// ---------------------------------------------------------------------------
+// Named arrangements. ADR 0027.
+
+test('a named order is a list of GROUPS, and the slides go read-only', async () => {
+  await paint()
+  await openPlaylist()
+
+  // Main is where slides are edited, so its controls are live.
+  expect((screen.getAllByLabelText(/^Section for /)[0] as HTMLInputElement).disabled).toBe(false)
+
+  await act(async () => {
+    fireEvent.change(screen.getByLabelText('Arrangement'), { target: { value: 'arr-1' } })
+  })
+
+  // The order is groups, not slides: it holds names, which is what makes it
+  // follow Main rather than becoming a second copy of the song.
+  await screen.findByLabelText('Arrangement name')
+  expect(screen.getByRole('list', { name: 'Group order' })).toBeDefined()
+  expect(screen.getByLabelText('Remove Chorus at 1')).toBeDefined()
+
+  // And every way of editing a slide from in here is shut off — editing one
+  // would need this order to own it, and then Main and its arrangements could
+  // disagree about the words.
+  await waitFor(() =>
+    expect((screen.getAllByLabelText(/^Section for /)[0] as HTMLInputElement).disabled).toBe(true),
+  )
+  expect(screen.queryByText('Arrange again')).toBeNull()
+})
+
+test('adding a group sends the whole order, by name', async () => {
+  await paint()
+  await openPlaylist()
+  await act(async () => {
+    fireEvent.change(screen.getByLabelText('Arrangement'), { target: { value: 'arr-1' } })
+  })
+  await screen.findByLabelText('Arrangement name')
+
+  await act(async () => {
+    fireEvent.click(screen.getByRole('button', { name: /Verse 1/ }))
+  })
+  const put = sent.find((c) => c.method === 'PUT' && c.url === '/api/arrangements/arr-1')
+  expect(put?.body).toEqual({ groups: ['Chorus', 'Verse 1'] })
+})
+
+test('a song with no named groups is told why, and offered nothing to press', async () => {
+  const groups = PLAYLIST.groups
+  PLAYLIST.groups = []
+  try {
+    await paint()
+    await openPlaylist()
+    await screen.findByText(/Name the groups in Main/)
+    expect(screen.queryByLabelText('Arrangement')).toBeNull()
+  } finally {
+    PLAYLIST.groups = groups
+  }
 })

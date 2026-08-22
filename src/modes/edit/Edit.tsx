@@ -70,11 +70,19 @@ type TimerSpec = {
 type TemplateSummary = { id: string; name: string; head_rev: string | null; revisions: number }
 type TemplateDetail = { id: string; name: string; head_rev: string | null; head: { manifest: { fields: Field[] } } | null }
 type PlaylistSummary = { id: string; name: string; mode: string; items: number; tags?: string[] }
+type Arrangement = { id: string; name: string; groups: string[] }
 type PlaylistDetail = {
   id: string
   name: string
   mode: string
   tags?: string[]
+  /** Which named order this reading is under. Null is Main (ADR 0027). */
+  arrangement?: string | null
+  arrangements?: Arrangement[]
+  /** The groups Main defines, with how many slides each holds. */
+  groups?: { name: string; slides: number }[]
+  /** Slides in Main that no group contains, so no arrangement can reach them. */
+  ungrouped?: string[]
   items: Entry[]
 }
 type RundownDetail = { id: string; name: string; playlists: PlaylistDetail[] }
@@ -299,14 +307,17 @@ function RundownRail({ playlists }: { playlists: PlaylistSummary[] }) {
   }, [rundowns])
 
   const save = useCallback(
-    async (ids: string[]) => {
+    async (entries: { playlist: string; arrangement: string | null }[]) => {
       if (!rundownId) return
-      await put(`${keys.rundown(rundownId)}/playlists`, { playlists: ids })
+      await put(`${keys.rundown(rundownId)}/playlists`, { playlists: entries })
       invalidate(keys.rundown(rundownId))
       invalidate(keys.rundowns())
     },
     [rundownId],
   )
+
+  /** This service's choice of order for each song (ADR 0027). */
+  const pinned = (p: PlaylistDetail) => ({ playlist: p.id, arrangement: p.arrangement ?? null })
 
   const contents = rundown?.playlists ?? []
   const inRundown = new Set(contents.map((p) => p.id))
@@ -395,35 +406,61 @@ function RundownRail({ playlists }: { playlists: PlaylistSummary[] }) {
           </div>
 
           {contents.map((p, i) => (
-            <div key={p.id} className="edit-console__order-row">
-              <span className="edit-console__order-pos">{String(i + 1).padStart(2, '0')}</span>
-              <span className="edit-console__order-label">{p.name}</span>
-              <button
-                type="button"
-                className="edit-console__iconbtn"
-                aria-label={`Move ${p.name} up`}
-                disabled={i === 0}
-                onClick={() => void save(moved(contents, i, -1).map((x) => x.id))}
-              >
-                <ChevronUp size={13} aria-hidden />
-              </button>
-              <button
-                type="button"
-                className="edit-console__iconbtn"
-                aria-label={`Move ${p.name} down`}
-                disabled={i === contents.length - 1}
-                onClick={() => void save(moved(contents, i, 1).map((x) => x.id))}
-              >
-                <ChevronDown size={13} aria-hidden />
-              </button>
-              <button
-                type="button"
-                className="edit-console__iconbtn"
-                aria-label={`Remove ${p.name}`}
-                onClick={() => void save(contents.filter((x) => x.id !== p.id).map((x) => x.id))}
-              >
-                <X size={13} aria-hidden />
-              </button>
+            <div key={p.id} className="edit-console__order-entry">
+              <div className="edit-console__order-row">
+                <span className="edit-console__order-pos">{String(i + 1).padStart(2, '0')}</span>
+                <span className="edit-console__order-label">{p.name}</span>
+                <button
+                  type="button"
+                  className="edit-console__iconbtn"
+                  aria-label={`Move ${p.name} up`}
+                  disabled={i === 0}
+                  onClick={() => void save(moved(contents, i, -1).map(pinned))}
+                >
+                  <ChevronUp size={13} aria-hidden />
+                </button>
+                <button
+                  type="button"
+                  className="edit-console__iconbtn"
+                  aria-label={`Move ${p.name} down`}
+                  disabled={i === contents.length - 1}
+                  onClick={() => void save(moved(contents, i, 1).map(pinned))}
+                >
+                  <ChevronDown size={13} aria-hidden />
+                </button>
+                <button
+                  type="button"
+                  className="edit-console__iconbtn"
+                  aria-label={`Remove ${p.name}`}
+                  onClick={() => void save(contents.filter((x) => x.id !== p.id).map(pinned))}
+                >
+                  <X size={13} aria-hidden />
+                </button>
+              </div>
+              {/* Which order of this song THIS service wants. Shown only when
+                  the song has more than one — a picker with one option is a
+                  question with one answer (ADR 0027). */}
+              {(p.arrangements ?? []).length ? (
+                <select
+                  className="edit-console__order-arr"
+                  value={p.arrangement ?? ''}
+                  aria-label={`Arrangement of ${p.name}`}
+                  onChange={(e) =>
+                    void save(
+                      contents.map((x) =>
+                        x.id === p.id
+                          ? { playlist: x.id, arrangement: e.target.value || null }
+                          : pinned(x),
+                      ),
+                    )
+                  }
+                >
+                  <option value="">Main</option>
+                  {(p.arrangements ?? []).map((a) => (
+                    <option key={a.id} value={a.id}>{a.name}</option>
+                  ))}
+                </select>
+              ) : null}
             </div>
           ))}
           {playlists
@@ -433,7 +470,7 @@ function RundownRail({ playlists }: { playlists: PlaylistSummary[] }) {
                 key={p.id}
                 type="button"
                 className="edit-console__addbtn"
-                onClick={() => void save([...contents.map((x) => x.id), p.id])}
+                onClick={() => void save([...contents.map(pinned), { playlist: p.id, arrangement: null }])}
               >
                 <Plus size={12} aria-hidden /> {p.name}
               </button>
@@ -548,6 +585,210 @@ function FindItems({
           </button>
         ))
       )}
+    </div>
+  )
+}
+
+/**
+ * Which order of this song is being looked at: Main, or one of its named ones.
+ *
+ * Offered only when Main names its groups. An arrangement over a sermon deck of
+ * nineteen unnamed slides is a control that does nothing, and one line saying
+ * why beats a button that disappoints (ADR 0027).
+ */
+function ArrangementPicker({
+  playlist,
+  picked,
+  onPick,
+}: {
+  playlist: PlaylistDetail
+  picked: string | null
+  onPick: (id: string | null) => void
+}) {
+  const groups = playlist.groups ?? []
+  const list = playlist.arrangements ?? []
+
+  if (!groups.length) {
+    return (
+      <p className="edit-console__dim">
+        Name the groups in Main — a Section on each row — and this song can have named
+        arrangements: an order of those groups, for a service that sings it differently.
+      </p>
+    )
+  }
+
+  const add = async () => {
+    const made = await post<Arrangement>(keys.arrangements(playlist.id), {
+      name: `Arrangement ${list.length + 1}`,
+    })
+    invalidate(keys.playlist(playlist.id))
+    invalidate(keys.arrangements(playlist.id))
+    onPick(made.id)
+  }
+
+  return (
+    <div className="edit-console__arr">
+      <FormGroup label="Order">
+        <select
+          value={picked ?? ''}
+          aria-label="Arrangement"
+          onChange={(e) => onPick(e.target.value || null)}
+        >
+          <option value="">Main — every slide, and where they are edited</option>
+          {list.map((a) => (
+            <option key={a.id} value={a.id}>{a.name}</option>
+          ))}
+        </select>
+      </FormGroup>
+      <button type="button" className="edit-console__addbtn" onClick={() => void add()}>
+        <Plus size={12} aria-hidden /> New arrangement
+      </button>
+    </div>
+  )
+}
+
+/**
+ * A named order: which groups, in what order, how many times.
+ *
+ * **No slide editing here, on purpose.** An arrangement holds group NAMES, not
+ * slides — which is what makes it follow Main by construction: add a line to
+ * the chorus and every arrangement using it grows one. Editing a slide from
+ * inside an arrangement would need it to own that slide, and then the first
+ * typo would leave Main and its arrangements singing different words.
+ */
+function ArrangementEditor({
+  playlist,
+  arrangement,
+  onGone,
+}: {
+  playlist: PlaylistDetail
+  arrangement: Arrangement | null
+  onGone: () => void
+}) {
+  if (!arrangement) return null
+  const groups = playlist.groups ?? []
+  const seq = arrangement.groups
+
+  const commit = async (next: string[]) => {
+    await put(keys.arrangement(arrangement.id), { groups: next })
+    invalidate(keys.playlistUnder(playlist.id, arrangement.id))
+    invalidate(keys.playlist(playlist.id))
+    invalidate(keys.arrangements(playlist.id))
+    invalidate(keys.rundowns())
+  }
+
+  return (
+    <div className="edit-console__arrbody">
+      <div className="edit-console__arrhead">
+        <input
+          className="edit-console__arrname"
+          key={arrangement.name}
+          defaultValue={arrangement.name}
+          aria-label="Arrangement name"
+          onKeyDown={(e) => {
+            if (e.key === 'Enter') (e.target as HTMLInputElement).blur()
+          }}
+          onBlur={(e) => {
+            const name = e.target.value.trim()
+            if (!name || name === arrangement.name) {
+              e.target.value = arrangement.name
+              return
+            }
+            void (async () => {
+              await put(keys.arrangement(arrangement.id), { name })
+              invalidate(keys.playlist(playlist.id))
+              invalidate(keys.arrangements(playlist.id))
+              invalidate(keys.rundowns())
+            })()
+          }}
+        />
+        <button
+          type="button"
+          className="edit-console__iconbtn"
+          aria-label="Delete this arrangement"
+          onClick={() => {
+            if (!window.confirm(`Delete “${arrangement.name}”? The song and its slides stay.`)) return
+            void (async () => {
+              await del(keys.arrangement(arrangement.id))
+              invalidate(keys.playlist(playlist.id))
+              invalidate(keys.arrangements(playlist.id))
+              invalidate(keys.rundowns())
+              onGone()
+            })()
+          }}
+        >
+          <Trash2 size={13} aria-hidden />
+        </button>
+      </div>
+
+      <div className="edit-console__arrseq" role="list" aria-label="Group order">
+        {seq.length === 0 ? (
+          <p className="edit-console__dim">Nothing in this order yet. Add a group below.</p>
+        ) : (
+          seq.map((name, i) => (
+            <div key={`${name}:${i}`} role="listitem" className="edit-console__arrgroup">
+              <span className="edit-console__arrpos">{String(i + 1).padStart(2, '0')}</span>
+              <span className="edit-console__arrlabel">{name}</span>
+              <span className="edit-console__arrslides">
+                {(() => {
+                  const n = groups.find((g) => g.name === name)?.slides ?? 0
+                  // Zero means Main no longer has this group — a rename, most
+                  // likely. Said plainly rather than shown as "0 slides".
+                  return n === 0 ? 'not in Main' : n === 1 ? '1 slide' : `${n} slides`
+                })()}
+              </span>
+              <button
+                type="button"
+                className="edit-console__iconbtn"
+                aria-label={`Move ${name} up`}
+                disabled={i === 0}
+                onClick={() => void commit(moved(seq, i, -1))}
+              >
+                <ChevronUp size={13} aria-hidden />
+              </button>
+              <button
+                type="button"
+                className="edit-console__iconbtn"
+                aria-label={`Move ${name} down`}
+                disabled={i === seq.length - 1}
+                onClick={() => void commit(moved(seq, i, 1))}
+              >
+                <ChevronDown size={13} aria-hidden />
+              </button>
+              <button
+                type="button"
+                className="edit-console__iconbtn"
+                aria-label={`Remove ${name} at ${i + 1}`}
+                onClick={() => void commit(seq.filter((_, n) => n !== i))}
+              >
+                <X size={13} aria-hidden />
+              </button>
+            </div>
+          ))
+        )}
+      </div>
+
+      <div className="edit-console__pool-btns">
+        {groups.map((g) => (
+          <button
+            key={g.name}
+            type="button"
+            className="edit-console__addbtn"
+            onClick={() => void commit([...seq, g.name])}
+          >
+            <Plus size={12} aria-hidden /> {g.name}
+            <span className="edit-console__addbtn-n">{g.slides}</span>
+          </button>
+        ))}
+      </div>
+
+      <p className="edit-console__hint">
+        Slides are edited in <b>Main</b>. This order names groups, so a fix to the chorus reaches
+        every arrangement that sings it.
+        {playlist.ungrouped?.length
+          ? ` ${playlist.ungrouped.length} slide(s) in Main have no group and cannot appear here: ${playlist.ungrouped.join(', ')}.`
+          : ''}
+      </p>
     </div>
   )
 }
@@ -687,7 +928,10 @@ function PlaylistView({
   onEdit: (id: string) => void
   onGo: (playlistId: string) => void
 }) {
-  const { data: playlist } = useQuery<PlaylistDetail>(keys.playlist(id))
+  // Which named order is being looked at. Null is MAIN — the order that owns
+  // the slides, and the only one where they can be edited (ADR 0027).
+  const [arrangement, setArrangement] = useState<string | null>(null)
+  const { data: playlist } = useQuery<PlaylistDetail>(keys.playlistUnder(id, arrangement))
   // The playlist's own Items, arranged or not. A chorus dropped from tonight's
   // arrangement is still the song's chorus (ADR 0026).
   const { data: owned } = useQuery<{ items: Item[] }>(keys.playlistItems(id))
@@ -703,6 +947,7 @@ function PlaylistView({
       await put(`${keys.playlist(id)}/items`, { items: entries })
       invalidate(keys.playlist(id))
       invalidate(keys.playlists())
+      invalidate(keys.arrangements(id))
       invalidate(keys.rundowns())
     },
     [id],
@@ -785,6 +1030,20 @@ function PlaylistView({
 
       <TagsEditor playlist={playlist} />
 
+      <ArrangementPicker
+        playlist={playlist}
+        picked={arrangement}
+        onPick={setArrangement}
+      />
+
+      {arrangement ? (
+        <ArrangementEditor
+          playlist={playlist}
+          arrangement={playlist.arrangements?.find((a) => a.id === arrangement) ?? null}
+          onGone={() => setArrangement(null)}
+        />
+      ) : null}
+
       {contents.length === 0 ? (
         <p className="edit-console__dim">
           {library.length
@@ -807,9 +1066,14 @@ function PlaylistView({
               onClick={() => onEdit(it.id)}
             />
             <div className="edit-console__entry-side">
+              {/* Under a named order these are all read-only: an arrangement
+                  holds group NAMES, and the slides belong to Main (ADR 0027).
+                  Reordering here would have to mean reordering Main, which is
+                  not what the operator asked for. */}
               <input
                 className="edit-console__section"
                 placeholder="Section"
+                disabled={!!arrangement}
                 aria-label={`Section for ${it.label}`}
                 defaultValue={it.section ?? ''}
                 onBlur={(e) => {
@@ -819,12 +1083,14 @@ function PlaylistView({
                 }}
               />
               <div className="edit-console__entry-btns">
-                <CopyMove item={it} from={id} playlists={playlists} onMoved={onGo} />
+                {arrangement ? null : (
+                  <CopyMove item={it} from={id} playlists={playlists} onMoved={onGo} />
+                )}
                 <button
                   type="button"
                   className="edit-console__iconbtn"
                   aria-label={`Move ${it.label} up`}
-                  disabled={i === 0}
+                  disabled={i === 0 || !!arrangement}
                   onClick={() => void save(moved(contents, i, -1).map(entryOf))}
                 >
                   <ChevronUp size={13} aria-hidden />
@@ -833,7 +1099,7 @@ function PlaylistView({
                   type="button"
                   className="edit-console__iconbtn"
                   aria-label={`Move ${it.label} down`}
-                  disabled={i === contents.length - 1}
+                  disabled={i === contents.length - 1 || !!arrangement}
                   onClick={() => void save(moved(contents, i, 1).map(entryOf))}
                 >
                   <ChevronDown size={13} aria-hidden />
@@ -841,6 +1107,7 @@ function PlaylistView({
                 <button
                   type="button"
                   className="edit-console__iconbtn"
+                  disabled={!!arrangement}
                   aria-label={`Remove ${it.label} from the arrangement`}
                   // THIS place, not every place: removing the second chorus
                   // must leave the first one singing. The Item itself survives
@@ -855,7 +1122,7 @@ function PlaylistView({
         ))
       )}
 
-      {library.length ? (
+      {library.length && !arrangement ? (
         <div className="edit-console__pool">
           {/* This playlist's OWN items — every one of them, including the ones
               already in the order. Adding one again is how a chorus comes round

@@ -334,3 +334,66 @@
   padding: 0 6px;
 }
 .edit-console__list-title--plain { background: none; padding-left: 0; margin-left: 0; }
+
+/* ---- Named arrangements (ADR 0027) ------------------------------------------
+   Main owns the slides. An arrangement is an order of GROUP NAMES over it, so
+   it follows Main by construction — and holds nothing that could disagree. */
+
+.edit-console__arr { display: flex; align-items: flex-end; gap: 10px; max-width: 520px; }
+.edit-console__arr > .c-formgroup { flex: 1; min-width: 0; }
+
+.edit-console__arrbody {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 12px;
+  border-radius: var(--pm-radius-6);
+  background: var(--pm-surface-raised);
+  box-shadow: var(--pm-hairline);
+  max-width: 640px;
+}
+.edit-console__arrhead { display: flex; align-items: center; gap: 8px; }
+.edit-console__arrname {
+  flex: 1;
+  min-width: 0;
+  height: 28px;
+  border: 0;
+  outline: none;
+  border-radius: var(--pm-radius-4);
+  background: transparent;
+  color: var(--pm-text-primary);
+  font-family: var(--pm-font-ui);
+  font-weight: 600;
+  font-size: 14px;
+  padding: 0 8px;
+  margin-left: -8px;
+}
+.edit-console__arrname:hover, .edit-console__arrname:focus { background: var(--pm-surface-field); }
+
+.edit-console__arrseq { display: flex; flex-direction: column; gap: 3px; }
+.edit-console__arrgroup {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 30px;
+  padding: 0 6px;
+  border-radius: var(--pm-radius-4);
+  background: var(--pm-surface-field);
+}
+.edit-console__arrpos { font-family: var(--pm-font-mono); font-size: 10px; color: var(--pm-text-idle); }
+.edit-console__arrlabel { flex: 1; min-width: 0; font-size: 12px; color: var(--pm-text-primary); }
+.edit-console__arrslides { font-family: var(--pm-font-mono); font-size: 10px; color: var(--pm-text-idle); }
+
+.edit-console__order-entry { display: flex; flex-direction: column; gap: 2px; }
+.edit-console__order-arr {
+  margin: 0 0 4px 26px;
+  height: 22px;
+  border: 0;
+  outline: none;
+  border-radius: var(--pm-radius-4);
+  background: var(--pm-surface-field);
+  color: var(--pm-text-secondary);
+  font-family: var(--pm-font-ui);
+  font-size: 11px;
+  padding: 0 6px;
+}

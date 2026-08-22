@@ -26,6 +26,11 @@ export const keys = {
 
   playlists: () => '/api/playlists',
   playlist: (id: string) => `/api/playlists/${id}`,
+  /** A song read under one of its named orders (ADR 0027). Null is Main. */
+  playlistUnder: (id: string, arrangement: string | null) =>
+    arrangement ? `/api/playlists/${id}?arrangement=${arrangement}` : `/api/playlists/${id}`,
+  arrangements: (playlistId: string) => `/api/playlists/${playlistId}/arrangements`,
+  arrangement: (id: string) => `/api/arrangements/${id}`,
   rundowns: () => '/api/rundowns',
   rundown: (id: string) => `/api/rundowns/${id}`,
   assets: () => '/api/assets',

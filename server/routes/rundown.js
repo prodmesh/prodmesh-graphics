@@ -19,9 +19,6 @@ export const router = express.Router()
 
 const fail = (res, status, error, label) => res.status(status).json({ error, label })
 
-const idsOf = (body, key) =>
-  Array.isArray(body?.[key]) && body[key].every((v) => typeof v === 'string') ? body[key] : null
-
 // ---------------------------------------------------------------------------
 // Playlists
 // ---------------------------------------------------------------------------
@@ -47,8 +44,80 @@ router.put('/api/playlists/:id/tags', mayEdit, (req, res) => {
   res.json(rundown.setPlaylistTags(req.params.id, tags))
 })
 
+// ---------------------------------------------------------------------------
+// Arrangements — a named order of GROUPS over Main. ADR 0027.
+// ---------------------------------------------------------------------------
+
+router.get('/api/playlists/:id/arrangements', (req, res) => {
+  if (!rundown.getPlaylist(req.params.id)) {
+    return fail(res, 404, 'not_found', 'There is no playlist with that id.')
+  }
+  res.json({
+    arrangements: rundown.listArrangements(req.params.id),
+    groups: rundown.groupsOf(req.params.id).map((g) => ({ name: g.name, slides: g.entries.length })),
+    ungrouped: rundown.ungroupedIn(req.params.id),
+  })
+})
+
+router.post('/api/playlists/:id/arrangements', mayEdit, (req, res) => {
+  if (!rundown.getPlaylist(req.params.id)) {
+    return fail(res, 404, 'not_found', 'There is no playlist with that id.')
+  }
+  const name = String(req.body?.name ?? '').trim()
+  if (!name) return fail(res, 422, 'validation_failed', 'An arrangement needs a name.')
+  if (!rundown.groupsOf(req.params.id).length) {
+    // An arrangement over nothing is a song that plays nothing. Name the groups
+    // in Main first — the browser says the same thing before offering this.
+    return fail(
+      res,
+      422,
+      'validation_failed',
+      'Name the groups in Main first — an arrangement is an order of groups.',
+    )
+  }
+  res.status(201).json(rundown.createArrangement(req.params.id, name))
+})
+
+/**
+ * Rename an arrangement, reorder its groups, or both.
+ *
+ * The groups are NAMES, not slides. An arrangement holding slides would be a
+ * second copy of the song, and the first typo would prove it (ADR 0027).
+ */
+router.put('/api/arrangements/:id', mayEdit, (req, res) => {
+  const a = handle().prepare('SELECT * FROM arrangements WHERE id = ?').get(req.params.id)
+  if (!a) return fail(res, 404, 'not_found', 'There is no arrangement with that id.')
+
+  if (typeof req.body?.name === 'string') {
+    const name = req.body.name.trim()
+    if (!name) return fail(res, 422, 'validation_failed', 'An arrangement needs a name.')
+    handle().prepare('UPDATE arrangements SET name = ? WHERE id = ?').run(name, a.id)
+  }
+  if (Array.isArray(req.body?.groups)) {
+    const known = new Set(rundown.groupsOf(a.playlist_id).map((g) => g.name))
+    const unknown = req.body.groups.filter((g) => !known.has(g))
+    if (unknown.length) {
+      // A group Main no longer has would expand to nothing — a silent gap in
+      // the running order, found on Sunday.
+      return fail(res, 422, 'validation_failed', `Main has no group called “${unknown[0]}”.`)
+    }
+    rundown.setArrangementGroups(a.id, req.body.groups)
+  }
+  res.json(rundown.listArrangements(a.playlist_id).find((x) => x.id === a.id))
+})
+
+router.delete('/api/arrangements/:id', mayEdit, (req, res) => {
+  const info = handle().prepare('DELETE FROM arrangements WHERE id = ?').run(req.params.id)
+  if (!info.changes) return fail(res, 404, 'not_found', 'There is no arrangement with that id.')
+  // Any rundown pinned to it falls back to Main rather than breaking: ON DELETE
+  // SET NULL on rundown_playlists.arrangement_id.
+  res.status(204).end()
+})
+
 router.get('/api/playlists/:id', (req, res) => {
-  const p = rundown.getPlaylist(req.params.id)
+  // `?arrangement=` reads the song under one of its named orders (ADR 0027).
+  // Absent is Main, which is the one that owns the slides.
+  const p = rundown.getPlaylist(req.params.id, req.query.arrangement || null)
   if (!p) return fail(res, 404, 'not_found', 'There is no playlist with that id.')
   res.json(p)
 })
@@ -196,14 +265,23 @@ router.put('/api/rundowns/:id/playlists', mayEdit, (req, res) => {
   if (!rundown.getRundown(req.params.id)) {
     return fail(res, 404, 'not_found', 'There is no rundown with that id.')
   }
-  const ids = idsOf(req.body, 'playlists')
-  if (!ids) return fail(res, 422, 'validation_failed', 'Send the playlists in the order you want them.')
+  // Bare ids, or `{ playlist, arrangement }` — this service's choice of order
+  // for this song (ADR 0027).
+  const raw = Array.isArray(req.body?.playlists) ? req.body.playlists : null
+  if (!raw) return fail(res, 422, 'validation_failed', 'Send the playlists in the order you want them.')
+  const entries = raw.map((e) =>
+    typeof e === 'string' ? { playlist: e, arrangement: null } : { playlist: e?.playlist, arrangement: e?.arrangement ?? null },
+  )
+  const ids = entries.map((e) => e.playlist)
+  if (ids.some((id) => typeof id !== 'string' || !id)) {
+    return fail(res, 422, 'validation_failed', 'Every entry needs a playlist id.')
+  }
   const db = handle()
   const missing = ids.filter((id) => !db.prepare('SELECT 1 FROM playlists WHERE id = ?').get(id))
   if (missing.length) {
     return fail(res, 422, 'validation_failed', `${missing.length} of those playlists are not on this server.`)
   }
-  res.json(rundown.setRundownPlaylists(req.params.id, ids))
+  res.json(rundown.setRundownPlaylists(req.params.id, entries))
 })
 
 // ---------------------------------------------------------------------------

@@ -27,25 +27,12 @@ import { publish, registerTopic } from './streamHub.js'
 import { newId } from './ids.js'
 
 /**
- * Renumber a list densely, in one transaction.
+ * Replace a playlist's entries — Main, the order that owns the slides.
  *
- * Dense integers, rewritten on every reorder. A rundown is tens of entries, so
- * the cost is nothing and there is exactly one order with no gaps to reason
- * about — as opposed to fractional ranks, which drift toward collision and need
- * a compaction pass nobody remembers to write.
- */
-function reorder(db, table, keyColumn, keyValue, memberColumn, members) {
-  db.transaction(() => {
-    db.prepare(`DELETE FROM ${table} WHERE ${keyColumn} = ?`).run(keyValue)
-    const insert = db.prepare(
-      `INSERT INTO ${table} (${keyColumn}, ${memberColumn}, position) VALUES (?, ?, ?)`,
-    )
-    members.forEach((m, i) => insert.run(keyValue, m, i))
-  })()
-}
-
-/**
- * Replace a playlist's entries — its arrangement.
+ * Dense integers, rewritten every time. A playlist is tens of entries, so the
+ * cost is nothing and there is exactly one order with no gaps to reason about —
+ * as opposed to fractional ranks, which drift toward collision and need a
+ * compaction pass nobody remembers to write.
  *
  * Separate from `reorder` because an entry is not a membership: it carries a
  * section, and the same Item may appear more than once (ADR 0026). That is
@@ -115,17 +102,19 @@ export function setPlaylistTags(id, tags) {
   return getPlaylist(id)
 }
 
-export function getPlaylist(id) {
+export function getPlaylist(id, arrangementId = null) {
   const db = handle()
   const p = db.prepare('SELECT * FROM playlists WHERE id = ?').get(id)
   if (!p) return null
-  const items = db
-    .prepare(
-      `SELECT i.*, pe.entry_id, pe.position, pe.section FROM playlist_entries pe
-         JOIN items i ON i.id = pe.item_id
-        WHERE pe.playlist_id = ? ORDER BY pe.position`,
-    )
-    .all(id)
+  const byId = new Map(
+    db.prepare('SELECT * FROM items WHERE playlist_id = ?').all(id).map((i) => [i.id, i]),
+  )
+  const items = expand(id, arrangementId)
+    .map((e) => {
+      const item = byId.get(e.item_id)
+      return item ? { ...item, entry_id: e.entry_id, position: e.position, section: e.section } : null
+    })
+    .filter(Boolean)
   const tags = db
     .prepare('SELECT tag FROM playlist_tags WHERE playlist_id = ? ORDER BY tag')
     .all(id)
@@ -133,12 +122,143 @@ export function getPlaylist(id) {
   return {
     ...p,
     tags,
+    arrangement: arrangementId ?? null,
+    arrangements: listArrangements(id),
+    groups: groupsOf(id).map((g) => ({ name: g.name, slides: g.entries.length })),
+    ungrouped: ungroupedIn(id),
     items: items.map((i) => ({
       ...i,
       data: JSON.parse(i.data),
       destination: JSON.parse(i.destination),
     })),
   }
+}
+
+/**
+ * The groups Main defines, in Main's order.
+ *
+ * A group is the **first consecutive run** of a section name. Later runs of the
+ * same name are Main repeating that group, not more slides belonging to it —
+ * a chorus sung twice in Main is the same four slides twice, and folding both
+ * runs into one group would make every arrangement sing an eight-slide chorus.
+ *
+ * Entries with no section belong to no group. They cannot be arranged, and the
+ * browser says so rather than dropping them quietly (ADR 0027).
+ */
+export function groupsOf(playlistId) {
+  const rows = handle()
+    .prepare(
+      `SELECT pe.entry_id, pe.item_id, pe.section, pe.position, i.label
+         FROM playlist_entries pe JOIN items i ON i.id = pe.item_id
+        WHERE pe.playlist_id = ? ORDER BY pe.position`,
+    )
+    .all(playlistId)
+
+  const groups = []
+  const seen = new Set()
+  let run = null
+  for (const r of rows) {
+    if (!r.section) {
+      run = null
+      continue
+    }
+    if (run?.name !== r.section) {
+      run = seen.has(r.section) ? { name: r.section, entries: null } : { name: r.section, entries: [] }
+      if (run.entries) {
+        seen.add(r.section)
+        groups.push(run)
+      }
+    }
+    run.entries?.push(r)
+  }
+  return groups.map((g) => ({ name: g.name, entries: g.entries }))
+}
+
+/** Entries in this playlist that no group contains — unarrangeable, by name. */
+export function ungroupedIn(playlistId) {
+  return handle()
+    .prepare(
+      `SELECT i.label FROM playlist_entries pe JOIN items i ON i.id = pe.item_id
+        WHERE pe.playlist_id = ? AND (pe.section IS NULL OR pe.section = '')
+        ORDER BY pe.position`,
+    )
+    .all(playlistId)
+    .map((r) => r.label)
+}
+
+export function listArrangements(playlistId) {
+  const db = handle()
+  return db
+    .prepare('SELECT * FROM arrangements WHERE playlist_id = ? ORDER BY created_at')
+    .all(playlistId)
+    .map((a) => ({
+      ...a,
+      groups: db
+        .prepare('SELECT section FROM arrangement_groups WHERE arrangement_id = ? ORDER BY position')
+        .all(a.id)
+        .map((r) => r.section),
+    }))
+}
+
+export function createArrangement(playlistId, name, id = newId()) {
+  handle()
+    .prepare('INSERT INTO arrangements (id, playlist_id, name, created_at) VALUES (?, ?, ?, ?)')
+    .run(id, playlistId, name, Date.now())
+  // A new arrangement starts as Main's groups in Main's order. An empty one is
+  // a song that plays nothing, and nobody means that.
+  const groups = groupsOf(playlistId).map((g) => g.name)
+  setArrangementGroups(id, groups)
+  return listArrangements(playlistId).find((a) => a.id === id)
+}
+
+export function setArrangementGroups(id, groups) {
+  const db = handle()
+  db.transaction(() => {
+    db.prepare('DELETE FROM arrangement_groups WHERE arrangement_id = ?').run(id)
+    const ins = db.prepare(
+      'INSERT INTO arrangement_groups (arrangement_id, position, section) VALUES (?, ?, ?)',
+    )
+    groups.forEach((g, i) => ins.run(id, i, g))
+  })()
+}
+
+/**
+ * A playlist's running order under one arrangement.
+ *
+ * `null` is Main — the entries themselves. A named arrangement expands its
+ * group list into Main's slides, minting a stable id per OCCURRENCE: the same
+ * group twice is the same slides twice, and the cursor has to be able to tell
+ * the two apart (ADR 0026's whole reason for entries).
+ */
+export function expand(playlistId, arrangementId) {
+  const db = handle()
+  if (!arrangementId) {
+    return db
+      .prepare(
+        `SELECT pe.entry_id, pe.item_id, pe.section, pe.position
+           FROM playlist_entries pe WHERE pe.playlist_id = ? ORDER BY pe.position`,
+      )
+      .all(playlistId)
+  }
+  const names = db
+    .prepare('SELECT section FROM arrangement_groups WHERE arrangement_id = ? ORDER BY position')
+    .all(arrangementId)
+    .map((r) => r.section)
+  const groups = new Map(groupsOf(playlistId).map((g) => [g.name, g.entries]))
+  const out = []
+  names.forEach((name, occurrence) => {
+    for (const e of groups.get(name) ?? []) {
+      out.push({
+        // Deterministic, so the cursor survives a reload; distinct per
+        // occurrence, so it survives a repeat.
+        entry_id: `${arrangementId}:${occurrence}:${e.entry_id}`,
+        item_id: e.item_id,
+        section: e.section,
+        position: out.length,
+      })
+    }
+  })
+  return out
 }
 
 /**
@@ -213,13 +333,14 @@ export function getRundown(id) {
   const db = handle()
   const r = db.prepare('SELECT * FROM rundowns WHERE id = ?').get(id)
   if (!r) return null
-  const playlistIds = db
-    .prepare('SELECT playlist_id FROM rundown_playlists WHERE rundown_id = ? ORDER BY position')
+  const rows = db
+    .prepare('SELECT playlist_id, arrangement_id FROM rundown_playlists WHERE rundown_id = ? ORDER BY position')
     .all(id)
-    .map((row) => row.playlist_id)
   return {
     ...r,
-    playlists: playlistIds.map(getPlaylist).filter(Boolean),
+    // Each inclusion carries its own arrangement: 09:00 short, 11:00 full, one
+    // song (ADR 0027). NULL is Main and is what most of them mean.
+    playlists: rows.map((row) => getPlaylist(row.playlist_id, row.arrangement_id)).filter(Boolean),
     cursor: getCursor(id),
   }
 }
@@ -252,9 +373,31 @@ export function deleteRundown(id) {
   return handle().prepare('DELETE FROM rundowns WHERE id = ?').run(id).changes > 0
 }
 
-export function setRundownPlaylists(id, playlistIds) {
+/**
+ * Replace a rundown's playlists, each optionally pinned to an arrangement.
+ *
+ * Accepts bare ids or `{ playlist, arrangement }`. An arrangement that does not
+ * belong to the playlist it is pinned against is dropped rather than stored:
+ * a rundown pointing at another song's arrangement would expand to nothing on
+ * the morning it mattered.
+ */
+export function setRundownPlaylists(id, entries) {
   const db = handle()
-  reorder(db, 'rundown_playlists', 'rundown_id', id, 'playlist_id', playlistIds)
+  const rows = entries.map((e) => (typeof e === 'string' ? { playlist: e, arrangement: null } : e))
+  db.transaction(() => {
+    db.prepare('DELETE FROM rundown_playlists WHERE rundown_id = ?').run(id)
+    const ins = db.prepare(
+      'INSERT INTO rundown_playlists (rundown_id, playlist_id, position, arrangement_id) VALUES (?, ?, ?, ?)',
+    )
+    rows.forEach((r, i) => {
+      const ok =
+        r.arrangement &&
+        db
+          .prepare('SELECT 1 FROM arrangements WHERE id = ? AND playlist_id = ?')
+          .get(r.arrangement, r.playlist)
+      ins.run(id, r.playlist, i, ok ? r.arrangement : null)
+    })
+  })()
   db.prepare('UPDATE rundowns SET updated_at = ? WHERE id = ?').run(Date.now(), id)
   return getRundown(id)
 }
@@ -267,15 +410,26 @@ export function setRundownPlaylists(id, playlistIds) {
 export function order(rundownId) {
   return handle()
     .prepare(
-      `SELECT pe.entry_id, i.id, i.label, pe.section, pe.playlist_id, p.name AS playlist_name
-         FROM rundown_playlists rp
-         JOIN playlists p ON p.id = rp.playlist_id
-         JOIN playlist_entries pe ON pe.playlist_id = rp.playlist_id
-         JOIN items i ON i.id = pe.item_id
-        WHERE rp.rundown_id = ?
-        ORDER BY rp.position, pe.position`,
+      'SELECT playlist_id, arrangement_id FROM rundown_playlists WHERE rundown_id = ? ORDER BY position',
     )
     .all(rundownId)
+    .flatMap((rp) => {
+      const p = handle().prepare('SELECT name FROM playlists WHERE id = ?').get(rp.playlist_id)
+      const labels = new Map(
+        handle()
+          .prepare('SELECT id, label FROM items WHERE playlist_id = ?')
+          .all(rp.playlist_id)
+          .map((i) => [i.id, i.label]),
+      )
+      return expand(rp.playlist_id, rp.arrangement_id).map((e) => ({
+        entry_id: e.entry_id,
+        id: e.item_id,
+        label: labels.get(e.item_id) ?? e.item_id,
+        section: e.section,
+        playlist_id: rp.playlist_id,
+        playlist_name: p?.name ?? null,
+      }))
+    })
 }
 
 /**

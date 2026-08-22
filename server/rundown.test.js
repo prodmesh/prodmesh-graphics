@@ -444,3 +444,134 @@ test('search finds an item by its label and by what was typed into it', async ()
 
   assert.deepEqual((await req('GET', '/api/items?playlist=p2')).json.items.map((i) => i.id), ['i3'])
 })
+
+// ---------------------------------------------------------------------------
+// Named arrangements. ADR 0027.
+
+/** A song with real groups: a four-slide verse and a two-slide chorus. */
+async function grouped() {
+  seed()
+  await req('POST', '/api/playlists', { name: 'Song', mode: 'follow' })
+  const pl = song('Song', ['V1a', 'V1b', 'C1a', 'C1b', 'V2a'])
+  const [a, b, c, d, e] = pl.items
+  await req('PUT', `/api/playlists/${pl.id}/items`, {
+    items: [
+      { item: a, section: 'Verse 1' },
+      { item: b, section: 'Verse 1' },
+      { item: c, section: 'Chorus' },
+      { item: d, section: 'Chorus' },
+      { item: e, section: 'Verse 2' },
+    ],
+  })
+  return pl
+}
+
+test('a group is the FIRST run of a section name, so a repeat in Main is not more slides', async () => {
+  const pl = await grouped()
+  const [a, b, c, d, e] = pl.items
+  // Main sings the chorus twice. The group is still two slides — folding both
+  // runs together would make every arrangement sing a four-slide chorus.
+  await req('PUT', `/api/playlists/${pl.id}/items`, {
+    items: [
+      { item: a, section: 'Verse 1' },
+      { item: b, section: 'Verse 1' },
+      { item: c, section: 'Chorus' },
+      { item: d, section: 'Chorus' },
+      { item: e, section: 'Verse 2' },
+      { item: c, section: 'Chorus' },
+      { item: d, section: 'Chorus' },
+    ],
+  })
+  const groups = rundown.groupsOf(pl.id)
+  assert.deepEqual(groups.map((g) => [g.name, g.entries.length]), [
+    ['Verse 1', 2],
+    ['Chorus', 2],
+    ['Verse 2', 1],
+  ])
+})
+
+test('an arrangement is an order of group NAMES, and expands to Main’s slides', async () => {
+  const pl = await grouped()
+  const made = await req('POST', `/api/playlists/${pl.id}/arrangements`, { name: 'Short' })
+  assert.equal(made.status, 201)
+  // It starts as Main's groups in Main's order — an empty arrangement is a song
+  // that plays nothing, and nobody means that.
+  assert.deepEqual(made.json.groups, ['Verse 1', 'Chorus', 'Verse 2'])
+
+  const set = await req('PUT', `/api/arrangements/${made.json.id}`, {
+    groups: ['Chorus', 'Verse 1', 'Chorus'],
+  })
+  assert.equal(set.status, 200)
+
+  const under = (await req('GET', `/api/playlists/${pl.id}?arrangement=${made.json.id}`)).json
+  assert.deepEqual(under.items.map((i) => i.label), ['C1a', 'C1b', 'V1a', 'V1b', 'C1a', 'C1b'])
+  // Each occurrence is its own place, or the cursor could not tell the two
+  // choruses apart (ADR 0026).
+  assert.equal(new Set(under.items.map((i) => i.entry_id)).size, 6)
+
+  // And Main is untouched: it is the order that owns the slides.
+  assert.deepEqual((await req('GET', `/api/playlists/${pl.id}`)).json.items.map((i) => i.label), [
+    'V1a', 'V1b', 'C1a', 'C1b', 'V2a',
+  ])
+})
+
+test('editing Main flows into every arrangement using that group', async () => {
+  const pl = await grouped()
+  const made = (await req('POST', `/api/playlists/${pl.id}/arrangements`, { name: 'Short' })).json
+  await req('PUT', `/api/arrangements/${made.id}`, { groups: ['Chorus'] })
+
+  await req('PATCH', `/api/items/${pl.items[2]}`, { label: 'C1a fixed' })
+  const under = (await req('GET', `/api/playlists/${pl.id}?arrangement=${made.id}`)).json
+  // An arrangement that stored SLIDES would still be singing the old words.
+  assert.deepEqual(under.items.map((i) => i.label), ['C1a fixed', 'C1b'])
+})
+
+test('a group Main does not have is refused, rather than expanding to a gap', async () => {
+  const pl = await grouped()
+  const made = (await req('POST', `/api/playlists/${pl.id}/arrangements`, { name: 'Short' })).json
+  const r = await req('PUT', `/api/arrangements/${made.id}`, { groups: ['Chorus', 'Rap solo'] })
+  assert.equal(r.status, 422)
+  assert.match(r.json.label, /no group called/)
+})
+
+test('a playlist with no groups cannot have an arrangement, and is told why', async () => {
+  seed()
+  const r = await req('POST', '/api/playlists/p2/arrangements', { name: 'Short' })
+  assert.equal(r.status, 422)
+  assert.match(r.json.label, /Name the groups in Main first/)
+})
+
+test('a rundown pins the arrangement it wants of a song', async () => {
+  const pl = await grouped()
+  const made = (await req('POST', `/api/playlists/${pl.id}/arrangements`, { name: 'Short' })).json
+  await req('PUT', `/api/arrangements/${made.id}`, { groups: ['Chorus'] })
+
+  const rd = (await req('POST', '/api/rundowns', { name: 'Sunday 09:00' })).json
+  await req('PUT', `/api/rundowns/${rd.id}/playlists`, {
+    playlists: [{ playlist: pl.id, arrangement: made.id }],
+  })
+  assert.deepEqual(rundown.order(rd.id).map((o) => o.label), ['C1a', 'C1b'])
+
+  // The same song, the other service, the full order.
+  const rd2 = (await req('POST', '/api/rundowns', { name: 'Sunday 11:00' })).json
+  await req('PUT', `/api/rundowns/${rd2.id}/playlists`, { playlists: [pl.id] })
+  assert.equal(rundown.order(rd2.id).length, 5)
+
+  // Deleting the arrangement drops the pin to Main rather than breaking the
+  // running order.
+  assert.equal((await req('DELETE', `/api/arrangements/${made.id}`)).status, 204)
+  assert.equal(rundown.order(rd.id).length, 5)
+})
+
+test('an arrangement belonging to another song cannot be pinned', async () => {
+  const pl = await grouped()
+  const made = (await req('POST', `/api/playlists/${pl.id}/arrangements`, { name: 'Short' })).json
+  const rd = (await req('POST', '/api/rundowns', { name: 'Sunday' })).json
+  // p1 is a different playlist. Pinning another song's order would expand to
+  // nothing on the morning it mattered.
+  await req('PUT', `/api/rundowns/${rd.id}/playlists`, {
+    playlists: [{ playlist: 'p1', arrangement: made.id }],
+  })
+  const r = (await req('GET', `/api/rundowns/${rd.id}`)).json
+  assert.equal(r.playlists[0].arrangement, null)
+})
