@@ -337,26 +337,29 @@
 /* ---- Right panel tabs: Template | Inspector ------------------------------- */
 .design-console__tabs {
   display: flex;
-  align-items: center;
-  gap: 2px;
-  padding: 8px 12px;
+  align-items: stretch;
+  align-self: stretch;
   border-bottom: 1px solid var(--pm-border-hairline);
 }
+/* Each tab takes an equal share of the pane. Two short buttons tucked into the
+   left corner read as a toolbar with room to spare; a segmented strip reads as
+   a choice between two halves of one panel, which is what it is. */
 .design-console__tab {
+  flex: 1 1 0;
   border: 0;
-  border-radius: var(--pm-radius-4);
+  border-radius: 0;
   background: none;
   color: var(--pm-text-muted);
   font-family: var(--pm-font-ui);
   font-size: 11px;
   letter-spacing: var(--pm-tracking-caps);
   text-transform: uppercase;
-  padding: 4px 10px;
+  padding: 10px 8px;
   cursor: pointer;
 }
+.design-console__tab + .design-console__tab { box-shadow: inset 1px 0 0 var(--pm-border-hairline); }
 .design-console__tab:hover { color: var(--pm-text-primary); }
 .design-console__tab--on { color: var(--pm-text-primary); background: var(--pm-surface-field); }
-.design-console__tabs-spacer { margin-left: auto; }
 
 /* ---- Optional style sections — the checkbox IS the add/remove ------------- */
 .opt { display: flex; flex-direction: column; gap: 8px; }
@@ -566,6 +569,12 @@
 .design-console__problem svg { flex-shrink: 0; margin-top: 2px; color: var(--pm-text-secondary); }
 
 .design-console__name { display: flex; flex-direction: column; gap: 4px; }
+.design-console__nameline {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
 .design-console__title { font-weight: 700; font-size: 15px; color: var(--pm-text-primary); }
 .design-console__id {
   font-family: var(--pm-font-mono);
@@ -589,12 +598,30 @@
 
 /* Four edges in one row: top right bottom left, CSS order. */
 .design-console__edges { display: flex; gap: 4px; }
-.design-console__edges input { min-width: 0; flex: 1; }
+.design-console__edges input { min-width: 0; width: 100%; }
+/* Each edge says which edge it is. Four bare boxes made the reader count. */
+.design-console__edge {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.design-console__edge > span {
+  font-family: var(--pm-font-ui);
+  font-size: 9px;
+  letter-spacing: var(--pm-tracking-caps);
+  text-transform: uppercase;
+  color: var(--pm-text-idle);
+}
 
-/* An axis row: the number and its sizing mode side by side. */
+/* An axis row: the number and its sizing mode side by side. Stacked rather
+   than sharing the pane with the other axis — two of these in a 360px
+   inspector left the number 42px wide. */
+.design-console__stack { display: flex; flex-direction: column; gap: 10px; }
 .design-console__axis { display: flex; gap: 6px; }
 .design-console__axis input { min-width: 0; flex: 1; }
-.design-console__axis select { flex-shrink: 0; width: 108px; }
+.design-console__axis select { flex-shrink: 0; width: 130px; }
 .design-console__axis input:disabled { opacity: 0.5; }
 
 /* ---- The fields editor ----------------------------------------------------
@@ -715,3 +742,36 @@ button.design-console__file {
   color: var(--pm-text-secondary);
 }
 .design-console__status svg { flex-shrink: 0; margin-top: 2px; }
+
+/* An asset's name, editable where it is read. It has to look like the label it
+   is until somebody puts a cursor in it — a row of boxes would make the Media
+   Browser read as a form rather than as a list of what this server holds. */
+.mdb__rename {
+  width: 100%;
+  height: 22px;
+  border: 0;
+  outline: none;
+  border-radius: var(--pm-radius-4);
+  background: transparent;
+  color: var(--pm-text-primary);
+  font-family: var(--pm-font-ui);
+  font-size: 13px;
+  font-weight: 500;
+  padding: 0 6px;
+  margin-left: -6px;
+}
+.mdb__rename:hover { background: var(--pm-surface-field); }
+.mdb__rename:focus { background: var(--pm-surface-field); }
+
+/* ---- Inspector groups -------------------------------------------------------
+   Content, Layout, Style. The controls were one flat run of twenty labelled
+   rows: every one looked equally important and nothing marked where a concern
+   ended. A rule above each header is the whole device — chrome, not cards. */
+.insp {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding-top: 14px;
+  border-top: 1px solid var(--pm-border-hairline);
+}
+.insp > .c-grouphead { margin-bottom: -2px; }

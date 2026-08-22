@@ -32,7 +32,7 @@
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { AlertTriangle, Clapperboard, FileUp, FolderOpen, Image as ImageIcon, Plus, Redo2, Scissors, Trash2, Type, Undo2, Upload } from 'lucide-react'
+import { AlertTriangle, Clapperboard, FileDown, FileUp, FolderOpen, Image as ImageIcon, Plus, Redo2, Scissors, Trash2, Type, Undo2, Upload } from 'lucide-react'
 import { useQuery, invalidate } from '../../lib/useQuery'
 import { keys } from '../../lib/keys'
 import { ApiError, get, post } from '../../lib/api'
@@ -138,7 +138,13 @@ type TemplateDetail = {
   head_rev: string | null
   head: { mirror_hash: string | null; manifest: { fields: { key: string; sample?: string }[] } } | null
 }
-type Asset = { hash: string; size: number; kind: string }
+type Asset = {
+  hash: string
+  size: number
+  kind: string
+  /** What a person calls it (Media Browser). Null for anything older. */
+  name?: string | null
+}
 
 const FONT_KINDS = new Set(['font'])
 
@@ -310,7 +316,6 @@ function SelectedNode({
   imageAssets,
   theme,
   onEdit,
-  onDelete,
 }: {
   session: React.RefObject<DesignSession | null>
   ready: boolean
@@ -321,13 +326,11 @@ function SelectedNode({
    *  picker offers. */
   faces: FaceInfo[]
   /** Image assets this server holds — what the picture picker offers. */
-  imageAssets: { hash: string; size: number }[]
+  imageAssets: Asset[]
   /** The theme this document follows, when it follows one — what the token
    *  pickers offer (ADR 0021). */
   theme: ActiveTheme | null
   onEdit: (doc: Record<string, unknown>) => void
-  /** Absent for the root: the root is the canvas, not a thing to delete. */
-  onDelete?: () => void
 }) {
   const [bbox, setBbox] = useState<[number, number, number, number] | null>(null)
   const [facts, setFacts] = useState<NodeFacts | null>(null)
@@ -446,8 +449,6 @@ function SelectedNode({
       <GroupHeader label="Selected" trailing={selected} />
       {bbox && facts ? (
         <>
-          <KeyValueRow label="Position" value={`${Math.round(bbox[0])}, ${Math.round(bbox[1])}`} tone="plain" />
-
           {facts.kind === 'mask' ? (
             // A mask draws nothing, so selecting one and finding no colours is
             // exactly right and needs saying once, here.
@@ -458,400 +459,351 @@ function SelectedNode({
             </p>
           ) : null}
 
-          {/* The pin. Its own explicit control, because it changes what a
-              drag DOES: pinned moves freely, in-flow moves shift neighbours. */}
-          <FormGroup label="Placement">
-            <select
-              value={facts.absolute ? 'absolute' : 'relative'}
-              aria-label="Placement"
-              onChange={(e) => edit((s) => s.setPosition(selected, e.target.value === 'absolute'))}
-            >
-              <option value="relative">In the flow — neighbours move with it</option>
-              <option value="absolute">Pinned — moves freely</option>
-            </select>
-          </FormGroup>
-
-          {(() => {
-            const pictureControls = facts.image ? (
-              <div className="design-console__size">
-                <FormGroup label="Picture">
-                  <select
-                    value={facts.image.hash ?? ''}
-                    aria-label="Picture asset"
-                    onChange={(e) => { if (e.target.value) edit((s) => s.setImage(selected, e.target.value)) }}
-                  >
-                    {facts.image.hash && !imageAssets.some((a) => a.hash === facts.image!.hash) ? (
-                      <option value={facts.image.hash}>
-                        {shortRev(facts.image.hash)} — not on this server
-                      </option>
-                    ) : null}
-                    {imageAssets.map((a) => (
-                      <option key={a.hash} value={a.hash}>
-                        {shortRev(a.hash)} · {Math.max(1, Math.round(a.size / 1024))} KB
-                      </option>
-                    ))}
-                  </select>
-                </FormGroup>
-                <FormGroup label="Fit">
-                  <select
-                    value={facts.image.fit}
-                    aria-label="Picture fit"
-                    onChange={(e) => edit((s) => s.setFit(selected, e.target.value))}
-                  >
-                    <option value="cover">Scale to fill — crops</option>
-                    <option value="contain">Scale to fit — letterboxes</option>
-                    <option value="stretch">Stretch — distorts</option>
-                  </select>
-                </FormGroup>
-              </div>
-            ) : null
-            // An image NODE's picture is the point, not an option; only a
-            // box's background image is a style it may or may not have.
-            if (facts.kind !== 'box') return pictureControls
-            if (!facts.image && imageAssets.length === 0) return null
-            return (
-              <OptionalSection
-                label="Background image"
-                on={!!facts.image}
-                onEnable={() => edit((s) => s.setImage(selected, imageAssets[0]!.hash))}
-                onDisable={() => edit((s) => s.clearImage(selected))}
-              >
-                {pictureControls}
-              </OptionalSection>
-            )
-          })()}
-
-          {facts.video ? (
-            <>
-              {/* A clip slot. The FIELD is the whole point: the template says
-                  a video goes here, and every Item picks its own clip in Edit.
-                  The canvas shows a dark plate — the browser cannot decode
-                  broadcast codecs, and the motion is the node's job. */}
-              <div className="design-console__size">
-                <FormGroup label="Clip comes from field">
+          {/* Three groups, in the order a designer asks the questions: what is
+              this, where does it sit, what does it look like. It was one flat
+              run of twenty labelled controls, and a run that long has no
+              landmarks — every control looked equally important and nothing
+              said where one concern ended. */}
+          {facts.text || facts.image || facts.video ? (
+            <section className="insp">
+              <GroupHeader label="Content" />
+            {facts.text ? (
+              <>
+                {/* What it says. ${field} references bind Item data; typing one
+                    declares the field, so publish never trips over bookkeeping
+                    the designer was never shown. */}
+                <FormGroup label="Text — ${field} binds Item data">
                   <input
-                    value={facts.video.field ? '${' + facts.video.field + '}' : '— fixed asset —'}
-                    readOnly
-                    aria-label="Video field"
+                    value={expr}
+                    onChange={(e) => setExpr(e.target.value)}
+                    onBlur={commitExpr}
+                    onKeyDown={enterCommits(commitExpr)}
+                    aria-label="Text content"
                   />
                 </FormGroup>
-                <FormGroup label="Fit">
-                  <select
-                    value={facts.video.fit}
-                    aria-label="Video fit"
-                    onChange={(e) => edit((s) => s.setFit(selected, e.target.value))}
-                  >
-                    <option value="cover">Scale to fill — crops</option>
-                    <option value="contain">Scale to fit — letterboxes</option>
-                    <option value="stretch">Stretch — distorts</option>
-                  </select>
-                </FormGroup>
-              </div>
-              <FormGroup label="At the end">
-                <select
-                  value={facts.video.looping ? 'loop' : 'hold'}
-                  aria-label="Video end behaviour"
-                  onChange={(e) => edit((s) => s.setLoop(selected, e.target.value === 'loop'))}
-                >
-                  <option value="hold">Hold the last frame</option>
-                  <option value="loop">Loop</option>
-                </select>
-              </FormGroup>
-            </>
-          ) : null}
-
-          {facts.text ? (
-            <>
-              {/* What it says. ${field} references bind Item data; typing one
-                  declares the field, so publish never trips over bookkeeping
-                  the designer was never shown. */}
-              <FormGroup label="Text — ${field} binds Item data">
-                <input
-                  value={expr}
-                  onChange={(e) => setExpr(e.target.value)}
-                  onBlur={commitExpr}
-                  onKeyDown={enterCommits(commitExpr)}
-                  aria-label="Text content"
-                />
-              </FormGroup>
-              <div className="design-console__size">
-                <FormGroup label="Font family">
-                  {/* A dropdown of what the server's font files call
-                      THEMSELVES. Picking one carries the file's weight and
-                      its hash into the declaration — the exact bytes a node
-                      will stage. */}
-                  <select
-                    value={family}
-                    disabled={!!facts.text?.token}
-                    aria-label="Font family"
-                    onChange={(e) => {
-                      const fam = e.target.value
-                      // Of the picked family's faces, keep the weight closest
-                      // to what the node already has — switching family should
-                      // not also silently switch Regular to Bold.
-                      const wt = Number(weight) || 400
-                      const face = faces
-                        .filter((f) => f.family === fam)
-                        .toSorted((a, b) => Math.abs(a.weight - wt) - Math.abs(b.weight - wt))[0]
-                      setFamily(fam)
-                      if (face) setWeight(String(face.weight))
-                      commitFont(fam, face?.weight)
-                    }}
-                  >
-                    {family && !faces.some((f) => f.family === family) ? (
-                      <option value={family}>{family} — no file on this server</option>
-                    ) : null}
-                    {[...new Set(faces.map((f) => f.family))].map((f) => (
-                      <option key={f} value={f}>{f}</option>
-                    ))}
-                  </select>
-                </FormGroup>
-                {theme && theme.fontTokens.length ? (
-                  <TokenSelect
-                    label="Font token"
-                    tokens={theme.fontTokens}
-                    value={facts.text?.token ?? null}
-                    onPick={(t) => edit((s) => s.setFontToken(selected, t ?? '', theme.json))}
-                  />
-                ) : null}
-                <FormGroup label="Weight">
-                  <input
-                    type="number"
-                    min={1}
-                    max={1000}
-                    step={100}
-                    value={weight}
-                    disabled={!!facts.text?.token}
-                    onChange={(e) => setWeight(e.target.value)}
-                    onBlur={() => commitFont()}
-                    onKeyDown={enterCommits(() => commitFont())}
-                    aria-label="Font weight"
-                  />
-                </FormGroup>
-              </div>
-              <div className="design-console__size">
-                <FormGroup label="Size">
-                  <input
-                    type="number"
-                    min={1}
-                    value={fontSize}
-                    onChange={(e) => setFontSize(e.target.value)}
-                    onBlur={commitFontSize}
-                    onKeyDown={enterCommits(commitFontSize)}
-                    aria-label="Font size"
-                  />
-                </FormGroup>
-                <FormGroup label="Alignment">
-                  <select
-                    value={facts.text.align}
-                    aria-label="Text alignment"
-                    onChange={(e) => edit((s) => s.setTextAlign(selected, e.target.value))}
-                  >
-                    <option value="start">Left</option>
-                    <option value="center">Centred</option>
-                    <option value="end">Right</option>
-                  </select>
-                </FormGroup>
-              </div>
-            </>
-          ) : null}
-
-          {/* Per-axis sizing: a fixed number, or hugging what is inside —
-              which is how a band grows with its name field while its height
-              holds. The number shows the SOLVED size either way; it is only
-              editable when the axis is fixed. */}
-          <div className="design-console__size">
-            <FormGroup label="Width">
-              <div className="design-console__axis">
-                <input
-                  type="number"
-                  min={1}
-                  value={w}
-                  disabled={facts.width_mode !== 'px'}
-                  onChange={(e) => setW(e.target.value)}
-                  onBlur={commitSize}
-                  onKeyDown={enterCommits(commitSize)}
-                  aria-label="Selected width"
-                />
-                <select
-                  value={facts.width_mode}
-                  aria-label="Width sizing"
-                  onChange={(e) =>
-                    edit((s) =>
-                      s.setDimension(
-                        selected,
-                        'width',
-                        e.target.value === 'px' ? Math.max(1, Math.round(bbox?.[2] ?? 1)) : undefined,
-                      ),
-                    )
-                  }
-                >
-                  <option value="px">Fixed</option>
-                  <option value="content">Fit contents</option>
-                  {facts.width_mode === 'percent' ? (
-                    // Shown only when the node IS a percent — a mask arrives
-                    // at 100% of its parent. Choosing anything else leaves
-                    // percent behind, which is why it is not offered outright.
-                    <option value="percent">Percent of parent</option>
-                  ) : null}
-                </select>
-              </div>
-            </FormGroup>
-            <FormGroup label="Height">
-              <div className="design-console__axis">
-                <input
-                  type="number"
-                  min={1}
-                  value={h}
-                  disabled={facts.height_mode !== 'px'}
-                  onChange={(e) => setH(e.target.value)}
-                  onBlur={commitSize}
-                  onKeyDown={enterCommits(commitSize)}
-                  aria-label="Selected height"
-                />
-                <select
-                  value={facts.height_mode}
-                  aria-label="Height sizing"
-                  onChange={(e) =>
-                    edit((s) =>
-                      s.setDimension(
-                        selected,
-                        'height',
-                        e.target.value === 'px' ? Math.max(1, Math.round(bbox?.[3] ?? 1)) : undefined,
-                      ),
-                    )
-                  }
-                >
-                  <option value="px">Fixed</option>
-                  <option value="content">Fit contents</option>
-                  {facts.width_mode === 'percent' ? (
-                    // Shown only when the node IS a percent — a mask arrives
-                    // at 100% of its parent. Choosing anything else leaves
-                    // percent behind, which is why it is not offered outright.
-                    <option value="percent">Percent of parent</option>
-                  ) : null}
-                </select>
-              </div>
-            </FormGroup>
-          </div>
-
-          {/* Spacing, typed. Margin is the same fact a drag edits — where the
-              node sits relative to its flow position; padding is a
-              container's inner breathing room, which is how text stops
-              touching the edge of its band. */}
-          {(['margin', 'padding'] as const).map((kind) =>
-            kind === 'padding' && facts.kind !== 'box' ? null : (
-              <FormGroup key={kind} label={kind === 'margin' ? 'Margin — top right bottom left' : 'Padding — top right bottom left'}>
-                <div className="design-console__edges">
-                  {(['top', 'right', 'bottom', 'left'] as const).map((edge, i) => (
-                    <input
-                      key={`${kind}:${edge}:${facts[kind][i]}`}
-                      type="number"
-                      step={1}
-                      defaultValue={facts[kind][i]}
-                      aria-label={`${kind} ${edge}`}
-                      onBlur={(e) => {
-                        const v = Number(e.target.value)
-                        if (!Number.isFinite(v) || v === facts[kind][i]) return
-                        edit((s) => s.setSpacing(selected, kind, edge, v))
+                <div className="design-console__size">
+                  <FormGroup label="Font family">
+                    {/* A dropdown of what the server's font files call
+                        THEMSELVES. Picking one carries the file's weight and
+                        its hash into the declaration — the exact bytes a node
+                        will stage. */}
+                    <select
+                      value={family}
+                      disabled={!!facts.text?.token}
+                      aria-label="Font family"
+                      onChange={(e) => {
+                        const fam = e.target.value
+                        // Of the picked family's faces, keep the weight closest
+                        // to what the node already has — switching family should
+                        // not also silently switch Regular to Bold.
+                        const wt = Number(weight) || 400
+                        const face = faces
+                          .filter((f) => f.family === fam)
+                          .toSorted((a, b) => Math.abs(a.weight - wt) - Math.abs(b.weight - wt))[0]
+                        setFamily(fam)
+                        if (face) setWeight(String(face.weight))
+                        commitFont(fam, face?.weight)
                       }}
+                    >
+                      {family && !faces.some((f) => f.family === family) ? (
+                        <option value={family}>{family} — no file on this server</option>
+                      ) : null}
+                      {[...new Set(faces.map((f) => f.family))].map((f) => (
+                        <option key={f} value={f}>{f}</option>
+                      ))}
+                    </select>
+                  </FormGroup>
+                  {theme && theme.fontTokens.length ? (
+                    <TokenSelect
+                      label="Font token"
+                      tokens={theme.fontTokens}
+                      value={facts.text?.token ?? null}
+                      onPick={(t) => edit((s) => s.setFontToken(selected, t ?? '', theme.json))}
                     />
-                  ))}
+                  ) : null}
+                  <FormGroup label="Weight">
+                    <input
+                      type="number"
+                      min={1}
+                      max={1000}
+                      step={100}
+                      value={weight}
+                      disabled={!!facts.text?.token}
+                      onChange={(e) => setWeight(e.target.value)}
+                      onBlur={() => commitFont()}
+                      onKeyDown={enterCommits(() => commitFont())}
+                      aria-label="Font weight"
+                    />
+                  </FormGroup>
                 </div>
-              </FormGroup>
-            ),
-          )}
+                <div className="design-console__size">
+                  <FormGroup label="Size">
+                    <input
+                      type="number"
+                      min={1}
+                      value={fontSize}
+                      onChange={(e) => setFontSize(e.target.value)}
+                      onBlur={commitFontSize}
+                      onKeyDown={enterCommits(commitFontSize)}
+                      aria-label="Font size"
+                    />
+                  </FormGroup>
+                  <FormGroup label="Alignment">
+                    <select
+                      value={facts.text.align}
+                      aria-label="Text alignment"
+                      onChange={(e) => edit((s) => s.setTextAlign(selected, e.target.value))}
+                    >
+                      <option value="start">Left</option>
+                      <option value="center">Centred</option>
+                      <option value="end">Right</option>
+                    </select>
+                  </FormGroup>
+                </div>
+              </>
+            ) : null}
+            {facts.video ? (
+              <>
+                {/* A clip slot. The FIELD is the whole point: the template says
+                    a video goes here, and every Item picks its own clip in Edit.
+                    The canvas shows a dark plate — the browser cannot decode
+                    broadcast codecs, and the motion is the node's job. */}
+                <div className="design-console__size">
+                  <FormGroup label="Clip comes from field">
+                    <input
+                      value={facts.video.field ? '${' + facts.video.field + '}' : '— fixed asset —'}
+                      readOnly
+                      aria-label="Video field"
+                    />
+                  </FormGroup>
+                  <FormGroup label="Fit">
+                    <select
+                      value={facts.video.fit}
+                      aria-label="Video fit"
+                      onChange={(e) => edit((s) => s.setFit(selected, e.target.value))}
+                    >
+                      <option value="cover">Scale to fill — crops</option>
+                      <option value="contain">Scale to fit — letterboxes</option>
+                      <option value="stretch">Stretch — distorts</option>
+                    </select>
+                  </FormGroup>
+                </div>
+                <FormGroup label="At the end">
+                  <select
+                    value={facts.video.looping ? 'loop' : 'hold'}
+                    aria-label="Video end behaviour"
+                    onChange={(e) => edit((s) => s.setLoop(selected, e.target.value === 'loop'))}
+                  >
+                    <option value="hold">Hold the last frame</option>
+                    <option value="loop">Loop</option>
+                  </select>
+                </FormGroup>
+              </>
+            ) : null}
+            {(() => {
+              const pictureControls = facts.image ? (
+                <div className="design-console__size">
+                  <FormGroup label="Picture">
+                    <select
+                      value={facts.image.hash ?? ''}
+                      aria-label="Picture asset"
+                      onChange={(e) => { if (e.target.value) edit((s) => s.setImage(selected, e.target.value)) }}
+                    >
+                      {facts.image.hash && !imageAssets.some((a) => a.hash === facts.image!.hash) ? (
+                        <option value={facts.image.hash}>
+                          {shortRev(facts.image.hash)} — not on this server
+                        </option>
+                      ) : null}
+                      {/* By NAME, falling back to the hash. Picking one of four
+                          lower-third plates out of a list of hashes is a guess;
+                          the name is the whole reason the Media Browser keeps
+                          one. */}
+                      {imageAssets.map((a) => (
+                        <option key={a.hash} value={a.hash}>
+                          {a.name ?? shortRev(a.hash)} · {Math.max(1, Math.round(a.size / 1024))} KB
+                        </option>
+                      ))}
+                    </select>
+                  </FormGroup>
+                  <FormGroup label="Fit">
+                    <select
+                      value={facts.image.fit}
+                      aria-label="Picture fit"
+                      onChange={(e) => edit((s) => s.setFit(selected, e.target.value))}
+                    >
+                      <option value="cover">Scale to fill — crops</option>
+                      <option value="contain">Scale to fit — letterboxes</option>
+                      <option value="stretch">Stretch — distorts</option>
+                    </select>
+                  </FormGroup>
+                </div>
+              ) : null
+              // An image NODE's picture is the point, not an option; only a
+              // box's background image is a style it may or may not have.
+              if (facts.kind !== 'box') return pictureControls
+              if (!facts.image && imageAssets.length === 0) return null
+              return (
+                <OptionalSection
+                  label="Background image"
+                  on={!!facts.image}
+                  onEnable={() => edit((s) => s.setImage(selected, imageAssets[0]!.hash))}
+                  onDisable={() => edit((s) => s.clearImage(selected))}
+                >
+                  {pictureControls}
+                </OptionalSection>
+              )
+            })()}
+            </section>
+          ) : null}
 
-          {facts.kind === 'box' ? (
-            <FormGroup label="Overflow">
+          <section className="insp">
+            <GroupHeader label="Layout" />
+            <KeyValueRow label="Position" value={`${Math.round(bbox[0])}, ${Math.round(bbox[1])}`} tone="plain" />
+            {/* The pin. Its own explicit control, because it changes what a
+                drag DOES: pinned moves freely, in-flow moves shift neighbours. */}
+            <FormGroup label="Placement">
               <select
-                value={facts.clip ? 'hide' : 'show'}
-                aria-label="Overflow"
-                onChange={(e) => edit((s) => s.setClip(selected, e.target.value === 'hide'))}
+                value={facts.absolute ? 'absolute' : 'relative'}
+                aria-label="Placement"
+                onChange={(e) => edit((s) => s.setPosition(selected, e.target.value === 'absolute'))}
               >
-                <option value="show">Show — contents may spill out</option>
-                <option value="hide">Hide — mask contents to this box</option>
+                <option value="relative">In the flow — neighbours move with it</option>
+                <option value="absolute">Pinned — moves freely</option>
               </select>
             </FormGroup>
-          ) : null}
-
-          {facts.kind === 'mask' ? null : facts.text ? (
-            // The fill IS the text colour — not an option, the ink itself.
-            facts.fill ? (
-              <>
-                <div className="design-console__size">
-                  <FormGroup label="Fill">
-                    <input
-                      type="color"
-                      value={rgbToHex(facts.fill)}
-                      disabled={!!facts.fill_token}
-                      onChange={(e) => commitFill(e.target.value)}
-                      aria-label="Fill colour"
-                    />
-                  </FormGroup>
-                  <FormGroup label="Fill opacity %">
-                    <input
-                      type="number"
-                      min={0}
-                      max={100}
-                      value={alpha}
-                      onChange={(e) => setAlpha(e.target.value)}
-                      onBlur={() => commitFill()}
-                      onKeyDown={enterCommits(() => commitFill())}
-                      aria-label="Fill opacity"
-                    />
-                  </FormGroup>
-                </div>
-                {theme ? (
-                  <TokenSelect
-                    label="Fill token"
-                    tokens={theme.colorTokens}
-                    value={facts.fill_token ?? null}
-                    onPick={(t) => edit((s) => s.setColorToken(selected, 'fill', t ?? '', theme.json))}
+            {/* Per-axis sizing: a fixed number, or hugging what is inside —
+                which is how a band grows with its name field while its height
+                holds. The number shows the SOLVED size either way; it is only
+                editable when the axis is fixed. */}
+            <div className="design-console__stack">
+              <FormGroup label="Width">
+                <div className="design-console__axis">
+                  <input
+                    type="number"
+                    min={1}
+                    value={w}
+                    disabled={facts.width_mode !== 'px'}
+                    onChange={(e) => setW(e.target.value)}
+                    onBlur={commitSize}
+                    onKeyDown={enterCommits(commitSize)}
+                    aria-label="Selected width"
                   />
-                ) : null}
-              </>
-            ) : null
-          ) : (
-            <OptionalSection
-              label="Fill"
-              on={!!facts.fill || !!facts.gradient}
-              onEnable={() => edit((s) => s.setFill(selected, 1, 1, 1, 1))}
-              onDisable={() => edit((s) => s.clearFill(selected))}
-              offNote="An unfilled box draws nothing and stops being clickable on the canvas — select it from the layer tree instead."
-            >
-              <FormGroup label="Type">
-                <select
-                  value={facts.gradient ? 'gradient' : 'solid'}
-                  aria-label="Fill type"
-                  onChange={(e) => {
-                    if (e.target.value === 'gradient' && !facts.gradient) {
-                      // Default: the current colour fading to its own shadow,
-                      // top to bottom — a band look, not a rainbow.
-                      const c = facts.fill ?? [1, 1, 1, 1]
-                      const dark: [number, number, number, number] = [c[0] * 0.35, c[1] * 0.35, c[2] * 0.35, c[3]]
-                      edit((s) => s.setGradient(selected, 180, JSON.stringify([[c, 0], [dark, 1]])))
-                    } else if (e.target.value === 'solid' && facts.gradient) {
-                      const first = facts.gradient.stops[0]![0]
-                      edit((s) => s.setFill(selected, first[0], first[1], first[2], first[3]))
+                  <select
+                    value={facts.width_mode}
+                    aria-label="Width sizing"
+                    onChange={(e) =>
+                      edit((s) =>
+                        s.setDimension(
+                          selected,
+                          'width',
+                          e.target.value === 'px' ? Math.max(1, Math.round(bbox?.[2] ?? 1)) : undefined,
+                        ),
+                      )
                     }
-                  }}
+                  >
+                    <option value="px">Fixed</option>
+                    <option value="content">Fit contents</option>
+                    {facts.width_mode === 'percent' ? (
+                      // Shown only when the node IS a percent — a mask arrives
+                      // at 100% of its parent. Choosing anything else leaves
+                      // percent behind, which is why it is not offered outright.
+                      <option value="percent">Percent of parent</option>
+                    ) : null}
+                  </select>
+                </div>
+              </FormGroup>
+              <FormGroup label="Height">
+                <div className="design-console__axis">
+                  <input
+                    type="number"
+                    min={1}
+                    value={h}
+                    disabled={facts.height_mode !== 'px'}
+                    onChange={(e) => setH(e.target.value)}
+                    onBlur={commitSize}
+                    onKeyDown={enterCommits(commitSize)}
+                    aria-label="Selected height"
+                  />
+                  <select
+                    value={facts.height_mode}
+                    aria-label="Height sizing"
+                    onChange={(e) =>
+                      edit((s) =>
+                        s.setDimension(
+                          selected,
+                          'height',
+                          e.target.value === 'px' ? Math.max(1, Math.round(bbox?.[3] ?? 1)) : undefined,
+                        ),
+                      )
+                    }
+                  >
+                    <option value="px">Fixed</option>
+                    <option value="content">Fit contents</option>
+                    {facts.width_mode === 'percent' ? (
+                      // Shown only when the node IS a percent — a mask arrives
+                      // at 100% of its parent. Choosing anything else leaves
+                      // percent behind, which is why it is not offered outright.
+                      <option value="percent">Percent of parent</option>
+                    ) : null}
+                  </select>
+                </div>
+              </FormGroup>
+            </div>
+            {/* Spacing, typed. Margin is the same fact a drag edits — where the
+                node sits relative to its flow position; padding is a
+                container's inner breathing room, which is how text stops
+                touching the edge of its band.
+
+                Each edge is captioned. Four bare boxes under the words "top
+                right bottom left" made the reader count positions to find the
+                one they wanted, every time. */}
+            {(['margin', 'padding'] as const).map((kind) =>
+              kind === 'padding' && facts.kind !== 'box' ? null : (
+                <FormGroup key={kind} label={kind === 'margin' ? 'Margin' : 'Padding'}>
+                  <div className="design-console__edges">
+                    {(['top', 'right', 'bottom', 'left'] as const).map((edge, i) => (
+                      <label key={`${kind}:${edge}`} className="design-console__edge">
+                        <span>{edge}</span>
+                        <input
+                          key={`${kind}:${edge}:${facts[kind][i]}`}
+                          type="number"
+                          step={1}
+                          defaultValue={facts[kind][i]}
+                          aria-label={`${kind} ${edge}`}
+                          onBlur={(e) => {
+                            const v = Number(e.target.value)
+                            if (!Number.isFinite(v) || v === facts[kind][i]) return
+                            edit((s) => s.setSpacing(selected, kind, edge, v))
+                          }}
+                        />
+                      </label>
+                    ))}
+                  </div>
+                </FormGroup>
+              ),
+            )}
+            {facts.kind === 'box' ? (
+              <FormGroup label="Overflow">
+                <select
+                  value={facts.clip ? 'hide' : 'show'}
+                  aria-label="Overflow"
+                  onChange={(e) => edit((s) => s.setClip(selected, e.target.value === 'hide'))}
                 >
-                  <option value="solid">Solid colour</option>
-                  <option value="gradient">Gradient</option>
+                  <option value="show">Show — contents may spill out</option>
+                  <option value="hide">Hide — mask contents to this box</option>
                 </select>
               </FormGroup>
-              {facts.gradient ? (
-                <GradientControls
-                  gradient={facts.gradient}
-                  onCommit={(angle, stops) =>
-                    edit((s) => s.setGradient(selected, angle, JSON.stringify(stops)))
-                  }
-                />
-              ) : facts.fill ? (
+            ) : null}
+          </section>
+
+          <section className="insp">
+            <GroupHeader label="Style" />
+            {facts.kind === 'mask' ? null : facts.text ? (
+              // The fill IS the text colour — not an option, the ink itself.
+              facts.fill ? (
                 <>
                   <div className="design-console__size">
-                    <FormGroup label="Colour">
+                    <FormGroup label="Fill">
                       <input
                         type="color"
                         value={rgbToHex(facts.fill)}
@@ -860,7 +812,7 @@ function SelectedNode({
                         aria-label="Fill colour"
                       />
                     </FormGroup>
-                    <FormGroup label="Opacity %">
+                    <FormGroup label="Fill opacity %">
                       <input
                         type="number"
                         min={0}
@@ -882,85 +834,53 @@ function SelectedNode({
                     />
                   ) : null}
                 </>
-              ) : null}
-            </OptionalSection>
-          )}
-
-          {/* Outline and shadow, on everything with a silhouette. Boxes and
-              images decorate their rounded rect; text rings and shadows its
-              glyphs — the outline drawn OUTWARD there, because an inside
-              stroke eats thin letterforms. */}
-          {facts.kind === 'box' || facts.kind === 'image' || facts.kind === 'text' ? (
-            <>
+              ) : null
+            ) : (
               <OptionalSection
-                label="Outline"
-                on={!!facts.stroke}
-                onEnable={() => edit((s) => s.setStroke(selected, 1, 1, 1, 1, 2))}
-                onDisable={() => edit((s) => s.clearStroke(selected))}
+                label="Fill"
+                on={!!facts.fill || !!facts.gradient}
+                onEnable={() => edit((s) => s.setFill(selected, 1, 1, 1, 1))}
+                onDisable={() => edit((s) => s.clearFill(selected))}
+                offNote="An unfilled box draws nothing and stops being clickable on the canvas — select it from the layer tree instead."
               >
-                {facts.stroke ? (
-                  <div className="design-console__size">
-                    <FormGroup label="Colour">
-                      <input
-                        type="color"
-                        value={rgbToHex(facts.stroke.color)}
-                        disabled={!!facts.stroke.token}
-                        aria-label="Outline colour"
-                        onChange={(e) => {
-                          const rgb = hexToRgb(e.target.value)
-                          if (rgb) edit((s) => s.setStroke(selected, rgb[0], rgb[1], rgb[2], facts.stroke!.color[3], facts.stroke!.width))
-                        }}
-                      />
-                    </FormGroup>
-                    <FormGroup label="Width">
-                      <input
-                        type="number"
-                        min={0.5}
-                        step={0.5}
-                        key={`sw:${facts.stroke.width}`}
-                        defaultValue={facts.stroke.width}
-                        aria-label="Outline width"
-                        onBlur={(e) => {
-                          const v = Number(e.target.value)
-                          if (Number.isFinite(v) && v > 0 && v !== facts.stroke!.width) {
-                            const c = facts.stroke!.color
-                            edit((s) => s.setStroke(selected, c[0], c[1], c[2], c[3], v))
-                          }
-                        }}
-                      />
-                    </FormGroup>
-                  </div>
-                ) : null}
-                {facts.stroke && theme ? (
-                  <TokenSelect
-                    label="Outline token"
-                    tokens={theme.colorTokens}
-                    value={facts.stroke.token ?? null}
-                    onPick={(t) => edit((s) => s.setColorToken(selected, 'stroke', t ?? '', theme.json))}
+                <FormGroup label="Type">
+                  <select
+                    value={facts.gradient ? 'gradient' : 'solid'}
+                    aria-label="Fill type"
+                    onChange={(e) => {
+                      if (e.target.value === 'gradient' && !facts.gradient) {
+                        // Default: the current colour fading to its own shadow,
+                        // top to bottom — a band look, not a rainbow.
+                        const c = facts.fill ?? [1, 1, 1, 1]
+                        const dark: [number, number, number, number] = [c[0] * 0.35, c[1] * 0.35, c[2] * 0.35, c[3]]
+                        edit((s) => s.setGradient(selected, 180, JSON.stringify([[c, 0], [dark, 1]])))
+                      } else if (e.target.value === 'solid' && facts.gradient) {
+                        const first = facts.gradient.stops[0]![0]
+                        edit((s) => s.setFill(selected, first[0], first[1], first[2], first[3]))
+                      }
+                    }}
+                  >
+                    <option value="solid">Solid colour</option>
+                    <option value="gradient">Gradient</option>
+                  </select>
+                </FormGroup>
+                {facts.gradient ? (
+                  <GradientControls
+                    gradient={facts.gradient}
+                    onCommit={(angle, stops) =>
+                      edit((s) => s.setGradient(selected, angle, JSON.stringify(stops)))
+                    }
                   />
-                ) : null}
-              </OptionalSection>
-
-              <OptionalSection
-                label="Shadow"
-                on={!!facts.shadow}
-                onEnable={() => edit((s) => s.setShadow(selected, 0, 0, 0, 0.6, 6, 6, 12))}
-                onDisable={() => edit((s) => s.clearShadow(selected))}
-              >
-                {facts.shadow ? (
+                ) : facts.fill ? (
                   <>
                     <div className="design-console__size">
                       <FormGroup label="Colour">
                         <input
                           type="color"
-                          value={rgbToHex(facts.shadow.color)}
-                          disabled={!!facts.shadow.token}
-                          aria-label="Shadow colour"
-                          onChange={(e) => {
-                            const rgb = hexToRgb(e.target.value)
-                            const sh = facts.shadow!
-                            if (rgb) edit((s) => s.setShadow(selected, rgb[0], rgb[1], rgb[2], sh.color[3], sh.dx, sh.dy, sh.blur))
-                          }}
+                          value={rgbToHex(facts.fill)}
+                          disabled={!!facts.fill_token}
+                          onChange={(e) => commitFill(e.target.value)}
+                          aria-label="Fill colour"
                         />
                       </FormGroup>
                       <FormGroup label="Opacity %">
@@ -968,100 +888,187 @@ function SelectedNode({
                           type="number"
                           min={0}
                           max={100}
-                          key={`sa:${facts.shadow.color[3]}`}
-                          defaultValue={Math.round(facts.shadow.color[3] * 100)}
-                          aria-label="Shadow opacity"
-                          onBlur={(e) => {
-                            const v = Number(e.target.value)
-                            if (!Number.isFinite(v)) return
-                            const sh = facts.shadow!
-                            const c = sh.color
-                            edit((s) => s.setShadow(selected, c[0], c[1], c[2], Math.max(0, Math.min(100, v)) / 100, sh.dx, sh.dy, sh.blur))
-                          }}
+                          value={alpha}
+                          onChange={(e) => setAlpha(e.target.value)}
+                          onBlur={() => commitFill()}
+                          onKeyDown={enterCommits(() => commitFill())}
+                          aria-label="Fill opacity"
                         />
                       </FormGroup>
                     </div>
-                    <div className="design-console__size">
-                      {(['dx', 'dy', 'blur'] as const).map((k) => (
-                        <FormGroup key={k} label={k === 'dx' ? 'Offset X' : k === 'dy' ? 'Offset Y' : 'Softness'}>
-                          <input
-                            type="number"
-                            step={1}
-                            min={k === 'blur' ? 0 : undefined}
-                            key={`${k}:${facts.shadow![k]}`}
-                            defaultValue={facts.shadow![k]}
-                            aria-label={`Shadow ${k}`}
-                            onBlur={(e) => {
-                              const v = Number(e.target.value)
-                              if (!Number.isFinite(v) || v === facts.shadow![k]) return
-                              const sh = { ...facts.shadow!, [k]: v }
-                              const c = sh.color
-                              edit((s) => s.setShadow(selected, c[0], c[1], c[2], c[3], sh.dx, sh.dy, sh.blur))
-                            }}
-                          />
-                        </FormGroup>
-                      ))}
-                    </div>
                     {theme ? (
                       <TokenSelect
-                        label="Shadow token"
+                        label="Fill token"
                         tokens={theme.colorTokens}
-                        value={facts.shadow.token ?? null}
-                        onPick={(t) => edit((s) => s.setColorToken(selected, 'shadow', t ?? '', theme.json))}
+                        value={facts.fill_token ?? null}
+                        onPick={(t) => edit((s) => s.setColorToken(selected, 'fill', t ?? '', theme.json))}
                       />
                     ) : null}
                   </>
                 ) : null}
               </OptionalSection>
-            </>
-          ) : null}
+            )}
+            {/* Outline and shadow, on everything with a silhouette. Boxes and
+                images decorate their rounded rect; text rings and shadows its
+                glyphs — the outline drawn OUTWARD there, because an inside
+                stroke eats thin letterforms. */}
+            {facts.kind === 'box' || facts.kind === 'image' || facts.kind === 'text' ? (
+              <>
+                <OptionalSection
+                  label="Outline"
+                  on={!!facts.stroke}
+                  onEnable={() => edit((s) => s.setStroke(selected, 1, 1, 1, 1, 2))}
+                  onDisable={() => edit((s) => s.clearStroke(selected))}
+                >
+                  {facts.stroke ? (
+                    <div className="design-console__size">
+                      <FormGroup label="Colour">
+                        <input
+                          type="color"
+                          value={rgbToHex(facts.stroke.color)}
+                          disabled={!!facts.stroke.token}
+                          aria-label="Outline colour"
+                          onChange={(e) => {
+                            const rgb = hexToRgb(e.target.value)
+                            if (rgb) edit((s) => s.setStroke(selected, rgb[0], rgb[1], rgb[2], facts.stroke!.color[3], facts.stroke!.width))
+                          }}
+                        />
+                      </FormGroup>
+                      <FormGroup label="Width">
+                        <input
+                          type="number"
+                          min={0.5}
+                          step={0.5}
+                          key={`sw:${facts.stroke.width}`}
+                          defaultValue={facts.stroke.width}
+                          aria-label="Outline width"
+                          onBlur={(e) => {
+                            const v = Number(e.target.value)
+                            if (Number.isFinite(v) && v > 0 && v !== facts.stroke!.width) {
+                              const c = facts.stroke!.color
+                              edit((s) => s.setStroke(selected, c[0], c[1], c[2], c[3], v))
+                            }
+                          }}
+                        />
+                      </FormGroup>
+                    </div>
+                  ) : null}
+                  {facts.stroke && theme ? (
+                    <TokenSelect
+                      label="Outline token"
+                      tokens={theme.colorTokens}
+                      value={facts.stroke.token ?? null}
+                      onPick={(t) => edit((s) => s.setColorToken(selected, 'stroke', t ?? '', theme.json))}
+                    />
+                  ) : null}
+                </OptionalSection>
 
-          <div className="design-console__size">
-            <FormGroup label="Corner radius">
-              <input
-                type="number"
-                min={0}
-                value={radius}
-                onChange={(e) => setRadius(e.target.value)}
-                onBlur={commitRadius}
-                onKeyDown={enterCommits(commitRadius)}
-                aria-label="Corner radius"
-              />
-            </FormGroup>
-            <FormGroup label="Opacity %">
-              <input
-                type="number"
-                min={0}
-                max={100}
-                value={opacity}
-                onChange={(e) => setOpacity(e.target.value)}
-                onBlur={commitOpacity}
-                onKeyDown={enterCommits(commitOpacity)}
-                aria-label="Node opacity"
-              />
-            </FormGroup>
-          </div>
+                <OptionalSection
+                  label="Shadow"
+                  on={!!facts.shadow}
+                  onEnable={() => edit((s) => s.setShadow(selected, 0, 0, 0, 0.6, 6, 6, 12))}
+                  onDisable={() => edit((s) => s.clearShadow(selected))}
+                >
+                  {facts.shadow ? (
+                    <>
+                      <div className="design-console__size">
+                        <FormGroup label="Colour">
+                          <input
+                            type="color"
+                            value={rgbToHex(facts.shadow.color)}
+                            disabled={!!facts.shadow.token}
+                            aria-label="Shadow colour"
+                            onChange={(e) => {
+                              const rgb = hexToRgb(e.target.value)
+                              const sh = facts.shadow!
+                              if (rgb) edit((s) => s.setShadow(selected, rgb[0], rgb[1], rgb[2], sh.color[3], sh.dx, sh.dy, sh.blur))
+                            }}
+                          />
+                        </FormGroup>
+                        <FormGroup label="Opacity %">
+                          <input
+                            type="number"
+                            min={0}
+                            max={100}
+                            key={`sa:${facts.shadow.color[3]}`}
+                            defaultValue={Math.round(facts.shadow.color[3] * 100)}
+                            aria-label="Shadow opacity"
+                            onBlur={(e) => {
+                              const v = Number(e.target.value)
+                              if (!Number.isFinite(v)) return
+                              const sh = facts.shadow!
+                              const c = sh.color
+                              edit((s) => s.setShadow(selected, c[0], c[1], c[2], Math.max(0, Math.min(100, v)) / 100, sh.dx, sh.dy, sh.blur))
+                            }}
+                          />
+                        </FormGroup>
+                      </div>
+                      <div className="design-console__size">
+                        {(['dx', 'dy', 'blur'] as const).map((k) => (
+                          <FormGroup key={k} label={k === 'dx' ? 'Offset X' : k === 'dy' ? 'Offset Y' : 'Softness'}>
+                            <input
+                              type="number"
+                              step={1}
+                              min={k === 'blur' ? 0 : undefined}
+                              key={`${k}:${facts.shadow![k]}`}
+                              defaultValue={facts.shadow![k]}
+                              aria-label={`Shadow ${k}`}
+                              onBlur={(e) => {
+                                const v = Number(e.target.value)
+                                if (!Number.isFinite(v) || v === facts.shadow![k]) return
+                                const sh = { ...facts.shadow!, [k]: v }
+                                const c = sh.color
+                                edit((s) => s.setShadow(selected, c[0], c[1], c[2], c[3], sh.dx, sh.dy, sh.blur))
+                              }}
+                            />
+                          </FormGroup>
+                        ))}
+                      </div>
+                      {theme ? (
+                        <TokenSelect
+                          label="Shadow token"
+                          tokens={theme.colorTokens}
+                          value={facts.shadow.token ?? null}
+                          onPick={(t) => edit((s) => s.setColorToken(selected, 'shadow', t ?? '', theme.json))}
+                        />
+                      ) : null}
+                    </>
+                  ) : null}
+                </OptionalSection>
+              </>
+            ) : null}
+            <div className="design-console__size">
+              <FormGroup label="Corner radius">
+                <input
+                  type="number"
+                  min={0}
+                  value={radius}
+                  onChange={(e) => setRadius(e.target.value)}
+                  onBlur={commitRadius}
+                  onKeyDown={enterCommits(commitRadius)}
+                  aria-label="Corner radius"
+                />
+              </FormGroup>
+              <FormGroup label="Opacity %">
+                <input
+                  type="number"
+                  min={0}
+                  max={100}
+                  value={opacity}
+                  onChange={(e) => setOpacity(e.target.value)}
+                  onBlur={commitOpacity}
+                  onKeyDown={enterCommits(commitOpacity)}
+                  aria-label="Node opacity"
+                />
+              </FormGroup>
+            </div>
+          </section>
 
           <p className="design-console__dim">
             Moving edits margins: a pinned node moves freely; one in the flow adjusts its
             place, so its neighbours move with it — that is the layout being responsive,
             not the editor being wrong.
           </p>
-
-          {onDelete ? (
-            <>
-              <Button variant="secondary" block onClick={onDelete}>
-                {facts.text
-                  ? 'Delete this text'
-                  : facts.kind === 'image'
-                    ? 'Delete this image'
-                    : facts.kind === 'mask'
-                      ? 'Delete this mask — its container stops being masked'
-                      : 'Delete this box — and everything inside it'}
-              </Button>
-              <p className="design-console__dim">Also on the keyboard: Delete, with the canvas focused.</p>
-            </>
-          ) : null}
         </>
       ) : null}
     </div>
@@ -1174,7 +1181,7 @@ function FieldsEditor({
                 }
               />
             </FormGroup>
-            <FormGroup label="Sample — shown on the canvas">
+            <FormGroup label="Sample value">
               <input
                 key={`s:${f.key}:${f.sample ?? ''}`}
                 defaultValue={f.sample ?? ''}
@@ -1742,6 +1749,32 @@ export function Design() {
     return () => window.removeEventListener('keydown', onKey)
   }, [togglePlay, mediaOpen])
 
+  /**
+   * Save the open document as the same JSON file "Open a template file…"
+   * reads. Templates could be imported and never exported, which made the
+   * format a one-way door: no way to hand a template to somebody, keep one
+   * beside a service in version control, or move one between servers.
+   *
+   * The MIRROR, not the compiled bytes. Compiled output is addressed content
+   * for a node to stage; this is the document a person edits, and it is what
+   * import accepts — a round trip that does not go through the compiler cannot
+   * silently stop matching it.
+   */
+  const onSaveFile = useCallback(() => {
+    if (!doc) return
+    const name = String(doc.name ?? 'template')
+    const url = URL.createObjectURL(
+      new Blob([JSON.stringify(doc, null, 2)], { type: 'application/json' }),
+    )
+    const a = document.createElement('a')
+    a.href = url
+    // Anything a filesystem would argue with becomes a dash. A template named
+    // "Sermon quote / wide" must not silently save into a directory.
+    a.download = `${name.replace(/[^\w\-. ]+/g, '-')}.json`
+    a.click()
+    URL.revokeObjectURL(url)
+  }, [doc])
+
   const onOpenFile = useCallback(async (file: File) => {
     if (!confirmLeave()) return
     setPublishState(null)
@@ -2043,9 +2076,6 @@ export function Design() {
           <Button variant="secondary" disabled={!canRedo} onClick={redo} title="Redo (Shift+Cmd+Z)">
             <Redo2 size={14} aria-hidden /> Redo
           </Button>
-          <span className="console__toolbar-note">
-            Publishing is what makes a Template usable by Items. Nodes stage it by its address.
-          </span>
         </div>
         <Tag tone="raised" size={10}>{`${list.length} templates`}</Tag>
       </div>
@@ -2187,21 +2217,28 @@ export function Design() {
                 {t === 'template' ? 'Template' : 'Inspector'}
               </button>
             ))}
-            <span className="design-console__tabs-spacer" />
-            {doc ? (
-              <StatusPill tone={published ? 'ready' : 'staged'} variant="subtle" size={10}>
-                {published ? 'PUBLISHED' : 'NOT PUBLISHED'}
-              </StatusPill>
-            ) : null}
           </div>
           <PanelBody pad16>
             {doc ? (
               panelTab === 'template' ? (
                 <>
                   <div className="design-console__name">
-                    <span className="design-console__title">{String(doc.name ?? 'Untitled')}</span>
+                    <div className="design-console__nameline">
+                      <span className="design-console__title">{String(doc.name ?? 'Untitled')}</span>
+                      {/* Beside the thing it is true of. In the tab strip it
+                          read as a third tab, and it describes this template,
+                          not this panel. */}
+                      <StatusPill tone={published ? 'ready' : 'staged'} variant="subtle" size={10}>
+                        {published ? 'PUBLISHED' : 'NOT PUBLISHED'}
+                      </StatusPill>
+                    </div>
                     <span className="design-console__id">{docId}</span>
                   </div>
+
+                  <button type="button" className="design-console__file" onClick={onSaveFile}>
+                    <FileDown size={14} aria-hidden />
+                    <span>Save to a file…</span>
+                  </button>
 
                   <KeyValueRow
                     label="Used by"
@@ -2286,7 +2323,6 @@ export function Design() {
                   imageAssets={imageAssets}
                   theme={activeTheme}
                   onEdit={edit}
-                  onDelete={selNode === rootId ? undefined : deleteSelected}
                 />
               ) : (
                 <p className="design-console__dim">

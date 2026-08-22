@@ -52,6 +52,7 @@ const NOT_PUBLIC = new Map([
   ['GET /api/assets/sync', 'Per-node asset possession for the Media Browser. Derived view, not a contract.'],
   ['POST /api/assets', 'Asset management, used by Design.'],
   ['POST /api/assets/ingest', 'Server-side transcode on ingest. Design and Edit only.'],
+  ['PATCH /api/assets/:hash', 'Asset management, used by Design — the label in a picker, never the identity.'],
   ['GET /api/ingest', 'Ingest job status. Design and Edit only.'],
   ['GET /api/ingest/:id', 'Ingest job status. Design and Edit only.'],
   ['POST /api/templates', 'Authoring. Design writes these; an integrator reads them.'],

@@ -17,18 +17,23 @@
  * nodes already report (`/api/assets/sync`). A node that has not reported
  * against the current assignment shows "no report", never a green chip.
  *
- * # Names are the files' own
+ * # Names are the files' own, and then they are the operator's
  *
- * A font row is named by what the file says it is — parsed by the same
- * engine that shapes with it. A clip is named by the filename it was
- * ingested under. Images show themselves.
+ * An asset arrives with a perfectly good name and the CAS throws it away: the
+ * hash is the identity, and `4a3b0d7b` is a terrible label to pick a plate by.
+ * So an upload keeps its filename, and every row's name is editable here —
+ * this is the one place that names things, and every picker reads it.
+ *
+ * A font is the exception and stays named by what the FILE says it is, parsed
+ * by the same engine that shapes with it. Renaming "Inter · 700" to something
+ * else would only disagree with the family a template actually declares.
  */
 
 import { useEffect, useRef, useState } from 'react'
 import { Clapperboard, FileUp, X } from 'lucide-react'
 import { invalidate, useQuery } from '../../lib/useQuery'
 import { keys } from '../../lib/keys'
-import { postBytes } from '../../lib/api'
+import { patch, postBytes } from '../../lib/api'
 import { GroupHeader, StatusPill, Tag } from '../../components/console'
 import type { FaceInfo } from './useDesign'
 
@@ -48,6 +53,8 @@ type AssetRow = {
   hash: string
   size: number
   kind: string
+  /** What a person calls it. Null for anything uploaded before names. */
+  name?: string | null
   media?: {
     codec?: string
     width?: number
@@ -128,6 +135,47 @@ function UploadRow({
   )
 }
 
+/**
+ * A name a person can change, committed on blur or Enter.
+ *
+ * Uncontrolled and keyed by the stored name: the field belongs to whoever is
+ * typing in it until they finish, and a refetch mid-edit must not reach in and
+ * replace what they have half-written.
+ */
+function AssetName({
+  hash,
+  name,
+  onRename,
+}: {
+  hash: string
+  name: string
+  onRename: (name: string) => void
+}) {
+  return (
+    <input
+      className="mdb__rename"
+      key={`${hash}:${name}`}
+      defaultValue={name}
+      aria-label={`Name of ${shortHash(hash)}`}
+      onKeyDown={(e) => {
+        if (e.key === 'Enter') (e.target as HTMLInputElement).blur()
+        if (e.key === 'Escape') {
+          ;(e.target as HTMLInputElement).value = name
+          ;(e.target as HTMLInputElement).blur()
+        }
+      }}
+      onBlur={(e) => {
+        const next = e.target.value.trim()
+        if (!next || next === name) {
+          e.target.value = name
+          return
+        }
+        onRename(next)
+      }}
+    />
+  )
+}
+
 type KindTab = 'all' | 'font' | 'image' | 'video'
 
 export function MediaBrowser({
@@ -158,10 +206,24 @@ export function MediaBrowser({
     return () => window.removeEventListener('keydown', onKey)
   }, [onClose])
 
+  const rename = async (hash: string, name: string) => {
+    setProblem(null)
+    try {
+      await patch(`/api/assets/${hash}`, { name })
+      invalidate(keys.assets())
+      invalidate(keys.assetSync())
+    } catch (e) {
+      setProblem(e instanceof Error ? e.message : String(e))
+    }
+  }
+
   const upload = async (file: File, kind: 'font' | 'image') => {
     setProblem(null)
     try {
-      await postBytes(`/api/assets?kind=${kind}`, new Uint8Array(await file.arrayBuffer()))
+      await postBytes(
+        `/api/assets?kind=${kind}&name=${encodeURIComponent(file.name)}`,
+        new Uint8Array(await file.arrayBuffer()),
+      )
       invalidate(keys.assets())
       invalidate(keys.assetSync())
     } catch (e) {
@@ -300,7 +362,15 @@ export function MediaBrowser({
               <UploadRow label="Add an image…" accept=".png,.jpg,.jpeg" onFile={(f) => void upload(f, 'image')} />
               {images.length === 0 ? <p className="mdb__dim">No images yet.</p> : null}
               {images.map((a) =>
-                row(a, shortHash(a.hash), <img className="mdb__thumb" src={`/cas/${a.hash}`} alt="" />),
+                row(
+                  a,
+                  <AssetName
+                    hash={a.hash}
+                    name={a.name ?? shortHash(a.hash)}
+                    onRename={(n) => void rename(a.hash, n)}
+                  />,
+                  <img className="mdb__thumb" src={`/cas/${a.hash}`} alt="" />,
+                ),
               )}
             </>
           ) : null}
@@ -335,7 +405,11 @@ export function MediaBrowser({
               {videos.map((a) =>
                 row(
                   a,
-                  a.media?.filename ?? shortHash(a.hash),
+                  <AssetName
+                    hash={a.hash}
+                    name={a.name ?? a.media?.filename ?? shortHash(a.hash)}
+                    onRename={(n) => void rename(a.hash, n)}
+                  />,
                   <span className="mdb__swatch mdb__swatch--clip" aria-hidden>
                     <Clapperboard size={13} />
                   </span>,

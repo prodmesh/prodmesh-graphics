@@ -829,3 +829,78 @@ test('followers: the sweep walks every hash a theme has ever had', async () => {
   assert.equal(f.theme_hash, hashA)
   assert.equal(f.mirror_hash, 'blake3:mirror')
 })
+
+// ---------------------------------------------------------------------------
+// An asset's name
+// ---------------------------------------------------------------------------
+
+/** POST raw bytes, the way an upload actually arrives. */
+async function upload(url, bytes) {
+  const server = app.listen(0)
+  await new Promise((r) => server.once('listening', r))
+  try {
+    const res = await fetch(`http://127.0.0.1:${server.address().port}${url}`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/octet-stream' },
+      body: bytes,
+    })
+    return { status: res.status, json: await res.json() }
+  } finally {
+    server.close()
+  }
+}
+
+test('an upload keeps the name it arrived with, and a hash is never the label', async () => {
+  const bytes = Buffer.from('a plate, notionally a PNG — one of four')
+  const put = await upload('/api/assets?kind=image&name=' + encodeURIComponent('Lower third plate.png'), bytes)
+  assert.ok(put.status === 200 || put.status === 201)
+
+  const list = await req('GET', '/api/assets')
+  const row = list.json.assets.find((a) => a.hash === put.json.hash)
+  assert.equal(row.name, 'Lower third plate.png')
+})
+
+test('renaming changes the label and never the identity', async () => {
+  const bytes = Buffer.from('another plate')
+  const put = await upload('/api/assets?kind=image&name=upload.png', bytes)
+
+  const renamed = await req('PATCH', `/api/assets/${put.json.hash}`, { name: 'Wide plate' })
+  assert.equal(renamed.status, 200)
+
+  const list = await req('GET', '/api/assets')
+  const row = list.json.assets.find((a) => a.hash === put.json.hash)
+  assert.equal(row.name, 'Wide plate')
+  // The hash is what a template declares and a node stages. Renaming must not
+  // touch it, or every published revision pointing at it would break.
+  assert.equal(row.hash, put.json.hash)
+
+  const missing = await req('PATCH', '/api/assets/blake3:nope', { name: 'x' })
+  assert.equal(missing.status, 404)
+  const blank = await req('PATCH', `/api/assets/${put.json.hash}`, { name: '  ' })
+  assert.equal(blank.status, 422)
+})
+
+test('re-uploading the same bytes does not undo a rename', async () => {
+  const bytes = Buffer.from('a plate somebody has already named')
+  const put = await upload('/api/assets?kind=image&name=DSC00042.png', bytes)
+  await req('PATCH', `/api/assets/${put.json.hash}`, { name: 'Advent backdrop' })
+
+  // Same bytes, same asset, arriving again under its original filename.
+  await upload('/api/assets?kind=image&name=DSC00042.png', bytes)
+
+  const list = await req('GET', '/api/assets')
+  assert.equal(list.json.assets.find((a) => a.hash === put.json.hash).name, 'Advent backdrop')
+})
+
+test('an asset uploaded without a name takes the next upload that has one', async () => {
+  const bytes = Buffer.from('a plate from before names existed')
+  const put = await upload('/api/assets?kind=image', bytes)
+  const list1 = await req('GET', '/api/assets')
+  assert.equal(list1.json.assets.find((a) => a.hash === put.json.hash).name, null)
+
+  await upload('/api/assets?kind=image&name=Plate.png', bytes)
+  const list2 = await req('GET', '/api/assets')
+  // A library that predates names fills in as it is used, rather than staying
+  // a wall of hashes for ever.
+  assert.equal(list2.json.assets.find((a) => a.hash === put.json.hash).name, 'Plate.png')
+})

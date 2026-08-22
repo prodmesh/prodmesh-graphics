@@ -336,10 +336,17 @@
 
 /* ---- Panel --------------------------------------------------------------- */
 
+/* Left and right only. A panel always sits BETWEEN two chrome bands that draw
+   their own edges — the toolbar's bottom, the footer's top — so top and bottom
+   borders here landed beside those and read as 2px. Every boundary is drawn by
+   exactly one side of it; a panel's own vertical divisions come from
+   `.c-panel__header`, which draws its own. */
 .c-panel {
   box-sizing: border-box;
   background: var(--pm-surface-chrome);
-  border: 1px solid var(--pm-border-hairline);
+  border: 0;
+  border-left: 1px solid var(--pm-border-hairline);
+  border-right: 1px solid var(--pm-border-hairline);
   display: flex;
   flex-direction: column;
   align-items: flex-start;

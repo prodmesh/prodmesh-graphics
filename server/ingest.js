@@ -244,11 +244,15 @@ export async function start({ bytes, filename = 'upload' }) {
 function record(hash, size, info, filename) {
   handle()
     .prepare(
-      `INSERT INTO assets (hash, size, kind, first_seen, media)
-       VALUES (?, ?, 'video', ?, ?)
-       ON CONFLICT(hash) DO UPDATE SET media = excluded.media, kind = 'video'`,
+      `INSERT INTO assets (hash, size, kind, first_seen, media, name)
+       VALUES (?, ?, 'video', ?, ?, ?)
+       ON CONFLICT(hash) DO UPDATE SET
+         media = excluded.media,
+         kind = 'video',
+         -- A re-ingest does not rename a clip somebody has already named.
+         name = COALESCE(assets.name, excluded.name)`,
     )
-    .run(hash, size, Date.now(), JSON.stringify({ ...info, filename }))
+    .run(hash, size, Date.now(), JSON.stringify({ ...info, filename }), filename || null)
 }
 
 /** Test seam. */

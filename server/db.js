@@ -17,7 +17,12 @@ import Database from 'better-sqlite3'
 import fs from 'node:fs'
 import path from 'node:path'
 
-export const SCHEMA_VERSION = 7
+/**
+ * The schema version, which is the number of migrations. Derived rather than
+ * declared: a hand-maintained constant beside a growing array is a number that
+ * drifts, and this one had — it said 7 while fourteen migrations existed.
+ */
+export const schemaVersion = () => MIGRATIONS.length
 
 let db = null
 
@@ -455,6 +460,31 @@ const MIGRATIONS = [
         PRIMARY KEY (node_id, output_id)
       );
     `)
+  },
+
+  // 15 — an asset's name.
+  //
+  // A hash is the right IDENTITY and a terrible name. `4a3b0d7b` in a picker
+  // tells a designer nothing about which of four lower-third plates it is, and
+  // the file arrived with a perfectly good name that the CAS threw away.
+  //
+  // A column, not the `media` JSON: this one IS queried and edited on its own,
+  // and it applies to a font and an image as much as to a clip. It stays
+  // nullable — the hash remains the fallback, and a name is a convenience that
+  // must never be required for a render.
+  (d) => {
+    d.exec(`ALTER TABLE assets ADD COLUMN name TEXT`)
+    // Clips ingested before this carried their filename inside the media blob.
+    // Lifting it means an existing library reads correctly on the first boot
+    // after the migration rather than starting over as hashes.
+    for (const row of d.prepare(`SELECT hash, media FROM assets WHERE media IS NOT NULL`).all()) {
+      try {
+        const name = JSON.parse(row.media)?.filename
+        if (name) d.prepare(`UPDATE assets SET name = ? WHERE hash = ?`).run(String(name), row.hash)
+      } catch {
+        // A media blob that will not parse is not a reason to fail a migration.
+      }
+    }
   },
 ]
 

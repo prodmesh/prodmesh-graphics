@@ -548,3 +548,85 @@ describe('masks', () => {
     expect([...sizing.options].map((o) => o.value)).toContain('percent')
   })
 })
+
+describe('saving a template to a file', () => {
+  /**
+   * Templates could be imported and never exported, which made the format a
+   * one-way door: no way to hand one to somebody, keep one beside a service in
+   * version control, or move one between servers.
+   */
+  test('writes the same JSON mirror that "Open a template file…" reads', async () => {
+    const blobs: Blob[] = []
+    const create = vi.fn((b: Blob) => {
+      blobs.push(b)
+      return 'blob:x'
+    })
+    vi.stubGlobal('URL', { ...URL, createObjectURL: create, revokeObjectURL: vi.fn() })
+    const clicks: HTMLAnchorElement[] = []
+    const realCreate = document.createElement.bind(document)
+    vi.spyOn(document, 'createElement').mockImplementation((tag: string) => {
+      const el = realCreate(tag)
+      if (tag === 'a') {
+        vi.spyOn(el, 'click').mockImplementation(() => clicks.push(el as HTMLAnchorElement))
+      }
+      return el
+    })
+
+    await openTemplate()
+    fireEvent.click(screen.getByText('Save to a file…'))
+
+    expect(blobs.length).toBe(1)
+    const written = JSON.parse(await blobs[0]!.text()) as Record<string, unknown>
+    // The document, not the compiled bytes: compiled output is addressed
+    // content for a node to stage, and import reads this.
+    expect(written.format).toBe('pmg.scene')
+    expect(written.name).toBe('Lower third')
+    expect((written.root as { id: string }).id).toBe('root')
+    expect(clicks[0]!.download).toBe('Lower third.json')
+  })
+
+  test('a name a filesystem would argue with cannot become a path', async () => {
+    // "Sermon quote / wide" must not save into a directory.
+    const clicks: HTMLAnchorElement[] = []
+    vi.stubGlobal('URL', { ...URL, createObjectURL: () => 'blob:x', revokeObjectURL: vi.fn() })
+    const realCreate = document.createElement.bind(document)
+    vi.spyOn(document, 'createElement').mockImplementation((tag: string) => {
+      const el = realCreate(tag)
+      if (tag === 'a') vi.spyOn(el, 'click').mockImplementation(() => clicks.push(el as HTMLAnchorElement))
+      return el
+    })
+    h.DOC.name = 'Sermon quote / wide'
+    try {
+      await openTemplate()
+      fireEvent.click(screen.getByText('Save to a file…'))
+      expect(clicks[0]!.download).toBe('Sermon quote - wide.json')
+    } finally {
+      h.DOC.name = 'Lower third'
+    }
+  })
+})
+
+describe('the inspector', () => {
+  test('groups the controls, and each spacing edge says which edge it is', async () => {
+    await openTemplate()
+    selectInTree('band')
+
+    // Content, Layout, Style — a flat run of twenty labelled rows has no
+    // landmarks, and every control looks equally important.
+    await screen.findByText('Layout')
+    expect(screen.getByText('Style')).toBeDefined()
+
+    // Four bare boxes under the words "top right bottom left" made the reader
+    // count positions to find the one they wanted.
+    expect(screen.getByLabelText('margin top')).toBeDefined()
+    expect(screen.getByLabelText('padding left')).toBeDefined()
+    expect(screen.queryByText(/Margin — top right bottom left/)).toBeNull()
+  })
+
+  test('offers no delete button — deleting is the menu and the Delete key', async () => {
+    await openTemplate()
+    selectInTree('band')
+    await screen.findByText('Layout')
+    expect(screen.queryByText(/^Delete this/)).toBeNull()
+  })
+})

@@ -250,9 +250,15 @@ export function createApp() {
       }
       const stored = await cas.put(req.body)
       const db = openDb()
+      const name = String(req.query.name ?? '').trim() || null
       db.prepare(
-        `INSERT OR IGNORE INTO assets (hash, size, kind, first_seen) VALUES (?, ?, ?, ?)`,
-      ).run(stored.hash, stored.size, String(req.query.kind ?? 'blob'), Date.now())
+        `INSERT OR IGNORE INTO assets (hash, size, kind, first_seen, name) VALUES (?, ?, ?, ?, ?)`,
+      ).run(stored.hash, stored.size, String(req.query.kind ?? 'blob'), Date.now(), name)
+      // The same bytes uploaded again are the same asset, and its name is not
+      // overwritten — somebody may have renamed it since. But a row that never
+      // got one takes this upload's, so a library that predates names fills in
+      // as it is used rather than staying a wall of hashes.
+      if (name) db.prepare(`UPDATE assets SET name = ? WHERE hash = ? AND name IS NULL`).run(name, stored.hash)
       res.status(stored.deduped ? 200 : 201).json(stored)
     },
   )
@@ -280,6 +286,24 @@ export function createApp() {
       res.status(202).json(job)
     },
   )
+
+  /**
+   * Rename an asset.
+   *
+   * The hash stays the identity — nothing about a render changes here. This is
+   * the label a designer reads in a picker, and `4a3b0d7b` is not one.
+   */
+  app.patch('/api/assets/:hash', requirePermission('graphics.assets.manage'), (req, res) => {
+    const name = String(req.body?.name ?? '').trim()
+    if (!name) {
+      return res.status(422).json({ error: 'validation_failed', label: 'An asset needs a name.' })
+    }
+    const info = openDb().prepare('UPDATE assets SET name = ? WHERE hash = ?').run(name, req.params.hash)
+    if (info.changes === 0) {
+      return res.status(404).json({ error: 'not_found', label: 'This server does not hold that asset.' })
+    }
+    res.json({ hash: req.params.hash, name })
+  })
 
   app.get('/api/ingest', (_req, res) => res.json({ jobs: ingest.list() }))
   app.get('/api/ingest/:id', (req, res) => {
