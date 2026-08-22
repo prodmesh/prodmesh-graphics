@@ -91,7 +91,23 @@
   max-width: 980px;
 }
 .edit-console__list-head { display: flex; gap: 12px; align-items: baseline; margin-bottom: 4px; }
-.edit-console__list-title { font-weight: 700; font-size: 18px; color: var(--pm-text-primary); }
+.edit-console__list-title {
+  flex: 1;
+  min-width: 0;
+  height: 32px;
+  border: 0;
+  outline: none;
+  border-radius: var(--pm-radius-4);
+  background: transparent;
+  padding: 0 8px;
+  margin-left: -8px;
+  font-family: var(--pm-font-ui);
+  font-weight: 700;
+  font-size: 18px;
+  color: var(--pm-text-primary);
+}
+.edit-console__list-title:hover,
+.edit-console__list-title:focus { background: var(--pm-surface-field); }
 .edit-console__mode { display: flex; flex-direction: column; gap: 6px; max-width: 420px; margin-bottom: 6px; }
 
 .edit-console__entry { display: flex; gap: 10px; align-items: stretch; }
@@ -161,9 +177,25 @@
   gap: 10px;
   align-self: stretch;
 }
-.edit-console__dest-row { display: flex; gap: 8px; align-items: flex-end; }
-.edit-console__dest-row > .c-formgroup { flex: 1; min-width: 0; }
-.edit-console__dest-remove { flex-shrink: 0; margin-bottom: 8px; }
+/* One control per row. Three selects sharing a 360px inspector left each about
+   100px wide, so "Fires with the take" rendered as "Fires with the tak" and
+   every option had to be guessed at. Height is cheap here; a truncated choice
+   is not. */
+.edit-console__dest-row { display: flex; flex-direction: column; gap: 10px; }
+.edit-console__dest-row > .c-formgroup { min-width: 0; }
+.edit-console__dest-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.edit-console__dest-num {
+  font-family: var(--pm-font-mono);
+  font-size: 10px;
+  letter-spacing: var(--pm-tracking-caps);
+  text-transform: uppercase;
+  color: var(--pm-text-idle);
+}
 .edit-console__hint { margin: 0; font-size: 11px; line-height: 1.6; color: var(--pm-text-idle); }
 .edit-console__hint b { color: var(--pm-text-secondary); }
 
@@ -190,3 +222,21 @@
 .timer { display: flex; flex-direction: column; gap: 6px; }
 .timer > select,
 .timer > input { width: 100%; }
+
+/* The rundown picker: which running order this rail is editing. It used to be
+   whichever one happened to be first, with no way to name it or make another. */
+.edit-console__rundown-pick { display: flex; align-items: center; gap: 4px; }
+.edit-console__rundown-pick > select { flex: 1; min-width: 0; }
+.edit-console__rename {
+  flex: 1;
+  min-width: 0;
+  height: 28px;
+  border: 0;
+  outline: none;
+  border-radius: var(--pm-radius-4);
+  background: var(--pm-surface-field);
+  color: var(--pm-text-primary);
+  font-family: var(--pm-font-ui);
+  font-size: 12px;
+  padding: 0 8px;
+}

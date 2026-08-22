@@ -253,3 +253,36 @@ test('a section this rundown does not have is refused by name', async () => {
   // Named, so an operator can see it was a typo rather than a broken button.
   assert.match(r.json.label, /Bridge 2/)
 })
+
+// ---------------------------------------------------------------------------
+// Naming and unmaking, which the rail could not do at all
+
+test('a rundown and a playlist can be renamed', async () => {
+  seed()
+  const r = await req('POST', '/api/rundowns', { name: 'Sunday' })
+  const renamed = await req('PATCH', `/api/rundowns/${r.json.id}`, { name: 'Christmas Eve' })
+  assert.equal(renamed.status, 200)
+  assert.equal(renamed.json.name, 'Christmas Eve')
+
+  const p = await req('POST', '/api/playlists', { name: 'Playlist 5' })
+  const pr = await req('PATCH', `/api/playlists/${p.json.id}`, { name: 'Amazing Grace' })
+  assert.equal(pr.json.name, 'Amazing Grace')
+
+  assert.equal((await req('PATCH', `/api/rundowns/${r.json.id}`, { name: '  ' })).status, 422)
+  assert.equal((await req('PATCH', '/api/rundowns/nope', { name: 'x' })).status, 404)
+})
+
+test('deleting a rundown leaves its playlists alone', async () => {
+  seed()
+  const p = await req('POST', '/api/playlists', { name: 'Amazing Grace' })
+  const r = await req('POST', '/api/rundowns', { name: 'Sunday' })
+  await req('PUT', `/api/rundowns/${r.json.id}/playlists`, { playlists: [p.json.id] })
+
+  assert.equal((await req('DELETE', `/api/rundowns/${r.json.id}`)).status, 204)
+  assert.equal((await req('GET', `/api/rundowns/${r.json.id}`)).status, 404)
+  // A rundown is an ORDER over playlists. Deleting Sunday's running order must
+  // not delete Sunday's content.
+  assert.equal((await req('GET', `/api/playlists/${p.json.id}`)).status, 200)
+
+  assert.equal((await req('DELETE', '/api/rundowns/nope')).status, 404)
+})

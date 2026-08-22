@@ -64,20 +64,53 @@ import type {
 
 const SHOW = 'default'
 
+/**
+ * Which running order this station is on.
+ *
+ * Remembered per BROWSER, not on the server. A booth screen and a wall display
+ * are different places and may honestly be on different shows; and inventing a
+ * server-side "the live rundown" would be a piece of shared state nobody has
+ * asked for, which the first two-service Sunday would then have to fight.
+ */
+const PICKED_RUNDOWN = 'pmg.rundown'
+
 export function Show() {
   const { data: nodes } = useQuery<{ nodes: NodeSummary[] }>(keys.nodes())
   const { data: items } = useQuery<{ items: Item[] }>(keys.items())
   const { data: rundowns } = useQuery<{ rundowns: { id: string; name: string }[] }>(keys.rundowns())
 
+  const [picked, setPicked] = useState<string | null>(() => {
+    try {
+      return window.localStorage.getItem(PICKED_RUNDOWN)
+    } catch {
+      return null
+    }
+  })
+
   const node = nodes?.nodes?.[0]
   const output = node?.state?.outputs?.[0]
-  const rundown = rundowns?.rundowns?.[0]
+  const all = rundowns?.rundowns ?? []
+  // A remembered rundown that has since been deleted falls back rather than
+  // leaving the console blank on the morning it is needed.
+  const rundown = all.find((r) => r.id === picked) ?? all[0]
+
+  const pick = (id: string) => {
+    setPicked(id)
+    try {
+      window.localStorage.setItem(PICKED_RUNDOWN, id)
+    } catch {
+      /* a browser with storage off simply picks again next time */
+    }
+  }
 
   if (!node) return <NoNodes />
 
   return rundown ? (
     <RundownConsole
+      key={rundown.id}
       rundownId={rundown.id}
+      rundowns={all}
+      onPick={pick}
       node={node}
       outputId={output?.id ?? 'out-0'}
       items={items?.items ?? []}
@@ -106,11 +139,15 @@ function NoNodes() {
 
 function RundownConsole({
   rundownId,
+  rundowns,
+  onPick,
   node,
   outputId,
   items,
 }: {
   rundownId: string
+  rundowns: { id: string; name: string }[]
+  onPick: (id: string) => void
   node: NodeSummary
   outputId: string
   items: Item[]
@@ -137,7 +174,21 @@ function RundownConsole({
     <div className="show-console">
       <div className="console__toolbar">
         <div className="console__toolbar-group">
-          <Tag pill tone="raised">{r.rundown.name}</Tag>
+          {/* One rundown is a tag; several is a choice. A booth that cannot
+              reach next Sunday's running order has to be edited to get at it,
+              which is the wrong mode for an operator. */}
+          {rundowns.length > 1 ? (
+            <select
+              className="show-console__pick"
+              value={rundownId}
+              aria-label="Rundown"
+              onChange={(e) => onPick(e.target.value)}
+            >
+              {rundowns.map((x) => <option key={x.id} value={x.id}>{x.name}</option>)}
+            </select>
+          ) : (
+            <Tag pill tone="raised">{r.rundown.name}</Tag>
+          )}
           {r.known ? (
             <Tag tone={r.follow ? 'armed' : 'quiet'} size={10}>
               {r.follow ? 'Follow — arrows take' : 'Cue — arrows move'}

@@ -59,6 +59,14 @@ router.post('/api/playlists', mayEdit, (req, res) => {
  * whoever is running the show, which is worth an explicit act rather than a
  * field that rides along with an edit nobody thought was dangerous.
  */
+router.patch('/api/playlists/:id', mayEdit, (req, res) => {
+  const name = String(req.body?.name ?? '').trim()
+  if (!name) return fail(res, 422, 'validation_failed', 'A playlist needs a name.')
+  const p = rundown.renamePlaylist(req.params.id, name)
+  if (!p) return fail(res, 404, 'not_found', 'There is no playlist with that id.')
+  res.json(p)
+})
+
 router.put('/api/playlists/:id/mode', mayEdit, (req, res) => {
   const mode = String(req.body?.mode ?? '')
   const problem = badMode(mode)
@@ -121,6 +129,25 @@ router.post('/api/rundowns', mayEdit, (req, res) => {
   const name = String(req.body?.name ?? '').trim()
   if (!name) return fail(res, 422, 'validation_failed', 'A rundown needs a name.')
   res.status(201).json(rundown.createRundown(name))
+})
+
+router.patch('/api/rundowns/:id', mayEdit, (req, res) => {
+  const name = String(req.body?.name ?? '').trim()
+  if (!name) return fail(res, 422, 'validation_failed', 'A rundown needs a name.')
+  const r = rundown.renameRundown(req.params.id, name)
+  if (!r) return fail(res, 404, 'not_found', 'There is no rundown with that id.')
+  res.json(r)
+})
+
+/**
+ * Delete a rundown. Its playlists are untouched — a rundown is an ORDER over
+ * them, and deleting Sunday's running order must not delete Sunday's content.
+ */
+router.delete('/api/rundowns/:id', mayEdit, (req, res) => {
+  if (!rundown.deleteRundown(req.params.id)) {
+    return fail(res, 404, 'not_found', 'There is no rundown with that id.')
+  }
+  res.status(204).end()
 })
 
 router.put('/api/rundowns/:id/playlists', mayEdit, (req, res) => {

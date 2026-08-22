@@ -31,11 +31,11 @@
  */
 
 import { useCallback, useEffect, useState } from 'react'
-import { AlertTriangle, ChevronDown, ChevronUp, FolderPlus, ListOrdered, Plus, X } from 'lucide-react'
+import { AlertTriangle, ChevronDown, ChevronUp, FolderPlus, ListOrdered, Pencil, Plus, Trash2, X } from 'lucide-react'
 import { useQuery, invalidate } from '../../lib/useQuery'
 import { useTopic } from '../../lib/stream'
 import { keys, topics } from '../../lib/keys'
-import { ApiError, patch, post, put } from '../../lib/api'
+import { ApiError, del, patch, post, put } from '../../lib/api'
 import {
   Button,
   FormGroup,
@@ -230,15 +230,33 @@ export function Edit() {
 // ---------------------------------------------------------------------------
 // The rail's rundown block: which playlists make the show, in what order.
 
+/**
+ * Which playlists make the show, in what order — and WHICH show.
+ *
+ * It used to render `rundowns[0]` and nothing else: one running order, created
+ * once, unnameable and unswitchable, with no way to start next week's without
+ * editing this week's. A rundown is cheap and a building has several — this
+ * Sunday, next Sunday, the Christmas Eve service — so choosing between them is
+ * the normal case rather than an advanced one.
+ */
 function RundownRail({ playlists }: { playlists: PlaylistSummary[] }) {
   const { data: rundowns } = useQuery<{ rundowns: { id: string; name: string }[] }>(keys.rundowns())
-  const rundownId = rundowns?.rundowns?.[0]?.id ?? null
+  const all = rundowns?.rundowns ?? []
+  const [picked, setPicked] = useState<string | null>(null)
+  const [renaming, setRenaming] = useState(false)
+  // A rundown that has been deleted must not leave the rail pointing at
+  // nothing: fall back to the first rather than rendering an empty shell.
+  const rundownId = picked && all.some((r) => r.id === picked) ? picked : (all[0]?.id ?? null)
   const { data: rundown } = useQuery<RundownDetail>(rundownId ? keys.rundown(rundownId) : null)
 
   const addRundown = useCallback(async () => {
-    await post(keys.rundowns(), { name: 'Sunday' })
+    const made = await post<{ id: string }>(keys.rundowns(), {
+      name: `Rundown ${(rundowns?.rundowns?.length ?? 0) + 1}`,
+    })
     invalidate(keys.rundowns())
-  }, [])
+    setPicked(made.id)
+    setRenaming(true)
+  }, [rundowns])
 
   const save = useCallback(
     async (ids: string[]) => {
@@ -256,15 +274,86 @@ function RundownRail({ playlists }: { playlists: PlaylistSummary[] }) {
   return (
     <div className="edit-console__rundown">
       <GroupHeader
-        label={rundown ? `Rundown · ${rundown.name}` : 'Rundown'}
+        label="Rundown"
         trailing={rundown ? `${contents.length} playlists` : undefined}
       />
-      {!rundownId ? (
+
+      {all.length === 0 ? (
         <Button variant="secondary" block onClick={() => void addRundown()}>
           <Plus size={13} aria-hidden /> New rundown
         </Button>
       ) : (
         <>
+          <div className="edit-console__rundown-pick">
+            {renaming && rundown ? (
+              <input
+                className="edit-console__rename"
+                autoFocus
+                defaultValue={rundown.name}
+                aria-label="Rundown name"
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') (e.target as HTMLInputElement).blur()
+                  if (e.key === 'Escape') {
+                    ;(e.target as HTMLInputElement).value = rundown.name
+                    ;(e.target as HTMLInputElement).blur()
+                  }
+                }}
+                onBlur={(e) => {
+                  const name = e.target.value.trim()
+                  setRenaming(false)
+                  if (!name || name === rundown.name) return
+                  void (async () => {
+                    await patch(keys.rundown(rundown.id), { name })
+                    invalidate(keys.rundowns())
+                    invalidate(keys.rundown(rundown.id))
+                  })()
+                }}
+              />
+            ) : (
+              <select
+                value={rundownId ?? ''}
+                aria-label="Rundown"
+                onChange={(e) => setPicked(e.target.value)}
+              >
+                {all.map((r) => <option key={r.id} value={r.id}>{r.name}</option>)}
+              </select>
+            )}
+            <button
+              type="button"
+              className="edit-console__iconbtn"
+              aria-label="Rename this rundown"
+              onClick={() => setRenaming(true)}
+            >
+              <Pencil size={13} aria-hidden />
+            </button>
+            <button
+              type="button"
+              className="edit-console__iconbtn"
+              aria-label="New rundown"
+              onClick={() => void addRundown()}
+            >
+              <Plus size={13} aria-hidden />
+            </button>
+            <button
+              type="button"
+              className="edit-console__iconbtn"
+              aria-label="Delete this rundown"
+              disabled={!rundownId}
+              onClick={() => {
+                if (!rundown) return
+                // The playlists survive — a rundown is an order over them.
+                if (!window.confirm(`Delete the rundown “${rundown.name}”? Its playlists stay.`)) return
+                void (async () => {
+                  await del(keys.rundown(rundown.id))
+                  setPicked(null)
+                  invalidate(keys.rundowns())
+                })()
+              }}
+            >
+              <Trash2 size={13} aria-hidden />
+            </button>
+          </div>
+
           {contents.map((p, i) => (
             <div key={p.id} className="edit-console__order-row">
               <span className="edit-console__order-pos">{String(i + 1).padStart(2, '0')}</span>
@@ -402,7 +491,34 @@ function PlaylistView({
   return (
     <div className="edit-console__list">
       <div className="edit-console__list-head">
-        <span className="edit-console__list-title">{playlist.name}</span>
+        {/* Editable where it is read. A playlist could be created and never
+            renamed, which left a rail full of "Playlist 5". */}
+        <input
+          className="edit-console__list-title"
+          key={playlist.name}
+          defaultValue={playlist.name}
+          aria-label="Playlist name"
+          onKeyDown={(e) => {
+            if (e.key === 'Enter') (e.target as HTMLInputElement).blur()
+            if (e.key === 'Escape') {
+              ;(e.target as HTMLInputElement).value = playlist.name
+              ;(e.target as HTMLInputElement).blur()
+            }
+          }}
+          onBlur={(e) => {
+            const name = e.target.value.trim()
+            if (!name || name === playlist.name) {
+              e.target.value = playlist.name
+              return
+            }
+            void (async () => {
+              await patch(keys.playlist(id), { name })
+              invalidate(keys.playlist(id))
+              invalidate(keys.playlists())
+              invalidate(keys.rundowns())
+            })()
+          }}
+        />
         <Tag size={10} tone={playlist.mode === 'follow' ? 'armed' : 'quiet'}>
           {playlist.mode}
         </Tag>
@@ -641,6 +757,21 @@ function Destinations({
         const layers = outputs.find((o) => o.output_id === d.output)?.layers ?? []
         return (
           <div key={i} className="edit-console__dest-card">
+            <div className="edit-console__dest-head">
+              <span className="edit-console__dest-num">
+                {value.length > 1 ? `Destination ${i + 1}` : 'Destination'}
+              </span>
+              {value.length > 1 ? (
+                <button
+                  type="button"
+                  className="edit-console__iconbtn"
+                  aria-label={`Remove destination ${i + 1}`}
+                  onClick={() => onChange(value.filter((_, n) => n !== i))}
+                >
+                  <X size={13} aria-hidden />
+                </button>
+              ) : null}
+            </div>
             <div className="edit-console__dest-row">
               <FormGroup label="Goes to">
                 {/* The place, not the plumbing (ADR 0023). Picking a screen
@@ -701,19 +832,6 @@ function Destinations({
                   </FormGroup>
                 </>
               )}
-              {value.length > 1 ? (
-                <button
-                  type="button"
-                  className="edit-console__iconbtn edit-console__dest-remove"
-                  aria-label={`Remove destination ${i + 1}`}
-                  onClick={() => onChange(value.filter((_, n) => n !== i))}
-                >
-                  <X size={13} aria-hidden />
-                </button>
-              ) : null}
-            </div>
-
-            <div className="edit-console__dest-row">
               <FormGroup label="Rendered by">
                 <select
                   value={d.template_id}

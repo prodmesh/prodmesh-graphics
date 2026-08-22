@@ -169,3 +169,19 @@
 
 .show-console__log { display: flex; flex-direction: column; gap: 8px; align-self: stretch; margin-top: auto; }
 .show-console__log-list { display: flex; flex-direction: column; gap: 6px; align-self: stretch; }
+
+/* The rundown this station is on. A tag when there is one; a choice when the
+   building has several, which is the normal case once next Sunday exists. */
+.show-console__pick {
+  height: 26px;
+  border: 0;
+  outline: none;
+  border-radius: var(--pm-radius-pill);
+  background: var(--pm-surface-raised);
+  box-shadow: var(--pm-hairline);
+  color: var(--pm-text-primary);
+  font-family: var(--pm-font-ui);
+  font-size: 12px;
+  font-weight: 600;
+  padding: 0 8px;
+}

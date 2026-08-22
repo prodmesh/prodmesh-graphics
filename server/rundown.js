@@ -174,6 +174,26 @@ export function createRundown(name, id = newId()) {
   return { id, name, created_at: now, updated_at: now, playlists: [], cursor: null }
 }
 
+export function renamePlaylist(id, name) {
+  const info = handle()
+    .prepare('UPDATE playlists SET name = ?, updated_at = ? WHERE id = ?')
+    .run(name, Date.now(), id)
+  return info.changes ? getPlaylist(id) : null
+}
+
+export function renameRundown(id, name) {
+  const info = handle()
+    .prepare('UPDATE rundowns SET name = ?, updated_at = ? WHERE id = ?')
+    .run(name, Date.now(), id)
+  return info.changes ? getRundown(id) : null
+}
+
+export function deleteRundown(id) {
+  // The playlists survive: a rundown is an ORDER over them, and deleting
+  // Sunday's running order must not delete Sunday's content.
+  return handle().prepare('DELETE FROM rundowns WHERE id = ?').run(id).changes > 0
+}
+
 export function setRundownPlaylists(id, playlistIds) {
   const db = handle()
   reorder(db, 'rundown_playlists', 'rundown_id', id, 'playlist_id', playlistIds)
