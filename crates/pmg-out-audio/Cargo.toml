@@ -1,0 +1,19 @@
+[package]
+name = "pmg-out-audio"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+anyhow = { workspace = true }
+tracing = { workspace = true }
+cpal = "0.18"
+
+[features]
+# ASIO on Windows. Off by default because it needs the ASIO SDK present at
+# build time, and a build that silently requires a vendor download is the
+# `sys/decklink-sys` problem again (ADR 0003). Dante Virtual Soundcard is
+# reachable over WASAPI without it; ASIO buys lower latency, not access.
+asio = ["cpal/asio"]

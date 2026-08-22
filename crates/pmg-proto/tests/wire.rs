@@ -51,6 +51,14 @@ fn sample_hello() -> Hello {
                 ref_format: None,
                 audio_pairs: 8,
             }],
+            // Where audio can go instead of riding the video (ADR 0028).
+            audio_devices: vec![AudioDeviceCapability {
+                host: "CoreAudio".into(),
+                name: "Dante Virtual Soundcard".into(),
+                channels: 64,
+                supports_rate: true,
+                default: false,
+            }],
             gpu: Some(GpuCapability {
                 adapter: "Apple M3 Max".into(),
                 backend: "Metal".into(),

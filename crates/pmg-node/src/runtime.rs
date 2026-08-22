@@ -206,6 +206,11 @@ pub struct OutputSpec {
     /// lower-third key and to a wall feed needs its audio in different places or
     /// nowhere (`docs/specs/output-config.md` §7).
     pub audio_channels: i32,
+    /// Where those channels GO (ADR 0028). Empty is embedded in the video —
+    /// SDI or NDI — which is what every output meant before this existed.
+    pub audio_device: String,
+    /// The host API that device is on. Empty is the platform's default.
+    pub audio_host: String,
     /// Stall this output's render thread once, this many seconds in.
     ///
     /// **A test instrument, not a feature.** A booth machine hiccups for
@@ -522,6 +527,18 @@ impl Runtime {
         // wall must not interrupt the key feed, and a group is exactly the set
         // of outputs that share a clock and a thread (ADR 0011, ADR 0024).
         let mut running: BTreeMap<String, RunningGroup> = BTreeMap::new();
+        // Say what we are RUNNING, unasked, as soon as the link is up.
+        //
+        // The node's own file is the authority for its hardware (ADR 0024), and
+        // until this the server only ever learned that authority by being told
+        // to change it. So Configure's editor opened on a stub — id and backend
+        // and nothing else — for a node driving a DeckLink with audio on a
+        // sound device, and pressing Send would have written the stub back.
+        let _ = tx.send(ToLink::OutputsApplied(pmg_proto::OutputsAck {
+            gen: 0,
+            applied: self.opts.outputs.iter().map(config_from_spec).collect(),
+            ..Default::default()
+        }));
         for (name, specs) in groups {
             running.insert(name.clone(), spawn_group(&name, &specs, engine.clone())?);
         }
@@ -1077,6 +1094,8 @@ pub fn spec_from_config(
             cfg.group.clone()
         },
         audio_channels: cfg.audio_channels,
+        audio_device: cfg.audio_device.clone(),
+        audio_host: cfg.audio_host.clone(),
         // A test instrument, never configuration.
         inject_stall_at_s: existing.and_then(|e| e.inject_stall_at_s),
         preview_mjpeg: existing.is_some_and(|e| e.preview_mjpeg),
@@ -1098,6 +1117,11 @@ fn same_hardware(a: &OutputSpec, b: &OutputSpec) -> bool {
         && a.preview_port == b.preview_port
         && a.group == b.group
         && a.audio_channels == b.audio_channels
+        // The sound device is HARDWARE: changing it means closing one device
+        // and opening another, which is a group restart exactly as a DeckLink
+        // device change is (ADR 0024).
+        && a.audio_device == b.audio_device
+        && a.audio_host == b.audio_host
         && a.fps == b.fps
         && a.width == b.width
         && a.height == b.height;
@@ -1132,6 +1156,8 @@ pub fn config_from_spec(o: &OutputSpec) -> pmg_proto::OutputConfig {
         fps_num: o.fps.0,
         fps_den: o.fps.1,
         audio_channels: o.audio_channels,
+        audio_device: o.audio_device.clone(),
+        audio_host: o.audio_host.clone(),
         preview_port: o.preview_port,
         group: o.group.clone(),
     }
@@ -1269,6 +1295,9 @@ fn render_group(
         /// This frame's interleaved audio. Reused across frames so a service
         /// does not allocate a buffer per frame.
         audio: Vec<i32>,
+        /// Where this output's audio goes when it does NOT ride the video
+        /// (ADR 0028). `None` is embedded, which is what every output was.
+        audio_sink: Option<pmg_out_audio::Sink>,
         /// `None` when this output carries no audio.
         aclock: Option<pmg_audio::AudioClock>,
         /// Closes the loop on the card's audio buffer. `None` until the level
@@ -1330,6 +1359,34 @@ fn render_group(
             renderers: crate::render::RendererCache::default(),
             tween_renderers: crate::render::RendererCache::default(),
             audio: Vec::new(),
+            // Opened here, with the backend, because it is hardware and shares
+            // the group's lifetime: reconfiguring the device restarts the group
+            // exactly as changing a DeckLink port does (ADR 0024).
+            audio_sink: if spec.audio_device.is_empty() || spec.audio_channels <= 0 {
+                None
+            } else {
+                let target = (pmg_audio::SAMPLE_RATE as u64 * spec.fps.1 as u64 * 3
+                    / spec.fps.0.max(1) as u64) as u32;
+                match pmg_out_audio::Sink::open(&pmg_out_audio::Config {
+                    host: Some(spec.audio_host.clone()).filter(|h| !h.is_empty()),
+                    device: Some(spec.audio_device.clone()),
+                    channels: spec.audio_channels.max(0) as u16,
+                    target_frames: target,
+                }) {
+                    Ok(sink) => Some(sink),
+                    Err(e) => {
+                        // Loud, and NOT fatal. A sound device that will not open
+                        // must not take the picture off air with it — the show
+                        // continues silent, and the node says why on its status
+                        // page rather than dying in a log nobody is reading.
+                        tracing::error!(
+                            output = %spec.id, device = %spec.audio_device,
+                            "audio device would not open, this output runs SILENT: {e:#}",
+                        );
+                        None
+                    }
+                }
+            },
             async_: None,
             aclock: match spec.audio_channels {
                 0 => None,
@@ -1413,8 +1470,18 @@ fn render_group(
             let asamples = if nominal == 0 {
                 0
             } else {
-                let buffered = match &out.backend {
-                    Backend::DeckLink(d) => d.stats().buffered_audio as u32,
+                // Whichever device actually holds this audio is the one to
+                // correct against. With a separate sound device that is the
+                // sink's ring — the video output still sets the RATE, the sink
+                // reports the ERROR, and the two clocks are held together by
+                // exactly the same loop (ADR 0028).
+                let buffered = match (&out.audio_sink, &out.backend) {
+                    (Some(sink), _) => {
+                        // Not yet draining: the ring is still filling to its
+                        // working depth and its level says nothing about drift.
+                        if sink.primed() { sink.buffered() } else { 0 }
+                    }
+                    (None, Backend::DeckLink(d)) => d.stats().buffered_audio as u32,
                     // NDI paces itself and exposes no buffer to read, so there
                     // is nothing to close the loop against. Stated rather than
                     // silently skipped.
@@ -1604,6 +1671,11 @@ fn render_group(
                 }
             }
 
+            // ONE destination for the audio, never two. The sample count per
+            // frame is corrected against exactly one buffer, so a second
+            // destination would have nothing holding it in step and would walk
+            // away over a service (ADR 0028).
+            let embedded: &[i32] = if out.audio_sink.is_some() { &[] } else { &out.audio };
             match &out.backend {
                 // NDI is opened with clock_video, so this call paces the loop.
                 Backend::Ndi(n) => {
@@ -1611,15 +1683,21 @@ fn render_group(
                     // Audio AFTER the picture, so a video failure never leaves
                     // a receiver holding sound for a frame that will not come.
                     n.send_audio_interleaved_32s(
-                        &out.audio,
-                        out.spec.audio_channels.max(0) as usize,
+                        embedded,
+                        if embedded.is_empty() { 0 } else { out.spec.audio_channels.max(0) as usize },
                     )?;
                 }
                 // DeckLink schedules against its own clock and blocks when the
                 // queue is full — the same pacing, against a clock that can be
                 // genlocked.
-                Backend::DeckLink(d) => d.send_rgba_premultiplied_with_audio(&rgba, &out.audio)?,
+                Backend::DeckLink(d) => d.send_rgba_premultiplied_with_audio(&rgba, embedded)?,
                 Backend::Headless => std::thread::sleep(Duration::from_millis(budget_ms as u64)),
+            }
+            // The sound device is fed AFTER the picture, for the same reason
+            // NDI's audio is: a video failure must not leave a plant holding
+            // sound for a frame that will never come.
+            if let Some(sink) = &out.audio_sink {
+                sink.push(&out.audio);
             }
 
             // Downscale ONCE, then hand the same pixels to whichever transport
@@ -1693,9 +1771,22 @@ fn render_group(
                     // and must not be shown as an unlocked card.
                     _ => None,
                 };
+                // Two clocks being held together is a thing an operator has to
+                // be able to SEE. Underruns are audible and corrections that
+                // climb without settling mean something else is wrong.
+                let audio_out = out.audio_sink.as_ref().map(|s| pmg_proto::AudioOutState {
+                    device: s.device_name().to_string(),
+                    host: s.host_name().to_string(),
+                    buffered: s.buffered(),
+                    underruns: s.underruns(),
+                    dropped: s.dropped(),
+                    corrections: out.async_.as_ref().map(|a| a.corrections).unwrap_or(0),
+                    resyncs: out.async_.as_ref().map(|a| a.resyncs).unwrap_or(0),
+                });
                 if let Ok(mut e) = engine.lock() {
                     if let Some(o) = e.outputs.iter_mut().find(|o| o.id == out.spec.id) {
                         o.sync = sync;
+                        o.audio_out = audio_out;
                         // Idempotent, and repeated on purpose: the engine
                         // recreates outputs on every assignment, and this poll
                         // is the place that already reconciles per-output

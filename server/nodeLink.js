@@ -202,6 +202,29 @@ function send(s, msg) {
  * recorded it, and every destination naming it was quietly filtered out of
  * every cue — a take that went nowhere with nothing to say about why.
  */
+/**
+ * Record what a node says it is running, if nobody has configured it here.
+ *
+ * The editor in Configure opens on this. Without it a node driving a DeckLink
+ * with audio on a sound device presented as a bare NDI output, and saving that
+ * screen would have written the fiction back to the node.
+ */
+function learnOutputConfig(nodeId, applied) {
+  const db = handle()
+  const have = db
+    .prepare('SELECT COUNT(*) AS n FROM node_outputs WHERE node_id = ?')
+    .get(nodeId).n
+  if (have > 0) return
+  const now = Date.now()
+  const ins = db.prepare(
+    `INSERT OR IGNORE INTO node_outputs (node_id, output_id, config, ordinal, updated_at)
+     VALUES (?, ?, ?, ?, ?)`,
+  )
+  db.transaction(() => {
+    applied.forEach((o, i) => ins.run(nodeId, o.id, JSON.stringify(o), i, now))
+  })()
+}
+
 function seedOutputs(s) {
   const outs = s.state?.outputs ?? []
   if (!outs.length) return
@@ -438,6 +461,11 @@ function onFrame(ws, buf, bound) {
       if (body.problems?.length) {
         console.error(`link: ${s.name} could not apply outputs:`, body.problems.join('; '))
       }
+      // `gen: 0` is the unsolicited one a node sends on connect, saying what it
+      // is RUNNING. Learn it when we hold nothing — never overwrite, because
+      // the operator's stored intent outranks a report, and the node's own file
+      // is what it will boot from either way (ADR 0024).
+      if (body.gen === 0 && body.applied?.length) learnOutputConfig(s.nodeId, body.applied)
       break
 
     case 'StateReport':

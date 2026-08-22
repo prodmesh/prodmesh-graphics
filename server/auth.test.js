@@ -389,3 +389,27 @@ test('granting an administrator never becomes an HTTP route', async () => {
     assert.equal(r.status, 404, `${method} ${url} must not exist`)
   }
 })
+
+test('an output’s audio destination survives the server (ADR 0028)', async () => {
+  admin()
+  const login = await req('POST', '/api/auth/login', { username: 'jbeale', pin: '1234' })
+  const auth = { authorization: `Bearer ${login.json.token}` }
+  db.handle()
+    .prepare("INSERT OR REPLACE INTO nodes (node_id,name,adopted,last_seen) VALUES ('n1','booth',1,0)")
+    .run()
+
+  const r = await req('PUT', '/api/nodes/n1/output-config', {
+    outputs: [{
+      id: 'main', backend: 'ndi', ndi_name: 'PMG', audio_channels: 2,
+      audio_device: 'Dante Virtual Soundcard', audio_host: 'CoreAudio', group: 'g0',
+    }],
+  }, auth)
+  assert.equal(r.status, 200)
+
+  const back = await req('GET', '/api/nodes/n1/output-config', null, auth)
+  const out = back.json.outputs[0]
+  // Passed through, not checked against a device list: the node is the only
+  // thing that knows what is plugged into it, and it refuses by name.
+  assert.equal(out.audio_device, 'Dante Virtual Soundcard')
+  assert.equal(out.audio_host, 'CoreAudio')
+})

@@ -86,6 +86,12 @@ router.put('/api/nodes/:id/output-config', mayConfigure, (req, res) => {
       fps_num: Number(o.fps_num ?? 60000),
       fps_den: Number(o.fps_den ?? 1001),
       audio_channels: Number(o.audio_channels ?? 0),
+      // WHERE the audio goes (ADR 0028). Empty is embedded in the video, which
+      // is what every output meant before this existed. The name is passed
+      // through rather than checked against a device list: the node is the only
+      // thing that knows what is plugged into it, and it refuses by name.
+      audio_device: String(o.audio_device ?? ''),
+      audio_host: String(o.audio_host ?? ''),
       preview_port: Number(o.preview_port ?? 0),
       group: String(o.group ?? 'default'),
     })

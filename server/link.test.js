@@ -726,3 +726,48 @@ test('the layers snapshot tells each occupant its named timelines', async () => 
   assert.deepEqual(data.data.layers[0].occupant.timelines, ['Update', 'Highlight'])
   await n.close()
 })
+
+/**
+ * A node says what it is RUNNING as soon as it links (ADR 0024, ADR 0028).
+ *
+ * Until it did, the server only ever learned a node's hardware by being told to
+ * change it — so Configure's output editor opened on a stub for a node driving
+ * a DeckLink with audio on a sound device, and saving that screen would have
+ * written the stub back.
+ */
+test('a node reports the outputs it is running, and the server learns them once', async () => {
+  const n = await fakeNode({ nodeId: 'reporter' })
+  n.ws.send(wire.encode({
+    OutputsAck: {
+      gen: 0,
+      applied: [{
+        id: 'key', backend: 'ndi', ndi_name: 'PMG Key', audio_channels: 2,
+        audio_device: 'Dante Virtual Soundcard', audio_host: 'CoreAudio', group: 'g0',
+      }],
+      problems: [],
+      refused_on_air: [],
+    },
+  }))
+  await settle()
+
+  const row = db.handle()
+    .prepare('SELECT config FROM node_outputs WHERE node_id = ? AND output_id = ?')
+    .get('reporter', 'key')
+  assert.ok(row, 'the server learned nothing')
+  assert.equal(JSON.parse(row.config).audio_device, 'Dante Virtual Soundcard')
+
+  // And it never overwrites: the operator's stored intent outranks a report,
+  // and the node boots from its own file either way.
+  db.handle()
+    .prepare("UPDATE node_outputs SET config = ? WHERE node_id = 'reporter' AND output_id = 'key'")
+    .run(JSON.stringify({ id: 'key', backend: 'ndi', audio_device: 'BlackHole 2ch' }))
+  n.ws.send(wire.encode({
+    OutputsAck: { gen: 0, applied: [{ id: 'key', backend: 'ndi', audio_device: 'Dante Virtual Soundcard' }], problems: [], refused_on_air: [] },
+  }))
+  await settle()
+  const after = db.handle()
+    .prepare("SELECT config FROM node_outputs WHERE node_id = 'reporter' AND output_id = 'key'")
+    .get()
+  assert.equal(JSON.parse(after.config).audio_device, 'BlackHole 2ch')
+  await n.close()
+})

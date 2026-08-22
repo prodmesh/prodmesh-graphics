@@ -172,9 +172,12 @@ why it is affordable.
 interpolation with an easing, glyph cross-fade. **Verification:** a Bible verse
 moving to its next section on air, with the box tweening, watched on SDI.
 
-**Also missing and not yet placed:** an audio-only output backend. A quarter of
-that rundown's audio goes to a Dante Virtual Soundcard — a CoreAudio device —
-and today audio only leaves this system embedded in SDI or NDI.
+**~~Also missing and not yet placed: an audio-only output backend.~~** Landed
+early, as M6m: an output's audio may leave on a host sound device — CoreAudio,
+WASAPI, ALSA — instead of being embedded in SDI or NDI. See ADR 0028. What is
+still missing is an output with **no video at all**, which is a routing
+question rather than a transport one and needs an answer to "which layers'
+audio".
 
 ---
 

@@ -204,9 +204,23 @@ pub struct OutputConfig {
     pub fps_num: u32,
     #[serde(default = "default_fps_den")]
     pub fps_den: u32,
-    /// Embedded audio channels: 0, 2, 8 or 16.
+    /// How many audio channels this output carries: 0, 2, 8 or 16.
     #[serde(default)]
     pub audio_channels: i32,
+    /// WHERE those channels go (ADR 0028).
+    ///
+    /// Empty is embedded in the video — SDI or NDI — which is what every
+    /// output meant before this existed. A device name sends them to a host
+    /// sound device instead: a Dante Virtual Soundcard, an interface, a virtual
+    /// driver. **One destination, not both**: the audio device has its own
+    /// crystal and the sample count per frame is corrected against exactly one
+    /// buffer, so a second destination would have nothing holding it in step.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub audio_device: String,
+    /// Which host API that device lives on — `CoreAudio`, `WASAPI`, `ALSA`.
+    /// Empty means the platform's default host.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub audio_host: String,
     /// 0 disables this output's preview channel.
     #[serde(default)]
     pub preview_port: u16,
@@ -313,6 +327,9 @@ pub struct TimeRef {
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
 pub struct Capabilities {
     pub outputs: Vec<OutputCapability>,
+    /// Sound devices audio can be sent to instead of being embedded.
+    #[serde(default)]
+    pub audio_devices: Vec<AudioDeviceCapability>,
     pub gpu: Option<GpuCapability>,
     pub decoders: Vec<String>,
     pub max_layers: u32,
@@ -332,6 +349,20 @@ pub struct OutputCapability {
     pub genlock_locked: bool,
     pub ref_format: Option<String>,
     pub audio_pairs: u32,
+}
+
+/// One host sound device this node can send audio to (ADR 0028).
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+pub struct AudioDeviceCapability {
+    /// The host API — `CoreAudio`, `WASAPI`, `ALSA`.
+    pub host: String,
+    pub name: String,
+    pub channels: u32,
+    /// False for a device that will not run at the rate the mixer produces.
+    /// Listed anyway: an operator looking for a card they can see in the OS
+    /// must not simply find it absent.
+    pub supports_rate: bool,
+    pub default: bool,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
@@ -858,6 +889,33 @@ pub struct OutputState {
     /// global port is how a monitor ends up showing the wrong output.
     #[serde(default)]
     pub preview_port: u16,
+    /// How the separate sound device is doing, when there is one (ADR 0028).
+    /// `None` means this output's audio rides the video, which needs no
+    /// reporting because there is only one clock.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub audio_out: Option<AudioOutState>,
+}
+
+/// A sound device carrying this output's audio, and how hard it is being held.
+///
+/// **Reported, never hidden.** Two clocks are being kept together here; a node
+/// quietly correcting all service is a node with something else wrong, and an
+/// underrun is an audible click. Neither shows up anywhere else in the system.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+pub struct AudioOutState {
+    pub device: String,
+    pub host: String,
+    /// Sample frames the device still holds. Flat means the two clocks are
+    /// being held together; a trend means one is walking away from the other.
+    pub buffered: u32,
+    pub underruns: u64,
+    /// Samples that would not fit — the device consuming slower than the video
+    /// clock produces.
+    pub dropped: u64,
+    /// One-sample nudges applied. Steady is normal; climbing fast is not.
+    pub corrections: u64,
+    /// Whole-frame steps, past 100 ms of error. Each one is audible.
+    pub resyncs: u64,
 }
 
 /// What the card says about its reference input.

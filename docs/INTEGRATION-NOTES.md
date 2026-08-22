@@ -1729,3 +1729,42 @@ only thing that found it was a person looking at the output.
 Tests now cover both directions, and the growing case is pinned specifically so
 a later fix for shrinking cannot quietly break it. `tools/demo-tween.sh` runs
 the sequence on demand, with `--minutes N` to loop it.
+
+## A host audio device's cushion is three video frames, and a busy machine eats it
+
+**Measured 2026-08-22, M3 Max, macOS, BlackHole 2ch (CoreAudio), 1080p59.94,
+2 channels.** ADR 0028.
+
+An output whose audio goes to a sound device holds three video frames — about
+2400 sample frames, 50 ms — as its working depth, and `pmg_audio::AudioSync`
+holds it there against the device's own crystal.
+
+Idle, that is comfortable:
+
+| Condition | Late video frames | Underruns | Buffer |
+|---|---|---|---|
+| Idle, 3 minutes | 0 | **0** | 2039–2467 frames, flat |
+| `pmgctl audio soak`, 10 minutes | — | **0** | held, 0 dropped |
+| **All 12 cores pegged, 45 s** | 0 | **31** | 2342, still held |
+| 30 s after the load stopped | 0 | +9 then flat | 2207, recovered |
+
+Three things worth keeping from that:
+
+1. **The picture never suffered.** Zero late frames throughout, including under
+   full load. The audio cushion is the thing that gives first, which is the
+   right way round — a dropped video frame is worse than a click.
+2. **It recovers by itself, with no resync.** The correction is one sample a
+   frame and it walked the level back without ever exceeding the 100 ms
+   threshold that would have caused an audible step.
+3. **50 ms is not enough to survive a machine compiling a Rust workspace.** It
+   does not need to be — a booth machine should not be — but if a node is ever
+   asked to share a machine with something heavy, the depth is the knob, and it
+   is not currently exposed. Deepening it costs latency for everybody to survive
+   a case that should not happen, which is why the default did not move.
+
+The first version of this had no cushion at all: the callback drained from the
+first frame, before the render thread could possibly be ahead of it, and
+measured **268 underruns in two minutes** with the level never above a couple of
+milliseconds. A DeckLink hides this behind preroll. cpal has no preroll, so the
+callback now outputs silence until the ring first reaches its target — those
+callbacks are not underruns, nothing was late, the buffer was filling.

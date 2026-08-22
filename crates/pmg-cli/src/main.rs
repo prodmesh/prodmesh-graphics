@@ -7,6 +7,7 @@
 //!
 //! Run it after touching `pmg-scene`, `pmg-layout`, `pmg-anim`, or `pmg-color`.
 
+mod audio;
 mod decklink;
 mod golden;
 mod ndi;
@@ -29,6 +30,8 @@ USAGE:
     pmgctl ndi probe               Validate the NDI ABI against a live source
     pmgctl ndi send [--pattern p]  Send a test pattern (see `pmgctl ndi`)
 
+    pmgctl audio list              Host audio devices — CoreAudio, WASAPI
+    pmgctl audio soak              Feed one against a video clock
     pmgctl decklink list           Devices and probed capabilities
     pmgctl decklink modes [i]      Display modes a device reports
     pmgctl decklink ref [i]        Reference (genlock) status
@@ -69,6 +72,7 @@ fn suites() -> Vec<Suite> {
         ("pmg-color", pmg_color::selftest),
         ("pmg-media", pmg_media::selftest),
         ("pmg-audio", pmg_audio::selftest),
+        ("pmg-out-audio", pmg_out_audio::selftest),
         ("pmg-cas", pmg_cas::selftest),
         ("pmg-proto", pmg_proto::selftest),
     ]
@@ -105,6 +109,7 @@ fn main() -> Result<()> {
     match args.first().map(String::as_str) {
         Some("--selftest") => selftest(),
         Some("ndi") => ndi::main(&args[1..]),
+        Some("audio") => audio::main(&args[1..]),
         Some("decklink") => decklink::main(&args[1..]),
         Some("scene") => scene::main(&args[1..]),
         Some("text") => text::main(&args[1..]),

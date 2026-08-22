@@ -55,6 +55,14 @@ const PATTERNS: { id: string; label: string; proves: string }[] = [
 
 type Capabilities = {
   /** One connector, as the node's own probe found it — never as anyone typed it. */
+  /** Sound devices this node can send audio to instead of embedding it. */
+  audio_devices?: {
+    host: string
+    name: string
+    channels: number
+    supports_rate: boolean
+    default: boolean
+  }[]
   outputs?: {
     device: string
     kind: string
@@ -198,6 +206,9 @@ const MODES: { name: string; width: number; height: number; fps_num: number; fps
 type OutputConfig = {
   id: string
   backend: string
+  /** Where this output's audio goes. Empty is embedded in the video (ADR 0028). */
+  audio_device?: string
+  audio_host?: string
   ndi_name?: string
   device?: number
   key_device?: number | null
@@ -244,6 +255,7 @@ function OutputHardware({ node }: { node: FullNode }) {
   const [note, setNote] = useState<string | null>(null)
   const rows = draft ?? (data?.outputs?.length ? data.outputs : live)
   const devices = node.capabilities?.outputs ?? []
+  const soundDevices = node.capabilities?.audio_devices ?? []
 
   const set = (i: number, changes: Partial<OutputConfig>) =>
     setDraft(rows.map((o, n) => (n === i ? { ...o, ...changes } : o)))
@@ -390,6 +402,40 @@ function OutputHardware({ node }: { node: FullNode }) {
               <option value="16">16</option>
             </select>
           </FormGroup>
+
+          {/* Where those channels go (ADR 0028). Offered only when there is
+              audio to send — a destination for nothing is a question with no
+              consequence. */}
+          {(o.audio_channels ?? 0) > 0 ? (
+            <FormGroup label="Audio goes to">
+              <select
+                value={o.audio_device ?? ''}
+                aria-label={`Output ${o.id} audio destination`}
+                onChange={(e) => {
+                  const picked = soundDevices.find((d) => d.name === e.target.value)
+                  set(i, { audio_device: e.target.value, audio_host: picked?.host ?? '' })
+                }}
+              >
+                <option value="">
+                  {o.backend === 'decklink' ? 'Embedded in the SDI' : 'Embedded in the video'}
+                </option>
+                {soundDevices.map((d) => (
+                  <option key={`${d.host}:${d.name}`} value={d.name}>
+                    {d.name} · {d.channels} ch
+                    {d.supports_rate ? '' : ' · not 48 kHz'}
+                  </option>
+                ))}
+              </select>
+            </FormGroup>
+          ) : null}
+          {o.audio_device ? (
+            <p className="cfg-console__note">
+              This output’s audio leaves on <b>{o.audio_device}</b> and is <b>not</b> embedded in
+              the video. The sound device has its own clock, so the node holds the two together and
+              reports how hard it is working.
+            </p>
+          ) : null}
+
           <FormGroup label="Clock group">
             {/* Outputs naming the same group share a thread, which is what
                 phase-locked together means in practice (ADR 0011) — and what

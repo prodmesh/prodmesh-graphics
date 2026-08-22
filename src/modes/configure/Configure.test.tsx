@@ -28,6 +28,10 @@ const NODE = {
     max_layers: 8,
     scene_reader_major: 1,
     decoders: ['prores'],
+    audio_devices: [
+      { host: 'CoreAudio', name: 'BlackHole 2ch', channels: 2, supports_rate: true, default: false },
+      { host: 'CoreAudio', name: 'MacBook Pro Speakers', channels: 2, supports_rate: true, default: true },
+    ],
     // What the node's own probe found (ADR 0024). This stood empty for four
     // milestones, so Configure's device pickers offered "no card reported" on
     // a machine with eight connectors in it.
@@ -215,4 +219,39 @@ test('the device pickers come from the node’s own probe, and the modes come fr
     '1080p59.94',
     '1080i59.94',
   ])
+})
+
+/**
+ * Video on SDI, audio to a Dante Virtual Soundcard (ADR 0028). The picker is
+ * driven by the node's own probe, and it only appears when there is audio to
+ * send — a destination for nothing is a question with no consequence.
+ */
+test('an output’s audio can be sent to a sound device instead of the video', async () => {
+  await paint()
+  await screen.findByText('booth-1')
+  for (const d of document.querySelectorAll('details.cfg-console__diag')) {
+    ;(d as HTMLDetailsElement).open = true
+  }
+  await act(async () => {})
+
+  // No audio yet, so nowhere to send it.
+  expect(screen.queryByLabelText(/audio destination/)).toBeNull()
+
+  await act(async () => {
+    fireEvent.change(screen.getByLabelText('Output wall audio'), { target: { value: '2' } })
+  })
+  const dest = (await screen.findByLabelText('Output wall audio destination')) as HTMLSelectElement
+  expect([...dest.options].map((o) => o.textContent)).toEqual([
+    'Embedded in the video',
+    'BlackHole 2ch · 2 ch',
+    'MacBook Pro Speakers · 2 ch',
+  ])
+
+  await act(async () => {
+    fireEvent.change(dest, { target: { value: 'BlackHole 2ch' } })
+  })
+  // Said out loud: the audio is NOT in the video any more, and two clocks are
+  // now being held together. Matched on a contiguous run — the sentence is
+  // broken up by the <b> around the device name.
+  await screen.findByText(/audio leaves on/)
 })

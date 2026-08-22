@@ -14,6 +14,7 @@ members = [
     "crates/pmg-node",
     "crates/pmg-out-ndi",
     "crates/pmg-out-decklink",
+    "crates/pmg-out-audio",
     "crates/pmg-out-window",
     "crates/pmg-preview",
     "crates/pmg-wasm",

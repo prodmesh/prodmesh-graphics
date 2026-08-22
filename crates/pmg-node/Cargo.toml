@@ -30,6 +30,7 @@ pmg-media = { path = "../pmg-media" }
 pmg-audio = { path = "../pmg-audio" }
 pmg-out-ndi = { path = "../pmg-out-ndi" }
 pmg-out-decklink = { path = "../pmg-out-decklink" }
+pmg-out-audio = { path = "../pmg-out-audio" }
 pmg-preview = { path = "../pmg-preview" }
 serde = { workspace = true }
 serde_json = { workspace = true }

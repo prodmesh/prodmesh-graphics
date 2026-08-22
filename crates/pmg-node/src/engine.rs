@@ -202,6 +202,10 @@ pub struct Output {
     /// the output — the engine learns outputs from assignments, which do not
     /// know about preview transport.
     pub preview_port: u16,
+    /// The separate sound device carrying this output's audio, if there is one
+    /// (ADR 0028). Filled in by the render thread for the same reason as
+    /// `sync`: the assignment does not know what is plugged into the machine.
+    pub audio_out: Option<pmg_proto::AudioOutState>,
 }
 
 impl Output {
@@ -539,6 +543,7 @@ impl LayerEngine {
                     fps_den: fps.1,
                     frame: 0,
                     late_frames: 0,
+                    audio_out: None,
                     preview_port: 0,
                 }),
             }
@@ -1331,6 +1336,7 @@ impl LayerEngine {
                     fps: o.fps() as f32,
                     late_frames: o.late_frames,
                     preview_port: o.preview_port,
+                    audio_out: o.audio_out.clone(),
                     layers: o
                         .layers
                         .iter()

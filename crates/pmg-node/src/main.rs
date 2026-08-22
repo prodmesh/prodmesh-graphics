@@ -132,6 +132,9 @@ fn parse_output(
         // Silent unless asked. A lower-third key feed carrying audio would put
         // the same sound on a second SDI feed a plant may well sum.
         audio_channels: 0,
+        // Embedded, which is what every output meant before ADR 0028.
+        audio_device: String::new(),
+        audio_host: String::new(),
         preview_mjpeg: false,
         inject_stall_at_s: None,
     };
@@ -154,6 +157,11 @@ fn parse_output(
             "key" => out.decklink_key_device = Some(v.parse().context("key must be a number")?),
             "preview" => out.preview_port = v.parse().context("preview must be a port")?,
             "audio" => out.audio_channels = v.parse().context("audio must be a channel count")?,
+            // Where the audio goes (ADR 0028). A name, because that is what a
+            // person reads in their OS sound settings and what a config file
+            // can still mean after the machine is rebuilt.
+            "audio-device" => out.audio_device = v.into(),
+            "audio-host" => out.audio_host = v.into(),
             // Semicolons, because commas already separate the pairs.
             "layers" => {
                 out.layers = v
@@ -319,6 +327,8 @@ fn main() -> Result<()> {
             audio_channels: arg(&args, "--audio-channels")
                 .and_then(|s| s.parse().ok())
                 .unwrap_or(0),
+            audio_device: arg(&args, "--audio-device").unwrap_or_default(),
+            audio_host: arg(&args, "--audio-host").unwrap_or_default(),
             preview_mjpeg: args.iter().any(|a| a == "--preview-mjpeg"),
             inject_stall_at_s: arg(&args, "--inject-stall-at").and_then(|s| s.parse().ok()),
             preview_port: arg(&args, "--preview-port")
@@ -543,7 +553,23 @@ fn capabilities(_rt: &runtime::Runtime) -> pmg_proto::Capabilities {
     } else {
         tracing::info!(connectors = outputs.len(), "DeckLink capabilities reported");
     }
+    // The sound devices audio can be sent to instead of being embedded
+    // (ADR 0028). Probed for the same reason the DeckLink is: a device list an
+    // operator typed is a list that is wrong the day something is unplugged.
+    let audio_devices: Vec<_> = pmg_out_audio::devices()
+        .into_iter()
+        .map(|d| pmg_proto::AudioDeviceCapability {
+            host: d.host,
+            name: d.name,
+            channels: d.channels as u32,
+            supports_rate: d.supports_48k,
+            default: d.default,
+        })
+        .collect();
+    tracing::info!(devices = audio_devices.len(), "audio outputs reported");
+
     pmg_proto::Capabilities {
+        audio_devices,
         // NDI has no enumerable hardware — a sender is a name, not a port — so
         // there is nothing to list for it, and a window output is always
         // available. Neither absence means anything is wrong.
@@ -575,7 +601,15 @@ fn tracing_subscriber_init() {
         .with_ansi(ansi)
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("pmg_node=info,warn")),
+                // The output crates are part of the node's own story — which sound
+                // device it opened, which DeckLink it found — and a default that
+                // filtered them left "audio output open" invisible on the machine
+                // that needed to read it.
+                .unwrap_or_else(|_| {
+                    tracing_subscriber::EnvFilter::new(
+                        "pmg_node=info,pmg_out_audio=info,pmg_out_decklink=info,warn",
+                    )
+                }),
         )
         .with_target(false)
         .with_writer(std::io::stderr)

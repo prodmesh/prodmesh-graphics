@@ -54,6 +54,7 @@ keeps playing.
 | `crates/pmg-node` | The playout binary: link client, assignment reconciler, layer engine, scheduler |
 | `crates/pmg-out-ndi` | NDI output backend (M1) |
 | `crates/pmg-out-decklink` | DeckLink output backend (M2) |
+| `crates/pmg-out-audio` | Host sound-device output — CoreAudio / WASAPI / ALSA (ADR 0028) |
 | `crates/pmg-out-window` | GPU display output via winit (M2) |
 | `crates/pmg-preview` | Downscale, encode, and ship the preview channel |
 | `crates/pmg-wasm` | `wasm-bindgen` surface for Design mode in the browser |
@@ -208,6 +209,20 @@ specifically shaped to avoid. Do not re-derive them.
   real check is `npm run build`, which runs `tsc -b` across the references and
   includes the test files. Two type errors reached a rehearsal build this way,
   after `tsc --noEmit` had reported clean several times.
+- **A buffer only reaches its working depth if something lets it fill first.**
+  The host-audio sink started draining from its first callback, at a depth of
+  nothing: 268 underruns in two minutes, with the level never climbing above a
+  couple of milliseconds. A DeckLink hides this behind preroll — schedule N
+  frames, THEN start. cpal has no preroll, so the callback outputs silence until
+  the ring first reaches its target. Any device fed by a producer that cannot
+  possibly be ahead of it yet needs the same, and the symptom is clicks that
+  look like a scheduling problem.
+- **Two clocks in one signal path is a fact, not a bug.** A sound device has its
+  own crystal, and with Dante it is genuinely independent of the video
+  reference. The correction loop is not a workaround; it is the only thing
+  standing between a service and audio that walks. Never add a second audio
+  destination — the sample count is corrected against exactly ONE buffer, and
+  the other would be open loop (measured: +168 ms over two hours).
 - **"A real one lands in M2" is a comment, not a plan.** `pmg-node`'s
   `capabilities()` returned an empty output list behind exactly that note, and
   four milestones later ADR 0024's Configure editor was built to read from it —

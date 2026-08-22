@@ -21,6 +21,7 @@ pmg-out-ndi = { path = "../pmg-out-ndi" }
 pmg-color = { path = "../pmg-color" }
 pmg-media = { path = "../pmg-media" }
 pmg-audio = { path = "../pmg-audio" }
+pmg-out-audio = { path = "../pmg-out-audio" }
 pmg-cas = { path = "../pmg-cas" }
 pmg-proto = { path = "../pmg-proto" }
 ndi-sys = { path = "../../sys/ndi-sys" }
