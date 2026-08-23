@@ -22,6 +22,8 @@ final class Launcher: NSObject, NSApplicationDelegate {
     /// The child is up but still looking for something on the network — which
     /// is when the Local Network permission is worth naming.
     private var isHunting = false
+    /// Held for the life of the app; a released source stops firing.
+    private var signalSources: [DispatchSourceSignal] = []
 
     func applicationDidFinishLaunching(_: Notification) {
         item = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
@@ -31,6 +33,7 @@ final class Launcher: NSObject, NSApplicationDelegate {
         item.menu?.delegate = self
 
         supervisor.onChange = { [weak self] in self?.refresh() }
+        installSignalHandlers()
         supervisor.start()
         showSplash()
 
@@ -49,6 +52,29 @@ final class Launcher: NSObject, NSApplicationDelegate {
     /// open the device with no explanation anywhere.
     func applicationWillTerminate(_: Notification) {
         supervisor.stop()
+    }
+
+    /// The same, for the ways an app is ended that are NOT "quit".
+    ///
+    /// `applicationWillTerminate` does not run for a signal, and a booth
+    /// machine ends processes with signals all the time: a logout, a shutdown,
+    /// `pkill`, a script tidying up. Measured — four orphaned `pmg-node`
+    /// processes after four `pkill`s of the launcher, every one still holding
+    /// its ports.
+    ///
+    /// `SIG_IGN` first so the default action does not kill the process before
+    /// the dispatch source ever runs.
+    private func installSignalHandlers() {
+        for sig in [SIGTERM, SIGINT, SIGHUP] {
+            signal(sig, SIG_IGN)
+            let src = DispatchSource.makeSignalSource(signal: sig, queue: .main)
+            src.setEventHandler { [weak self] in
+                self?.supervisor.stop()
+                exit(0)
+            }
+            src.resume()
+            signalSources.append(src)
+        }
     }
 
     private func refresh() {
@@ -90,8 +116,14 @@ final class Launcher: NSObject, NSApplicationDelegate {
     /// it takes no focus, and clicking dismisses it.
     private func showSplash() {
         guard let art = Bundle.main.image(forResource: "Splash") else { return }
+        // Sized from the ART's own aspect, not from a number typed here. A
+        // hardcoded box either letterboxes the picture or crops it the day
+        // somebody redraws it at a different shape.
+        let wide: CGFloat = 720
+        let aspect = art.size.height > 0 ? art.size.height / art.size.width : 0.5
+        let size = NSSize(width: wide, height: (wide * aspect).rounded())
         let w = NSWindow(
-            contentRect: NSRect(origin: .zero, size: NSSize(width: 640, height: 320)),
+            contentRect: NSRect(origin: .zero, size: size),
             styleMask: [.borderless],
             backing: .buffered,
             defer: false
@@ -101,14 +133,21 @@ final class Launcher: NSObject, NSApplicationDelegate {
         w.level = .floating
         w.ignoresMouseEvents = false
         w.hasShadow = true
-        let view = NSImageView(frame: NSRect(x: 0, y: 0, width: 640, height: 320))
+        let view = NSImageView(frame: NSRect(origin: .zero, size: size))
         view.image = art
         view.imageScaling = .scaleProportionallyUpOrDown
         w.contentView = view
         w.center()
+        // Fades in rather than appearing. A machine booting into a service puts
+        // several of these on screen at once, and a hard cut reads as a glitch.
+        w.alphaValue = 0
         // No focus: a machine booting into a service must not have this steal
         // the keyboard from whatever the operator opened next.
         w.orderFrontRegardless()
+        NSAnimationContext.runAnimationGroup { ctx in
+            ctx.duration = 0.25
+            w.animator().alphaValue = 1
+        }
         splash = w
         DispatchQueue.main.asyncAfter(deadline: .now() + 3) { [weak self] in
             self?.dismissSplash()

@@ -209,6 +209,13 @@ specifically shaped to avoid. Do not re-derive them.
   real check is `npm run build`, which runs `tsc -b` across the references and
   includes the test files. Two type errors reached a rehearsal build this way,
   after `tsc --noEmit` had reported clean several times.
+- **`applicationWillTerminate` does not run for a signal.** The launcher stops
+  its child when the app quits — and a logout, a shutdown, a `pkill` or a
+  tidy-up script is not a quit, so four `pkill`s left four orphaned `pmg-node`
+  processes still holding their ports. A supervisor needs all three paths: the
+  quit handler, a dispatch signal source for SIGTERM/SIGINT/SIGHUP, and a pid on
+  disk so the NEXT launch can reap what a SIGKILL left behind. Check the pid's
+  executable name before killing it; pids are reused.
 - **A path with a space is a different string and the same file.**
   `server/index.js` decided whether it was the entry point with
   `import.meta.url === \`file://${process.argv[1]}\`` — which is true in a repo

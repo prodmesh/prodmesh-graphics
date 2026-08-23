@@ -1,3 +1,4 @@
+import Darwin
 import Foundation
 
 /// Runs the real process, keeps it running, and writes down what happened.
@@ -26,6 +27,10 @@ final class Supervisor {
     private var stopping = false
     private let queue = DispatchQueue(label: "prodmesh.supervisor")
 
+    /// Where the child's pid is written, so a launcher that was KILLED can be
+    /// cleaned up after by the next one.
+    private var pidFile: URL { config.supportDir.appendingPathComponent(".child.pid") }
+
     /// Called on the main queue whenever the child starts or stops.
     var onChange: (() -> Void)?
 
@@ -42,7 +47,46 @@ final class Supervisor {
     }
 
     func start() {
-        queue.async { [weak self] in self?.spawn() }
+        queue.async { [weak self] in
+            self?.reapOrphan()
+            self?.spawn()
+        }
+    }
+
+    /// Stop a child left behind by a launcher that did not get to say goodbye.
+    ///
+    /// SIGKILL, a crash, a force quit: the parent never runs another line, so
+    /// nothing on this side can stop the child. It keeps the DeckLink, the
+    /// ports and the NDI name, and the next launch meets a device that will not
+    /// open with no explanation anywhere. The pid on disk is how the NEXT
+    /// launcher cleans up after the last one.
+    ///
+    /// Checked by name as well as by pid, because pids are reused and killing
+    /// whatever now holds one would be far worse than leaving an orphan.
+    private func reapOrphan() {
+        guard let text = try? String(contentsOf: pidFile, encoding: .utf8),
+              let pid = pid_t(text.trimmingCharacters(in: .whitespacesAndNewlines)),
+              pid > 0, kill(pid, 0) == 0
+        else { return }
+
+        var name = [CChar](repeating: 0, count: 4096)
+        let n = proc_pidpath(pid, &name, UInt32(name.count))
+        let path = n > 0 ? String(cString: name) : ""
+        guard path.hasSuffix("/" + config.executable) else { return }
+
+        tracing("a previous \(config.executable) (pid \(pid)) was still running; stopping it")
+        kill(pid, SIGTERM)
+        let deadline = Date().addingTimeInterval(5)
+        while kill(pid, 0) == 0 && Date() < deadline { usleep(50_000) }
+        if kill(pid, 0) == 0 { kill(pid, SIGKILL) }
+    }
+
+    private func tracing(_ line: String) {
+        guard let data = "[launcher] \(line)\n".data(using: .utf8),
+              let h = try? FileHandle(forWritingTo: logURL) else { return }
+        h.seekToEndOfFile()
+        h.write(data)
+        try? h.close()
     }
 
     /// Stop the child and mean it.
@@ -62,6 +106,7 @@ final class Supervisor {
         if p.isRunning {
             kill(p.processIdentifier, SIGKILL)
         }
+        try? FileManager.default.removeItem(at: pidFile)
     }
 
     func restart() {
@@ -131,6 +176,7 @@ final class Supervisor {
         do {
             try p.run()
             process = p
+            try? String(p.processIdentifier).write(to: pidFile, atomically: true, encoding: .utf8)
             // A child that has stayed up is a child that started cleanly; the
             // backoff should not remember a failure from an hour ago.
             queue.asyncAfter(deadline: .now() + 30) { [weak self] in

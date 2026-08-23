@@ -61,9 +61,21 @@ everybody expects and what a LaunchAgent specifically does not do.
 Restarting is not optional. ADR 0009's reasoning one level down: a node that
 crashes at 10:15 on a Sunday has to come back without anybody knowing where the
 binary lives. With a backoff, capped, because a binary that cannot start at all
-must not become a spin loop in a booth. Stopping is SIGTERM then SIGKILL —
-quitting must not leave an orphan holding a DeckLink, which the next launch
-would meet as a device that will not open, with no explanation anywhere.
+must not become a spin loop in a booth.
+
+**Stopping is three mechanisms, because there are three ways an app ends.**
+Quitting runs `applicationWillTerminate`; a SIGNAL — a logout, a shutdown, a
+`pkill`, a tidy-up script — runs a dispatch signal source instead, because
+`applicationWillTerminate` does not fire for one; and a SIGKILL or a crash runs
+nothing at all, so the child's pid is on disk and the NEXT launch reaps it.
+Measured before the second and third existed: four orphaned `pmg-node`
+processes after four `pkill`s of the launcher, every one still holding its
+ports. An orphan keeps the DeckLink, and the next launch meets a device that
+will not open with no explanation anywhere.
+
+The reaper checks the pid's executable NAME as well as its number. Pids are
+reused, and killing whatever now holds one would be far worse than leaving an
+orphan.
 
 **"Start with this Mac" is `SMAppService`**, not an installed plist: one API
 call, visible and revocable in System Settings, and nothing left behind when the
