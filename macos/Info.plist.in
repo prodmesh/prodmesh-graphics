@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>CFBundleName</key><string>@NAME@</string>
+  <key>CFBundleDisplayName</key><string>@NAME@</string>
+  <key>CFBundleIdentifier</key><string>@BUNDLE_ID@</string>
+  <key>CFBundleExecutable</key><string>@EXECUTABLE@</string>
+  <key>CFBundlePackageType</key><string>APPL</string>
+  <key>CFBundleShortVersionString</key><string>@VERSION@</string>
+  <key>CFBundleVersion</key><string>@VERSION@</string>
+  <key>LSMinimumSystemVersion</key><string>13.0</string>
+  <!-- No Dock icon, no app switcher. It boots with the machine and is never
+       chosen deliberately; the browser console is the real interface. -->
+  <key>LSUIElement</key><true/>
+  <!-- The node finds its Director by mDNS, and macOS requires this to be
+       declared or discovery silently returns nothing (INTEGRATION-NOTES). -->
+  <key>NSLocalNetworkUsageDescription</key>
+  <string>@NAME@ finds and talks to other ProdMesh machines on this network.</string>
+  <!-- The type the server actually advertises and the node actually browses
+       (`server/discovery.js`, `crates/pmg-node/src/discover.rs`). macOS returns
+       NOTHING for an undeclared type rather than refusing, so a wrong name here
+       looks exactly like a network with no server on it. -->
+  <key>NSBonjourServices</key>
+  <array><string>_pmg-control._tcp</string></array>
+</dict>
+</plist>

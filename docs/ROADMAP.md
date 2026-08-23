@@ -286,9 +286,14 @@ dropped — one of three, the other two closed on 2026-08-20:
 - Timers and utility data sources — the P1 input types.
 - Export and import bundles, with the `include_fonts` licensing flag.
 - Licensing hooks.
-- An installer, and documentation for someone outside our building. (A node's
-  own hardware is configurable from Configure as of ADR 0024, which is the half
-  of "installable" that is about the machine rather than the package.)
+- ~~An installer~~ **the apps exist, 2026-08-22.** ADR 0029: **ProdMesh
+  Director** and **ProdMesh Playout**, two signed menu-bar `.app` bundles from
+  one launcher binary, each supervising its child and keeping its data in
+  Application Support. `tools/package-macos.sh`. Still to do before this line
+  closes: a notarized DMG, and the documentation for someone outside our
+  building. (A node's own hardware is configurable from Configure as of ADR
+  0024, which is the half of "installable" that is about the machine rather
+  than the package.)
 - PTPv2 investigation.
 - The honest evaluation of whether screen content should move here.
 

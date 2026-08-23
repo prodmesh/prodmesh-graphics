@@ -209,6 +209,15 @@ specifically shaped to avoid. Do not re-derive them.
   real check is `npm run build`, which runs `tsc -b` across the references and
   includes the test files. Two type errors reached a rehearsal build this way,
   after `tsc --noEmit` had reported clean several times.
+- **A path with a space is a different string and the same file.**
+  `server/index.js` decided whether it was the entry point with
+  `import.meta.url === \`file://${process.argv[1]}\`` — which is true in a repo
+  checkout and false the moment the code lives in "ProdMesh Director.app",
+  because `import.meta.url` percent-encodes the space and the concatenation does
+  not. The server started, listened to nothing, and exited 0 with no output.
+  Compare URLs as URLs (`pathToFileURL`). More generally: a bug that only exists
+  once something is installed is one no amount of running it from the repo will
+  find.
 - **Alignment relative to CONTENT is alignment that does nothing.** Text
   centring was computed against the widest line, which for a single line is the
   line itself — an offset of zero, every time, for the most ordinary case there

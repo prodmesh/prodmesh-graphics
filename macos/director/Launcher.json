@@ -1,0 +1,14 @@
+{
+  "name": "ProdMesh Director",
+  "subtitle": "DIRECTOR",
+  "executable": "node",
+  "arguments": ["server/index.js"],
+  "environment": {
+    "NODE_ENV": "production",
+    "PMG_DB": "{support}/pmg.db",
+    "PMG_CAS": "{support}/cas"
+  },
+  "healthURL": "http://127.0.0.1:8519/api/health",
+  "openURL": "http://127.0.0.1:8519/show",
+  "openTitle": "Open the console"
+}

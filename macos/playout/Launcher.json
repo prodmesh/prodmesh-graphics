@@ -1,0 +1,10 @@
+{
+  "name": "ProdMesh Playout",
+  "subtitle": "PLAYOUT",
+  "executable": "pmg-node",
+  "arguments": ["--state-dir", "{support}/node"],
+  "environment": {},
+  "healthURL": "http://127.0.0.1:8520/status",
+  "openURL": "http://127.0.0.1:8520/status",
+  "openTitle": "Open this node’s status page"
+}

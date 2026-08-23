@@ -19,6 +19,7 @@
  */
 
 import express from 'express'
+import { pathToFileURL } from 'node:url'
 import { fileURLToPath } from 'node:url'
 import path from 'node:path'
 
@@ -419,7 +420,14 @@ export function createApp() {
 }
 
 // Only listen when run directly, so tests can import createApp() freely.
-if (process.argv[1] && import.meta.url === `file://${process.argv[1]}`) {
+//
+// Compared as a URL, not as a string with `file://` glued on the front. A path
+// containing a SPACE encodes as %20 in `import.meta.url` and does not in the
+// concatenation, so the two never matched — and the server started, listened to
+// nothing, and exited 0 with no output. It cannot happen in this repo, where
+// the path has no spaces; it happens the moment the thing is installed as
+// "ProdMesh Director.app", which is to say in production and nowhere else.
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   const server = createApp().listen(PORT, () => {
     console.log(`ProdMesh Graphics control server on :${PORT} (${MILESTONE})`)
   })

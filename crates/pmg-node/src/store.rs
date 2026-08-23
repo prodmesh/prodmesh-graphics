@@ -152,6 +152,12 @@ fn hostname() -> Option<String> {
         .ok()
         .and_then(|o| String::from_utf8(o.stdout).ok())
         .map(|s| s.trim().trim_end_matches(".local").to_string())
+        // The SHORT name. A machine on a managed network answers `hostname`
+        // with its fully qualified name — `Mac.hs.bothell.beale.network` — and
+        // that is what the operator then sees in every node picker, every take
+        // log line and every refusal message. The first label is the name a
+        // person actually calls the machine.
+        .map(|s| s.split('.').next().unwrap_or(&s).to_string())
         .filter(|s| !s.is_empty())
 }
 
@@ -166,4 +172,18 @@ fn random_id() -> String {
         .unwrap_or(0);
     let seed = format!("{t}-{}", std::process::id());
     blake3::hash(seed.as_bytes()).to_hex()[..26].to_uppercase()
+}
+
+#[cfg(test)]
+mod hostname_tests {
+    /// A managed network hands back a fully qualified name, and that is what an
+    /// operator would then see in every node picker and every take-log line.
+    #[test]
+    fn a_node_is_named_by_the_short_hostname() {
+        let name = super::hostname();
+        if let Some(n) = name {
+            assert!(!n.contains('.'), "a node name should be the short host name, got {n:?}");
+            assert!(!n.is_empty());
+        }
+    }
 }
