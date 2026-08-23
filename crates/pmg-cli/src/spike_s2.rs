@@ -77,6 +77,7 @@ fn text_doc(text_size: f32, canvas: (u32, u32), bg: Option<[f32; 4]>) -> SceneDo
                 line_height: 1.2,
                 token: None,
             },
+            valign: Align::default(),
             align: Align::Start,
             max_lines: Some(1),
         }),

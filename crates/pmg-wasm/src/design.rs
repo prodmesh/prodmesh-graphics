@@ -439,6 +439,12 @@ pub fn set_text_align(armed: &Armed, id: &str, align: &str) -> Result<String, St
     edited_json(doc)
 }
 
+pub fn set_text_valign(armed: &Armed, id: &str, valign: &str) -> Result<String, String> {
+    let mut doc = armed.doc.clone();
+    interact::apply_set_text_valign(&mut doc, id, valign)?;
+    edited_json(doc)
+}
+
 /// Move a key to a new time — one document operation, so the move cannot
 /// duplicate the key the way caller-composed delete+set silently did.
 pub fn retime_key(

@@ -142,7 +142,7 @@ fn an_image_draws_and_its_alpha_composites() {
             _w: Option<f32>,
             _l: usize,
             _a: pmg_scene::doc::Align,
-        ) -> Option<(Vec<pmg_render::scene::RunGlyph>, f32)> {
+        ) -> Option<pmg_render::scene::Run> {
             None
         }
     }

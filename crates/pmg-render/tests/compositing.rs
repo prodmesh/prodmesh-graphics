@@ -23,7 +23,7 @@ impl GlyphSource for NoGlyphs {
         _max_width: Option<f32>,
         _max_lines: usize,
         _align: pmg_scene::doc::Align,
-    ) -> Option<(Vec<RunGlyph>, f32)> {
+    ) -> Option<pmg_render::scene::Run> {
         None
     }
 }
@@ -397,9 +397,9 @@ impl GlyphSource for SquareGlyph {
         _max_width: Option<f32>,
         _max_lines: usize,
         _align: pmg_scene::doc::Align,
-    ) -> Option<(Vec<RunGlyph>, f32)> {
-        Some((
-            vec![RunGlyph {
+    ) -> Option<pmg_render::scene::Run> {
+        Some(pmg_render::scene::Run {
+            glyphs: vec![RunGlyph {
                 x: 0.0,
                 y: 0.0,
                 left: 0,
@@ -408,8 +408,9 @@ impl GlyphSource for SquareGlyph {
                 height: 32,
                 coverage: vec![255u8; 32 * 32],
             }],
-            32.0,
-        ))
+            ascent: 32.0,
+            block_h: 32.0,
+        })
     }
 }
 
@@ -479,6 +480,7 @@ fn text_effects_ring_the_glyph_and_shadow_the_outlined_shape() {
                 line_height: 1.0,
                 token: None,
             },
+            valign: Align::default(),
             align: Align::Start,
             max_lines: None,
         }),
@@ -597,4 +599,91 @@ fn a_gradient_walks_its_stops_across_the_rect() {
         mid[0] < left[0] && mid[0] > right[0] && mid[2] > left[2] && mid[2] < right[2],
         "the middle is on the way from red to blue, got {mid:?}"
     );
+}
+
+/// Vertical alignment moves the whole block within its box (format 1.5).
+///
+/// Tested by where the INK lands rather than by reading the document back: the
+/// offset is applied at placement, and a test that only checked the field would
+/// have passed just as happily with the renderer ignoring it.
+#[test]
+fn vertical_alignment_moves_the_ink_down_its_box() {
+    use pmg_scene::doc::*;
+
+    /// The node's solved rect is 64 wide and 128 tall, holding one 32 px line.
+    fn scene(valign: Align) -> pmg_render::scene::SceneInstance {
+        let mut doc = bar(0.0, [0.0, 0.0, 0.0, 0.0]);
+        doc.root.layout.padding = Edges::default();
+        doc.root.children = vec![Node {
+            id: "word".into(),
+            display_name: None,
+            kind: NodeKind::Text,
+            layout: Layout {
+                width: Dimension::Px(64.0),
+                height: Dimension::Px(128.0),
+                ..Default::default()
+            },
+            transform: Transform2D::default(),
+            style: Style {
+                fill: Some(Rgba {
+                    rgba: [1.0, 1.0, 1.0, 1.0],
+                    token: None,
+                }),
+                ..Default::default()
+            },
+            clip: false,
+            visible_if: None,
+            content: Some(Content::Text {
+                binding: Binding {
+                    expr: "X".into(),
+                    transform: vec![],
+                },
+                font: FontSpec {
+                    family: "Test".into(),
+                    weight: 400,
+                    size: 32.0,
+                    features: vec![],
+                    tracking: 0.0,
+                    line_height: 1.0,
+                    token: None,
+                },
+                valign,
+                align: Align::Start,
+                max_lines: None,
+            }),
+            children: vec![],
+            unknown: Default::default(),
+        }];
+        let solved = pmg_layout::solve(
+            &doc,
+            &Default::default(),
+            &pmg_layout::StubMeasure { advance_ratio: 0.5 },
+        )
+        .expect("layout solves");
+        pmg_render::scene::SceneInstance::build(&doc, &solved, &mut SquareGlyph)
+    }
+
+    /// Where the one glyph's ink lands, in design space.
+    fn ink_top(inst: &pmg_render::scene::SceneInstance) -> f32 {
+        inst.nodes
+            .iter()
+            .find_map(|n| match &n.content {
+                pmg_render::scene::RenderContent::Text(ink) => ink.fill.first().map(|g| g.y),
+                _ => None,
+            })
+            .expect("one placed glyph")
+    }
+
+    let top = ink_top(&scene(Align::Start));
+    let middle = ink_top(&scene(Align::Center));
+    let bottom = ink_top(&scene(Align::End));
+
+    // A 32 px block in a 128 px box: 96 px of room. Middle is half of it,
+    // bottom is all of it.
+    assert_eq!(middle - top, 48.0, "middle should sit half the free space down");
+    assert_eq!(bottom - top, 96.0, "bottom should sit at the foot of the box");
+
+    // And the default — what an absent field deserialises to — is the top,
+    // which is what every document before format 1.5 renders.
+    assert_eq!(ink_top(&scene(Align::default())), top);
 }

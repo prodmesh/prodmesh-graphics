@@ -268,10 +268,22 @@ pub fn fit_uv(
     }
 }
 
+/// A shaped, rasterized run of text, ready to place.
+#[derive(Debug, Clone)]
+pub struct Run {
+    /// Placed relative to the run origin — baseline-left of the FIRST line.
+    pub glyphs: Vec<RunGlyph>,
+    /// The ascent that positions the first baseline below the box top.
+    pub ascent: f32,
+    /// The whole block's height, for vertical alignment. Line count times line
+    /// height, so it does not change with the descenders in the last line.
+    pub block_h: f32,
+}
+
 pub trait GlyphSource {
     /// Shape and rasterize a run, returning glyphs placed relative to the run
     /// origin (baseline-left of the FIRST line), plus the ascent used to
-    /// position that baseline.
+    /// position that baseline and the block's height.
     ///
     /// `max_width` is the box the solver already decided on, so the wrap the
     /// renderer draws is the wrap the solver measured. Passing anything else
@@ -284,7 +296,7 @@ pub trait GlyphSource {
         max_width: Option<f32>,
         max_lines: usize,
         align: pmg_scene::doc::Align,
-    ) -> Option<(Vec<RunGlyph>, f32)>;
+    ) -> Option<Run>;
 }
 
 /// A glyph from [`GlyphSource`], before atlas packing.
@@ -382,15 +394,35 @@ fn flatten(
             let text = solved.text.get(&node.id).cloned().unwrap_or_default();
             // The solved box, so the renderer wraps exactly where the solver
             // measured it would.
-            let (cap, align) = match &node.content {
+            let (cap, align, valign) = match &node.content {
                 Some(Content::Text {
-                    max_lines, align, ..
-                }) => (max_lines.map_or(usize::MAX, |n| n.max(1) as usize), *align),
-                _ => (usize::MAX, pmg_scene::doc::Align::Start),
+                    max_lines,
+                    align,
+                    valign,
+                    ..
+                }) => (
+                    max_lines.map_or(usize::MAX, |n| n.max(1) as usize),
+                    *align,
+                    *valign,
+                ),
+                _ => (
+                    usize::MAX,
+                    pmg_scene::doc::Align::Start,
+                    pmg_scene::doc::Align::Start,
+                ),
             };
             match glyphs.run(&text, font, Some(rect.w), cap, align) {
-                Some((run, ascent)) if !run.is_empty() => {
-                    pending.push((inst.nodes.len(), run, ascent));
+                Some(run) if !run.glyphs.is_empty() => {
+                    // Where the block sits in the box. `Stretch` reads as top,
+                    // which is what an absent field means and what every
+                    // document before format 1.5 does.
+                    let free = (rect.h - run.block_h).max(0.0);
+                    let dy = match valign {
+                        pmg_scene::doc::Align::Center => (free * 0.5).round(),
+                        pmg_scene::doc::Align::End => free.round(),
+                        _ => 0.0,
+                    };
+                    pending.push((inst.nodes.len(), run.glyphs, run.ascent + dy));
                     RenderContent::Text(TextInk::default()) // filled in by pack_atlas
                 }
                 _ => RenderContent::Text(TextInk::default()),

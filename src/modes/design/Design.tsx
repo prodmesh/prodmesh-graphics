@@ -559,6 +559,21 @@ function SelectedNode({
                       <option value="end">Right</option>
                     </select>
                   </FormGroup>
+                  <FormGroup label="Vertical">
+                    {/* Where the block of type sits in the box. Like the
+                        horizontal one, it can only do something when the box is
+                        bigger than the text — a node hugging its contents has
+                        nothing to align within. */}
+                    <select
+                      value={facts.text.valign ?? 'start'}
+                      aria-label="Text vertical alignment"
+                      onChange={(e) => edit((s) => s.setTextValign(selected, e.target.value))}
+                    >
+                      <option value="start">Top</option>
+                      <option value="center">Middle</option>
+                      <option value="end">Bottom</option>
+                    </select>
+                  </FormGroup>
                 </div>
               </>
             ) : null}

@@ -750,9 +750,20 @@ pub struct TextFacts {
     pub weight: u16,
     pub size: f32,
     pub align: String,
+    /// Where the block sits vertically in its box (format 1.5).
+    pub valign: String,
     /// The font token this face follows, when it follows one (ADR 0021).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub token: Option<String>,
+}
+
+fn align_name(a: pmg_scene::doc::Align) -> String {
+    match a {
+        pmg_scene::doc::Align::Center => "center",
+        pmg_scene::doc::Align::End => "end",
+        _ => "start",
+    }
+    .to_string()
 }
 
 fn find_node<'a>(n: &'a Node, id: &str) -> Option<&'a Node> {
@@ -769,13 +780,18 @@ pub fn node_facts(doc: &SceneDoc, id: &str) -> Result<NodeFacts, String> {
             binding,
             font,
             align,
+            valign,
             ..
         }) => Some(TextFacts {
             expr: binding.expr.clone(),
             family: font.family.clone(),
             weight: font.weight,
             size: font.size,
-            align: format!("{align:?}").to_lowercase(),
+            // `Stretch` is what an absent field deserialises to and it reads as
+            // the start edge, so it is reported as such rather than as a fourth
+            // option the picker does not have.
+            align: align_name(*align),
+            valign: align_name(*valign),
             token: font.token.clone(),
         }),
         _ => None,
@@ -1260,6 +1276,7 @@ pub fn apply_add_text(doc: &mut SceneDoc, parent: Option<&str>) -> Result<String
                 line_height: 1.2,
                 token: None,
             },
+            valign: Align::default(),
             align: Align::Start,
             max_lines: None,
         }),
@@ -1967,6 +1984,7 @@ fn text_content_mut<'a>(
         &'a mut pmg_scene::doc::Binding,
         &'a mut pmg_scene::doc::FontSpec,
         &'a mut pmg_scene::doc::Align,
+        &'a mut pmg_scene::doc::Align,
     ),
     String,
 > {
@@ -1976,8 +1994,9 @@ fn text_content_mut<'a>(
             binding,
             font,
             align,
+            valign,
             ..
-        }) => Ok((binding, font, align)),
+        }) => Ok((binding, font, align, valign)),
         _ => Err(format!("{id} is not a text node")),
     }
 }
@@ -1991,31 +2010,123 @@ fn text_content_mut<'a>(
 /// a designer typing `${speaker}` should get a speaker field, not an error
 /// about bookkeeping they were never shown.
 pub fn apply_set_text_expr(doc: &mut SceneDoc, id: &str, expr: &str) -> Result<(), String> {
-    use pmg_scene::doc::{Field, FieldType};
-
     let referenced = pmg_scene::bind::referenced_fields(expr);
-    let (binding, _, _) = text_content_mut(doc, id)?;
+    let (binding, _, _, _) = text_content_mut(doc, id)?;
+    // What THIS node used to say, before the edit. Only those keys are
+    // candidates for cleanup — a field somebody added by hand was never in this
+    // expression, so it is never swept up by editing one.
+    let was = pmg_scene::bind::referenced_fields(&binding.expr);
     binding.expr = expr.to_string();
-    for key in referenced {
-        if !doc.fields.iter().any(|f| f.key == key) {
-            doc.fields.push(Field {
-                key: key.clone(),
-                ty: FieldType::Text,
-                label: key.clone(),
-                required: false,
-                max_len: None,
-                sample: Some(key),
-            });
+
+    // A RENAME, not a removal and an addition.
+    //
+    // `${speaker}` becoming `${presenter}` is one key changing its name, and
+    // treating it as two edits left the old field behind AND made a bare new
+    // one — so the label, the sample, the type and the required flag a designer
+    // had set were all stranded on a field nothing referenced any more, while
+    // the field they now had to fill in knew none of it.
+    //
+    // Only when it is unambiguous: exactly one key left, exactly one arrived,
+    // nothing else in the document still says the old one, and the new one is
+    // not already a field in its own right.
+    let gone: Vec<_> = was.iter().filter(|k| !referenced.contains(k)).cloned().collect();
+    let fresh: Vec<_> = referenced.iter().filter(|k| !was.contains(k)).cloned().collect();
+    if let ([old], [new]) = (gone.as_slice(), fresh.as_slice()) {
+        let mut elsewhere = std::collections::BTreeSet::new();
+        collect_referenced(&doc.root, &mut elsewhere);
+        let taken = doc.fields.iter().any(|f| f.key == *new);
+        if !elsewhere.contains(old) && !taken {
+            if let Some(f) = doc.fields.iter_mut().find(|f| f.key == *old) {
+                // A label or sample the designer never touched follows the key;
+                // one they chose is theirs and stays as it is.
+                if f.label == f.key {
+                    f.label = new.clone();
+                }
+                if f.sample.as_deref() == Some(f.key.as_str()) {
+                    f.sample = Some(new.clone());
+                }
+                f.key = new.clone();
+                return Ok(());
+            }
         }
     }
+
+    for key in referenced {
+        if !doc.fields.iter().any(|f| f.key == key) {
+            doc.fields.push(auto_field(&key));
+        }
+    }
+    drop_orphans_among(doc, &was);
     Ok(())
+}
+
+/// A field exactly as `apply_set_text_expr` declares one.
+fn auto_field(key: &str) -> pmg_scene::doc::Field {
+    pmg_scene::doc::Field {
+        key: key.to_string(),
+        ty: pmg_scene::doc::FieldType::Text,
+        label: key.to_string(),
+        required: false,
+        max_len: None,
+        sample: Some(key.to_string()),
+    }
+}
+
+/// Forget a field that this edit just stopped referencing, if nothing else
+/// references it and nobody has touched it.
+///
+/// Renaming `${speaker}` to `${presenter}` used to declare the new field and
+/// leave the old one behind, so a document accumulated a field per typo — and
+/// every one of them shows up in Edit as something an operator has to fill in.
+///
+/// Three conditions, and each one is load-bearing:
+///
+/// - **`candidates`** is what the edited node said BEFORE. A field somebody
+///   added by hand is never in that set, so editing text cannot sweep it up —
+///   and one added by hand is indistinguishable from an auto-declared one by
+///   its contents alone, which is exactly the trap this avoids.
+/// - **Nothing else references it**, so a key two nodes share survives one of
+///   them moving on.
+/// - **It still looks auto-declared.** The moment a designer gives it a label,
+///   a sample, a type, a length, or makes it required, they have adopted it and
+///   it is theirs; the fields editor is where it gets deleted.
+fn drop_orphans_among(doc: &mut SceneDoc, candidates: &[String]) {
+    let mut referenced = std::collections::BTreeSet::new();
+    collect_referenced(&doc.root, &mut referenced);
+    doc.fields.retain(|f| {
+        !candidates.contains(&f.key) || referenced.contains(&f.key) || *f != auto_field(&f.key)
+    });
+}
+
+fn collect_referenced(node: &pmg_scene::doc::Node, out: &mut std::collections::BTreeSet<String>) {
+    if let Some(pmg_scene::doc::Content::Text { binding, .. }) = &node.content {
+        out.extend(pmg_scene::bind::referenced_fields(&binding.expr));
+    }
+    // An image or a clip can name a field too — a template says "a picture goes
+    // here" and the Item says which one. Missing those would drop a field that
+    // is very much in use.
+    if let Some(pmg_scene::doc::Content::Image {
+        field: Some(key), ..
+    }) = &node.content
+    {
+        out.insert(key.clone());
+    }
+    if let Some(pmg_scene::doc::Content::Video {
+        field: Some(key), ..
+    }) = &node.content
+    {
+        out.insert(key.clone());
+    }
+    for c in &node.children {
+        collect_referenced(c, out);
+    }
 }
 
 /// Set a text node's size in points. Clamped to something visible, the same
 /// contract as radius and opacity: a designer typing 0 gets the floor, not an
 /// error dialog.
 pub fn apply_set_font_size(doc: &mut SceneDoc, id: &str, size: f32) -> Result<(), String> {
-    let (_, font, _) = text_content_mut(doc, id)?;
+    let (_, font, _, _) = text_content_mut(doc, id)?;
     font.size = size.max(1.0);
     Ok(())
 }
@@ -2037,7 +2148,7 @@ pub fn apply_set_font_family(
         return Err("a font family needs a name".into());
     }
     {
-        let (_, font, _) = text_content_mut(doc, id)?;
+        let (_, font, _, _) = text_content_mut(doc, id)?;
         font.family = family.to_string();
         font.weight = weight;
     }
@@ -2064,16 +2175,37 @@ pub fn apply_set_font_family(
 
 /// Set a text node's alignment within its box: start, center, or end.
 pub fn apply_set_text_align(doc: &mut SceneDoc, id: &str, align: &str) -> Result<(), String> {
-    use pmg_scene::doc::Align;
-    let parsed = match align {
-        "start" => Align::Start,
-        "center" => Align::Center,
-        "end" => Align::End,
-        other => return Err(format!("no alignment named {other}")),
-    };
-    let (_, _, a) = text_content_mut(doc, id)?;
+    let parsed = parse_align(align)?;
+    let (_, _, a, _) = text_content_mut(doc, id)?;
     *a = parsed;
     Ok(())
+}
+
+/// Where the block of type sits vertically in its box (format 1.5).
+///
+/// Its own editor rather than a second argument to the horizontal one: they are
+/// independent choices, and a single call that had to be told both would make
+/// changing one silently restate the other.
+pub fn apply_set_text_valign(doc: &mut SceneDoc, id: &str, valign: &str) -> Result<(), String> {
+    let parsed = parse_align(valign)?;
+    let (_, _, _, v) = text_content_mut(doc, id)?;
+    *v = parsed;
+    // The editor that introduces a version is the editor that declares it, the
+    // same rule gradients, masks and timers follow. Free in both directions
+    // here: a reader that ignores `valign` renders the text at the top of its
+    // box, which is what every document before 1.5 did.
+    doc.format_version = pmg_scene::migrate::CURRENT;
+    Ok(())
+}
+
+fn parse_align(name: &str) -> Result<pmg_scene::doc::Align, String> {
+    use pmg_scene::doc::Align;
+    match name {
+        "start" => Ok(Align::Start),
+        "center" => Ok(Align::Center),
+        "end" => Ok(Align::End),
+        other => Err(format!("no alignment named {other}")),
+    }
 }
 
 fn extract_from(n: &mut Node, id: &str) -> Option<Node> {
@@ -2855,6 +2987,137 @@ mod tests {
             .unwrap_err()
             .contains("not a text node"));
         assert!(apply_set_text_align(&mut doc, &id, "diagonal").is_err());
+    }
+
+    /// Renaming a binding used to leave the old field behind, so a document
+    /// grew a field per typo — and every one of them shows up in Edit as
+    /// something an operator has to fill in.
+    #[test]
+    fn renaming_a_binding_takes_its_auto_declared_field_with_it() {
+        let mut doc = pmg_scene::fixture::lower_third();
+        let id = doc.root.children[0].children[0].id.clone();
+
+        apply_set_text_expr(&mut doc, &id, "${speaker}").unwrap();
+        assert!(doc.fields.iter().any(|f| f.key == "speaker"));
+
+        apply_set_text_expr(&mut doc, &id, "${presenter}").unwrap();
+        assert!(doc.fields.iter().any(|f| f.key == "presenter"));
+        assert!(
+            !doc.fields.iter().any(|f| f.key == "speaker"),
+            "the old field is still there: {:?}",
+            doc.fields.iter().map(|f| &f.key).collect::<Vec<_>>(),
+        );
+    }
+
+    /// What the designer set travels WITH the rename.
+    ///
+    /// Renaming `${speaker}` to `${presenter}` is one key changing its name.
+    /// Treating it as a removal and an addition stranded the label, the sample,
+    /// the type and the required flag on a field nothing referenced any more,
+    /// while the field the operator now had to fill in knew none of it.
+    #[test]
+    fn a_rename_carries_the_field_the_designer_built() {
+        let mut doc = pmg_scene::fixture::lower_third();
+        let id = doc.root.children[0].children[0].id.clone();
+
+        apply_set_text_expr(&mut doc, &id, "${speaker}").unwrap();
+        let f = doc.fields.iter_mut().find(|f| f.key == "speaker").unwrap();
+        f.label = "Who is speaking".into();
+        f.required = true;
+
+        apply_set_text_expr(&mut doc, &id, "${presenter}").unwrap();
+        let renamed: Vec<_> = doc.fields.iter().filter(|f| f.key == "presenter").collect();
+        assert_eq!(renamed.len(), 1, "exactly one field, carried over");
+        assert_eq!(renamed[0].label, "Who is speaking", "the label came too");
+        assert!(renamed[0].required, "and so did required");
+        assert!(
+            !doc.fields.iter().any(|f| f.key == "speaker"),
+            "the old key is gone: {:?}",
+            doc.fields.iter().map(|f| &f.key).collect::<Vec<_>>(),
+        );
+    }
+
+    /// An auto-declared field's label is its key, so it follows the key rather
+    /// than staying behind as a caption naming something that no longer exists.
+    #[test]
+    fn an_untouched_label_follows_the_key() {
+        let mut doc = pmg_scene::fixture::lower_third();
+        let id = doc.root.children[0].children[0].id.clone();
+        // A literal first, so the next edit AUTO-DECLARES rather than renaming
+        // the field the fixture's node already referenced.
+        apply_set_text_expr(&mut doc, &id, "just words").unwrap();
+        apply_set_text_expr(&mut doc, &id, "${speaker}").unwrap();
+        apply_set_text_expr(&mut doc, &id, "${presenter}").unwrap();
+        let f = doc.fields.iter().find(|f| f.key == "presenter").unwrap();
+        assert_eq!(f.label, "presenter");
+        assert_eq!(f.sample.as_deref(), Some("presenter"));
+    }
+
+    /// Renaming ONTO a key that already exists is not a rename — it is two
+    /// fields becoming one, and silently merging them would throw away
+    /// whichever the designer did not mean to keep.
+    #[test]
+    fn renaming_onto_an_existing_field_leaves_both_alone() {
+        let mut doc = pmg_scene::fixture::lower_third();
+        let id = doc.root.children[0].children[0].id.clone();
+        apply_add_field(&mut doc, "presenter").unwrap();
+        apply_set_text_expr(&mut doc, &id, "${speaker}").unwrap();
+        let f = doc.fields.iter_mut().find(|f| f.key == "speaker").unwrap();
+        f.label = "Who is speaking".into();
+
+        apply_set_text_expr(&mut doc, &id, "${presenter}").unwrap();
+        assert!(doc.fields.iter().any(|f| f.key == "presenter"));
+        assert!(
+            doc.fields.iter().any(|f| f.key == "speaker"),
+            "an adopted field is not deleted just because nothing points at it",
+        );
+    }
+
+    /// "Add a field" makes one nothing references yet. It must survive the next
+    /// text edit, or the fields editor would be unusable.
+    #[test]
+    fn a_field_added_by_hand_and_referenced_by_nothing_survives() {
+        let mut doc = pmg_scene::fixture::lower_third();
+        let id = doc.root.children[0].children[0].id.clone();
+        apply_add_field(&mut doc, "sponsor").unwrap();
+        apply_set_text_expr(&mut doc, &id, "${speaker}").unwrap();
+        assert!(doc.fields.iter().any(|f| f.key == "sponsor"));
+    }
+
+    /// A field two nodes reference is not orphaned when one of them moves on.
+    #[test]
+    fn a_field_another_node_still_uses_is_kept() {
+        let mut doc = pmg_scene::fixture::lower_third();
+        let a = doc.root.children[0].children[0].id.clone();
+        let b = doc.root.children[0].children[1].id.clone();
+
+        apply_set_text_expr(&mut doc, &a, "${line}").unwrap();
+        apply_set_text_expr(&mut doc, &b, "${line}").unwrap();
+        apply_set_text_expr(&mut doc, &a, "${other}").unwrap();
+        assert!(
+            doc.fields.iter().any(|f| f.key == "line"),
+            "the second node still says ${{line}}",
+        );
+    }
+
+    #[test]
+    fn vertical_alignment_is_its_own_choice_and_stamps_the_version() {
+        let mut doc = pmg_scene::fixture::lower_third();
+        let id = doc.root.children[0].children[0].id.clone();
+        apply_set_text_align(&mut doc, &id, "center").unwrap();
+        apply_set_text_valign(&mut doc, &id, "end").unwrap();
+
+        let n = crate::interact::find_node(&doc.root, &id).unwrap();
+        match n.content.as_ref().unwrap() {
+            pmg_scene::doc::Content::Text { align, valign, .. } => {
+                // Independent: setting one must not restate the other.
+                assert_eq!(*align, pmg_scene::doc::Align::Center);
+                assert_eq!(*valign, pmg_scene::doc::Align::End);
+            }
+            _ => panic!("not a text node"),
+        }
+        assert_eq!(doc.format_version, pmg_scene::migrate::CURRENT);
+        assert!(apply_set_text_valign(&mut doc, &id, "sideways").is_err());
     }
 
     #[test]

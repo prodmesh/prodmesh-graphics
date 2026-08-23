@@ -11,7 +11,7 @@ Decisions and reasoning: [ADR 0005](../decisions/0005-the-pmg-scene-format.md).
 | Compiled scene | `.pmgscene` |
 | Template (scene + manifest) | `.pmgtemplate` |
 | Export bundle (with assets) | `.pmgpkg` |
-| Current version | `1.4`, `min_reader: 1` — see §9.2 |
+| Current version | `1.5`, `min_reader: 1` — see §9.2 |
 
 ## 1. Encoding
 
@@ -545,7 +545,14 @@ that outlives timers — the **unknown-type escape** `FieldType` should always
 have had: before it, a new field type was a hard parse failure and an older
 reader could not load the document at all. From 1.4 an unknown type is
 preserved and renders degraded. A 1.3 reader still refuses a timer template
-outright; that is the last time a field type does this.
+outright; that is the last time a field type does this. 1.5 added
+`content.vertical_align` on a text node — where the block of type sits in a box
+taller than it is. The mildest step so far, and free in both directions: a 1.4
+reader ignores the field and draws the text at the top of its box, which is
+what every document before 1.5 does anyway. It arrived alongside the fix that
+made `align` mean what it says — alignment is relative to the node's own box,
+not to its widest line, so a single centred line in a wide box is centred
+rather than untouched.
 
 ### 9.3 Migration
 

@@ -197,6 +197,20 @@ fn spec_of(size: f32) -> FontSpec {
     }
 }
 
+/// A text node that also says where its block sits vertically (format 1.5).
+///
+/// Its height is the plate's, so there is room to align within — a node hugging
+/// its contents has none, which is the same reason horizontal centring looked
+/// broken for so long.
+fn vtext_node(id: &str, expr: &str, font: FontSpec, align: Align, valign: Align) -> Node {
+    let mut n = text_node(id, expr, font, align);
+    if let Some(Content::Text { valign: v, .. }) = n.content.as_mut() {
+        *v = valign;
+    }
+    n.layout.height = pmg_scene::doc::Dimension::Percent(100.0);
+    n
+}
+
 fn text_node(id: &str, expr: &str, font: FontSpec, align: Align) -> Node {
     Node {
         content: Some(Content::Text {
@@ -206,6 +220,7 @@ fn text_node(id: &str, expr: &str, font: FontSpec, align: Align) -> Node {
             },
             font,
             align,
+            valign: Align::default(),
             max_lines: None,
         }),
         style: fill(WHITE),
@@ -1986,8 +2001,9 @@ pub fn all() -> Vec<Template> {
         d
     };
     // A dark plate 400x140 at a fixed spot. Text alignment is relative to the
-    // widest LINE (text_source.rs), so the figures that exercise it are the
-    // multi-line ones — a single line has nothing to align against.
+    // node's own BOX (text_source.rs), so a single line in a box wider than it
+    // is shows it just as well as two lines of different length do — that case
+    // is `text-align-center-one-line`, and it is the one that was broken.
     let plate = |kids: Vec<Node>| Node {
         layout: Layout {
             direction: Direction::Column,
@@ -2011,6 +2027,32 @@ pub fn all() -> Vec<Template> {
         ..node("plate", NodeKind::Box)
     };
 
+    // Taller than its text on purpose, so vertical alignment has room to be
+    // visible. `Justify::Start` because the point is the TEXT node placing its
+    // own block, not the flexbox placing the node.
+    let tall_plate = |kids: Vec<Node>| Node {
+        layout: Layout {
+            direction: Direction::Column,
+            justify: Justify::Start,
+            padding: Edges {
+                top: 0.0,
+                right: 24.0,
+                bottom: 0.0,
+                left: 24.0,
+            },
+            position: Position::Absolute,
+            margin: Edges {
+                top: 40.0,
+                left: 56.0,
+                ..Default::default()
+            },
+            ..px(400.0, 200.0)
+        },
+        style: fill([0.08, 0.10, 0.14, 1.0]),
+        children: kids,
+        ..node("plate", NodeKind::Box)
+    };
+
     v.push(t(
         "text-plain",
         "one line of shaped text — the glyph atlas path end to end",
@@ -2027,9 +2069,8 @@ pub fn all() -> Vec<Template> {
     ));
     v.push(t(
         "text-align-center",
-        "centred lines — alignment is relative to the WIDEST LINE, so it is \
-         two lines of different length that show it and a single line that \
-         cannot",
+        "centred lines — each line centred in the box on its own, which is what \
+         stops a centred lyric being a centred block of left-aligned lines",
         text_doc(
             "text-align-center",
             "Welcome home\nto the ten o'clock service",
@@ -2051,6 +2092,54 @@ pub fn all() -> Vec<Template> {
                 "line",
                 "${line}",
                 spec_of(36.0),
+                Align::End,
+            )])],
+        ),
+    ));
+    v.push(t(
+        "text-align-center-one-line",
+        "ONE line centred in a box wider than it is — the case that was broken. \
+         Alignment used to be relative to the widest line, which for a single \
+         line is the line itself, so centre moved nothing at all",
+        text_doc(
+            "text-align-center-one-line",
+            "Pastor Dan",
+            vec![plate(vec![text_node(
+                "line",
+                "${line}",
+                spec_of(36.0),
+                Align::Center,
+            )])],
+        ),
+    ));
+    v.push(t(
+        "text-valign-middle",
+        "the block of type centred vertically in a box taller than it is \
+         (format 1.5)",
+        text_doc(
+            "text-valign-middle",
+            "Pastor Dan",
+            vec![tall_plate(vec![vtext_node(
+                "line",
+                "${line}",
+                spec_of(36.0),
+                Align::Center,
+                Align::Center,
+            )])],
+        ),
+    ));
+    v.push(t(
+        "text-valign-bottom",
+        "the same block sitting on the floor of its box — a lower third whose \
+         plate is taller than its line",
+        text_doc(
+            "text-valign-bottom",
+            "Pastor Dan",
+            vec![tall_plate(vec![vtext_node(
+                "line",
+                "${line}",
+                spec_of(36.0),
+                Align::Start,
                 Align::End,
             )])],
         ),
@@ -2363,7 +2452,8 @@ pub fn all() -> Vec<Template> {
                         transform: vec![],
                     },
                     font: spec_of(24.0),
-                    align: Align::Start,
+                    valign: Align::default(),
+            align: Align::Start,
                     max_lines: Some(2),
                 }),
                 style: fill(WHITE),

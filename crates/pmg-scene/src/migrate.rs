@@ -16,7 +16,7 @@ use crate::doc::{FormatVersion, SceneDoc};
 use crate::SceneError;
 
 /// The version this writer emits.
-pub const CURRENT: FormatVersion = FormatVersion { major: 1, minor: 4 };
+pub const CURRENT: FormatVersion = FormatVersion { major: 1, minor: 5 };
 
 /// Walk `doc` forward to [`CURRENT`], returning the names of the steps taken
 /// — empty when it was already current.
@@ -47,6 +47,10 @@ pub fn migrate(doc: &mut SceneDoc) -> Result<Vec<&'static str>, SceneError> {
     if doc.format_version.minor == 3 {
         v1_3_to_v1_4(doc);
         applied.push("1.3-to-1.4");
+    }
+    if doc.format_version.minor == 4 {
+        v1_4_to_v1_5(doc);
+        applied.push("1.4-to-1.5");
     }
     Ok(applied)
 }
@@ -91,4 +95,16 @@ pub fn v1_2_to_v1_3(doc: &mut SceneDoc) {
 /// is the whole point of adding the escape now.
 pub fn v1_3_to_v1_4(doc: &mut SceneDoc) {
     doc.format_version = FormatVersion { major: 1, minor: 4 };
+}
+
+/// 1.4 → 1.5: vertical alignment on a text node.
+///
+/// A stamp, and free in both directions for once. A 1.4 reader ignores
+/// `valign` and renders the text at the top of its box, which is what every
+/// document before this did — so an older node shows a graphic that is
+/// positioned differently rather than one it cannot read. That is the mildest
+/// degradation of any version so far, and it is why this did not need the
+/// refusal a mask or a timer needs.
+pub fn v1_4_to_v1_5(doc: &mut SceneDoc) {
+    doc.format_version = FormatVersion { major: 1, minor: 5 };
 }

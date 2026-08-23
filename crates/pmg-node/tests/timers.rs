@@ -58,6 +58,7 @@ fn doc() -> SceneDoc {
                 line_height: 1.2,
                 token: None,
             },
+            valign: Align::default(),
             align: Align::Center,
             max_lines: None,
         }),

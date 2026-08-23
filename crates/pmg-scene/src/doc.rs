@@ -379,6 +379,13 @@ pub enum Align {
     Baseline,
 }
 
+impl Align {
+    /// What an absent field deserialises to. Used to skip encoding it again.
+    pub fn is_default(&self) -> bool {
+        matches!(self, Align::Stretch)
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Position {
@@ -587,8 +594,33 @@ pub enum Content {
     Text {
         binding: Binding,
         font: FontSpec,
+        /// Horizontal alignment of the text WITHIN its box.
+        ///
+        /// `Stretch` (the default) reads as `Start`: there is nothing to
+        /// stretch about a line of type, and it is what an absent field means.
         #[serde(default)]
         align: Align,
+        /// Vertical alignment of the text block within its box (format 1.5).
+        ///
+        /// Absent means top, which is what every document before 1.5 does, so
+        /// an older reader that ignores this field renders exactly what it
+        /// always did.
+        ///
+        /// On the wire it is `vertical_align`, which is what
+        /// `docs/specs/scene-format.md` §3 has documented since before it was
+        /// implemented. The spec is the contract of record; the short name is a
+        /// convenience for Rust and stops there.
+        /// **Omitted when it is the default**, so a document that never sets
+        /// one encodes byte for byte as it did before 1.5 — and keeps its
+        /// `template_rev`. A format field that always serialised would have
+        /// moved the address of every template in every library the day it
+        /// landed, for a feature none of them use.
+        #[serde(
+            default,
+            rename = "vertical_align",
+            skip_serializing_if = "Align::is_default"
+        )]
+        valign: Align,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         max_lines: Option<u32>,
     },

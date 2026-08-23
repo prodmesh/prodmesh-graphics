@@ -82,7 +82,16 @@ export type NodeFacts = {
   margin: [number, number, number, number]
   padding: [number, number, number, number]
   /** Present exactly when the node is text. */
-  text?: { expr: string; family: string; weight: number; size: number; align: string; token?: string }
+  text?: {
+    expr: string
+    family: string
+    weight: number
+    size: number
+    align: string
+    /** Where the block sits vertically in its box (format 1.5, ADR 0005). */
+    valign?: string
+    token?: string
+  }
   /** Present exactly when the node draws a picture. */
   image?: { asset_key: string; hash: string | null; fit: string }
   /** Present exactly when the node plays a clip. */

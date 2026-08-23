@@ -209,6 +209,14 @@ specifically shaped to avoid. Do not re-derive them.
   real check is `npm run build`, which runs `tsc -b` across the references and
   includes the test files. Two type errors reached a rehearsal build this way,
   after `tsc --noEmit` had reported clean several times.
+- **Alignment relative to CONTENT is alignment that does nothing.** Text
+  centring was computed against the widest line, which for a single line is the
+  line itself — an offset of zero, every time, for the most ordinary case there
+  is. The reasoning in the comment was sound for a content-sized node and had
+  quietly been generalised to all of them. When a layout value is measured
+  against something that varies with the thing being positioned, check the
+  degenerate case before believing it: if the box and the content are the same
+  size, does the control still have anything to do?
 - **Two guards can cancel each other out and leave a feature unreachable.**
   ADR 0018 gives one Item several destinations, each with its own template. The
   editor showed only the FIRST destination's fields, and the validator refused

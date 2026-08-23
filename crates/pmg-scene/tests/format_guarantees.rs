@@ -472,6 +472,7 @@ fn timer_template(features: Vec<String>) -> SceneDoc {
                 line_height: 1.2,
                 token: None,
             },
+            valign: Align::default(),
             align: Align::Center,
             max_lines: None,
         }),
@@ -542,4 +543,64 @@ fn an_unknown_field_type_survives_a_read_write_cycle_and_warns() {
         .warnings
         .iter()
         .any(|w| w.code == "unknown_field_type"));
+}
+
+/// A document that never sets a vertical alignment must encode exactly as it
+/// did before format 1.5 — and so keep its `template_rev`.
+///
+/// A format field that always serialised would have moved the address of every
+/// template in every library the day it landed, for a feature none of them use.
+/// Every published revision would have needed republishing, and every Item
+/// pinned to one would have gone stale at once.
+#[test]
+fn adding_vertical_alignment_did_not_move_a_single_existing_address() {
+    let doc = pmg_scene::fixture::lower_third();
+    let json = serde_json::to_value(&doc).unwrap();
+
+    fn scan(v: &serde_json::Value, found: &mut bool) {
+        if let Some(o) = v.as_object() {
+            if o.contains_key("vertical_align") {
+                *found = true;
+            }
+            for (_, x) in o {
+                scan(x, found);
+            }
+        }
+        if let Some(a) = v.as_array() {
+            for x in a {
+                scan(x, found);
+            }
+        }
+    }
+    let mut found = false;
+    scan(&json, &mut found);
+    assert!(
+        !found,
+        "an unset vertical alignment must not appear in the encoding",
+    );
+}
+
+/// And when it IS set, it travels — under the name the spec has documented
+/// since before it existed.
+#[test]
+fn a_vertical_alignment_that_was_chosen_travels_as_vertical_align() {
+    let mut doc = pmg_scene::fixture::lower_third();
+    fn set(n: &mut pmg_scene::doc::Node) -> bool {
+        if let Some(pmg_scene::doc::Content::Text { valign, .. }) = n.content.as_mut() {
+            *valign = pmg_scene::doc::Align::Center;
+            return true;
+        }
+        n.children.iter_mut().any(set)
+    }
+    assert!(set(&mut doc.root), "the fixture has a text node");
+
+    let json = serde_json::to_string(&doc).unwrap();
+    assert!(json.contains(r#""vertical_align":"center""#), "{json}");
+
+    // And it round-trips, which is what makes the canonical encoding stable.
+    let back: pmg_scene::doc::SceneDoc = serde_json::from_str(&json).unwrap();
+    assert_eq!(
+        pmg_scene::cbor::to_canonical(&doc).unwrap(),
+        pmg_scene::cbor::to_canonical(&back).unwrap(),
+    );
 }

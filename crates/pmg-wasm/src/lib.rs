@@ -801,6 +801,13 @@ mod design_api {
             design::set_text_align(&self.armed, &id, &align).map_err(|e| JsValue::from_str(&e))
         }
 
+        /// Where the block of type sits vertically in its box: "start",
+        /// "center", or "end". Format 1.5.
+        #[wasm_bindgen(js_name = setTextValign)]
+        pub fn set_text_valign(&self, id: String, valign: String) -> Result<String, JsValue> {
+            design::set_text_valign(&self.armed, &id, &valign).map_err(|e| JsValue::from_str(&e))
+        }
+
         /// Move a key to a new time, carrying its value and easing.
         #[wasm_bindgen(js_name = retimeKey)]
         pub fn retime_key(
