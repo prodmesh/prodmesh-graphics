@@ -15,6 +15,13 @@ cd "$(dirname "$0")/.."
 REPO=$PWD
 API=http://127.0.0.1:8519
 ALL_NDI=0
+# Build the service content, or keep what is already there.
+#
+# The run directory persists now, so a second run against an existing database
+# would build a SECOND copy of the whole service beside the first —
+# `rehearsal-service.py` posts, it does not reconcile. Keeping it is the safe
+# default; --reseed is the deliberate act.
+RESEED=0
 # Sub-device 1: the second BNC on the Quad 2, and the one already known to be
 # cabled to the converter.
 DECKLINK=1
@@ -25,12 +32,21 @@ FONT="${PMG_FONT:-/System/Library/Fonts/Helvetica.ttc}"
 while [ $# -gt 0 ]; do
   case "$1" in
     --all-ndi) ALL_NDI=1; shift ;;
+    --reseed) RESEED=1; shift ;;
     --decklink) DECKLINK="$2"; shift 2 ;;
     *) echo "unknown flag $1" >&2; exit 2 ;;
   esac
 done
 
-RUN="${TMPDIR:-/tmp}/pmg-rehearsal-$(date +%H%M%S)"
+# Under the repo's own gitignored var/, NOT under TMPDIR.
+#
+# macOS purges /var/folders/.../T/ on its own schedule, and it took a
+# rehearsal plant with it — the database, the CAS, the node's identity, and a
+# backup that had been put in a second temp directory, which is not a backup at
+# all. A rehearsal is meant to be left running for days and driven; it needs to
+# survive a Tuesday. Override with PMG_RUN to put it somewhere else.
+RUN="${PMG_RUN:-$REPO/var/rehearsal}"
+if [ "$RESEED" = 1 ]; then rm -rf "$RUN"; fi
 mkdir -p "$RUN"
 say() { printf "\n\033[1m== %s\033[0m\n" "$*"; }
 
@@ -55,9 +71,14 @@ SERVER_PID=$!
 for _ in $(seq 1 40); do curl -sf "$API/api/health" >/dev/null 2>&1 && break; sleep 0.5; done
 
 say "4. the service"
-# Not piped to /dev/null: if building the service fails, that IS the result of
-# the rehearsal and it must be on screen rather than swallowed.
-python3 tools/rehearsal-service.py "$API" "$RUN" | tee "$RUN/service.json"
+if [ -s "$RUN/service.json" ] && [ "$RESEED" = 0 ]; then
+  echo "Keeping the service already in $RUN."
+  echo "Anything you built by hand is still there. --reseed to start over."
+else
+  # Not piped to /dev/null: if building the service fails, that IS the result of
+  # the rehearsal and it must be on screen rather than swallowed.
+  python3 tools/rehearsal-service.py "$API" "$RUN" | tee "$RUN/service.json"
+fi
 
 say "5. node — three outputs"
 # One layer per output, named the same on each, because an Item's destinations

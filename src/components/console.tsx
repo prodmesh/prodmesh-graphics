@@ -166,8 +166,13 @@ export function FormGroup({
   mono?: boolean
   children?: ReactNode
 }) {
+  // A real <label>, wrapping its control rather than pointing at one by id.
+  // It was a <span>, which meant every field in the product was nameless to a
+  // screen reader and to anything driving the UI by label — and clicking the
+  // caption did nothing. Wrapping needs no id plumbing and cannot come adrift
+  // from the control it names.
   return (
-    <div className="c-formgroup">
+    <label className="c-formgroup">
       <span className="c-formgroup__label">{label}</span>
       <div className="c-formgroup__box">
         {children ?? (
@@ -176,7 +181,7 @@ export function FormGroup({
           </span>
         )}
       </div>
-    </div>
+    </label>
   )
 }
 

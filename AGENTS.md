@@ -209,6 +209,14 @@ specifically shaped to avoid. Do not re-derive them.
   real check is `npm run build`, which runs `tsc -b` across the references and
   includes the test files. Two type errors reached a rehearsal build this way,
   after `tsc --noEmit` had reported clean several times.
+- **Two guards can cancel each other out and leave a feature unreachable.**
+  ADR 0018 gives one Item several destinations, each with its own template. The
+  editor showed only the FIRST destination's fields, and the validator refused
+  any key a template did not declare — so a wall template wanting `${line}`
+  that the lower third lacked was both invisible AND rejected if typed. Each
+  rule was defensible alone; together they meant the feature could not be used
+  from the screen built to author it. When a check says "unknown", ask unknown
+  to WHOM: here the answer is the union of the destinations, not one of them.
 - **A buffer only reaches its working depth if something lets it fill first.**
   The host-audio sink started draining from its first callback, at a depth of
   nothing: 268 underruns in two minutes, with the level never climbing above a

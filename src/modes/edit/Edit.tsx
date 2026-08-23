@@ -35,7 +35,7 @@ import { AlertTriangle, ChevronDown, ChevronUp, Copy, CornerUpRight, FolderPlus,
 import { useQuery, invalidate } from '../../lib/useQuery'
 import { useTopic } from '../../lib/stream'
 import { keys, topics } from '../../lib/keys'
-import { ApiError, del, patch, post, put } from '../../lib/api'
+import { ApiError, del, get, patch, post, put } from '../../lib/api'
 import {
   Button,
   FormGroup,
@@ -1489,13 +1489,62 @@ function ItemEditor({
       blank: false,
     }]
   })
-  // The FIRST destination's template decides which fields the operator fills
-  // in. The Item carries one set of data and the server checks it against every
-  // destination, so one of them has to define the form — and the first is the
-  // one an operator thinks of as "the" graphic.
-  const templateId = dests[0]?.template_id || item?.template_id || templates[0]?.id || ''
-  const { data: detail } = useQuery<TemplateDetail>(templateId ? keys.template(templateId) : null)
-  const fields = detail?.head?.manifest?.fields ?? []
+  // EVERY destination's fields, not just the first one's.
+  //
+  // The Item carries one set of data and the server checks it against every
+  // non-blank destination (ADR 0018). Showing only the first template's fields
+  // meant a wall template asking for `${line}` that the lower third does not
+  // declare was invisible — and the Item then could not be saved from the
+  // screen that was supposed to author it. Blank destinations render nothing,
+  // so they ask for nothing, exactly as the server has it.
+  const wanted = [...new Set(dests.filter((d) => !d.blank).map((d) => d.template_id).filter(Boolean))]
+  const [manifests, setManifests] = useState<Record<string, Field[]>>({})
+  const wantedKey = wanted.join(',')
+  useEffect(() => {
+    let alive = true
+    void Promise.all(
+      wanted.map(async (id) => {
+        const t = await get<TemplateDetail>(keys.template(id)).catch(() => null)
+        return [id, t?.head?.manifest?.fields ?? []] as const
+      }),
+    ).then((pairs) => {
+      if (alive) setManifests(Object.fromEntries(pairs))
+    })
+    return () => {
+      alive = false
+    }
+    // `wantedKey` and not `wanted`: a fresh array every render would refetch
+    // every render.
+  }, [wantedKey]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  const nameOf = (id: string) => templates.find((t) => t.id === id)?.name ?? id
+  // Union, in destination order, so the first destination's fields come first —
+  // that IS the graphic an operator thinks of as "the" one. A field several
+  // templates declare is one input; `needed_by` is what makes an unexpected
+  // field explicable rather than mysterious.
+  const fieldUse = new Map<string, { field: Field; from: string[] }>()
+  const clashes: string[] = []
+  for (const id of wanted) {
+    for (const f of manifests[id] ?? []) {
+      const seen = fieldUse.get(f.key)
+      if (!seen) {
+        fieldUse.set(f.key, { field: { ...f }, from: [nameOf(id)] })
+        continue
+      }
+      seen.from.push(nameOf(id))
+      // Required by any is required. Two templates disagreeing about a field's
+      // TYPE is not something one value can satisfy, so it is named rather
+      // than silently resolved to whichever was read first.
+      if (f.required) seen.field.required = true
+      if (f.type && seen.field.type && f.type !== seen.field.type) {
+        clashes.push(
+          `“${f.key}” is a ${seen.field.type} in ${seen.from[0]} and a ${f.type} in ${nameOf(id)}. One Item cannot be both.`,
+        )
+      }
+    }
+  }
+  const fields = [...fieldUse.values()].map((u) => u.field)
+  const multi = wanted.length > 1
 
   const [label, setLabel] = useState(item?.label ?? '')
   // Form state is strings, one shape for every field. A timer's value is the
@@ -1544,14 +1593,19 @@ function ItemEditor({
         ? cur
         : Object.fromEntries(fields.filter((f) => f.sample != null).map((f) => [f.key, String(f.sample)])),
     )
-  }, [fields, item])
+    // Keyed by the field KEYS, not the array: `fields` is rebuilt every render
+    // and depending on it re-ran this on every keystroke.
+  }, [fields.map((f) => f.key).join(','), item]) // eslint-disable-line react-hooks/exhaustive-deps
 
   const save = useCallback(async () => {
     setSaving(true)
     setProblems([])
     try {
       const body = {
-        template_id: templateId,
+        // The Item's own template stays the FIRST destination's — it is the
+        // graphic an operator thinks of as "the" one, and it is what a
+        // pre-ADR-0018 consumer reads.
+        template_id: dests[0]?.template_id || item?.template_id || templates[0]?.id || '',
         // An Item belongs to the playlist it was written for. Sent on create
         // only: moving one is its own act, not a side effect of a save.
         ...(itemId ? {} : { playlist_id: playlistId }),
@@ -1594,7 +1648,7 @@ function ItemEditor({
     } finally {
       setSaving(false)
     }
-  }, [templateId, label, data, dests, templates, fields, itemId, playlistId, onDone])
+  }, [label, data, dests, templates, fields, item, itemId, playlistId, onDone])
 
   return (
     <form
@@ -1608,14 +1662,31 @@ function ItemEditor({
         <input value={label} onChange={(e) => setLabel(e.target.value)} placeholder="Pastor Dan" />
       </FormGroup>
 
-      {fields.map((f) => (
-        <FieldInput
-          key={f.key}
-          field={f}
-          value={data[f.key] ?? ''}
-          onChange={(v) => setData((d) => ({ ...d, [f.key]: v }))}
-        />
-      ))}
+      {clashes.length > 0 ? (
+        <ul className="edit-console__problems" role="alert">
+          {clashes.map((c) => (
+            <li key={c}>{c}</li>
+          ))}
+        </ul>
+      ) : null}
+
+      {fields.map((f) => {
+        const use = fieldUse.get(f.key)
+        return (
+          <FieldInput
+            key={f.key}
+            field={f}
+            // Only when the destinations DISAGREE about it: annotating every
+            // field with every template that wants it is noise on the common
+            // case, where they all want the same ones.
+            neededBy={
+              multi && use && use.from.length < wanted.length ? use.from.join(', ') : undefined
+            }
+            value={data[f.key] ?? ''}
+            onChange={(v) => setData((d) => ({ ...d, [f.key]: v }))}
+          />
+        )
+      })}
 
       <Destinations
         value={dests}
@@ -1648,10 +1719,13 @@ function ItemEditor({
 function FieldInput({
   field,
   value,
+  neededBy,
   onChange,
 }: {
   field: Field
   value: string
+  /** Which templates want this field, when not all of them do (ADR 0018). */
+  neededBy?: string
   onChange: (v: string) => void
 }) {
   // Count code points, matching the server: `max_len` is about what fits in a
@@ -1662,6 +1736,9 @@ function FieldInput({
   const label = [
     field.label ?? field.key,
     field.required ? '· required' : '',
+    // Where an unexpected field came from. Without it, a Line box appearing
+    // because the wall template wants one is a mystery.
+    neededBy ? `· ${neededBy} only` : '',
     field.max_len != null ? `· ${used}/${field.max_len}${over ? ' — too long' : ''}` : '',
   ]
     .filter(Boolean)

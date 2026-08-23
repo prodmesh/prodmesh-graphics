@@ -119,7 +119,7 @@ export function validateManifest(m, blobHash) {
 const TIMER_KINDS = ['clock', 'countdown', 'countup', 'elapsed']
 const TIMER_FORMATS = ['hh_mm_ss', 'h_mm_ss', 'mm_ss', 'm_ss', 'hh_mm', 'h_mm', 'h_mm_am_pm']
 
-export function validateItemData(manifest, data, { hasAsset = () => true } = {}) {
+export function validateItemData(manifest, data, { hasAsset = () => true, alsoKnown = null } = {}) {
   const problems = []
   if (!data || typeof data !== 'object' || Array.isArray(data)) {
     return ['Item data must be an object of field values.']
@@ -203,8 +203,18 @@ export function validateItemData(manifest, data, { hasAsset = () => true } = {})
   // Unknown keys are refused rather than dropped. Silently discarding a value
   // an operator typed is how a graphic goes on air missing a line with nobody
   // able to say why — and the usual cause is a typo the message can name.
+  //
+  // `alsoKnown` is what makes ADR 0018 actually work. One Item goes to several
+  // destinations, each rendering it with ITS OWN template, and those templates
+  // legitimately want different fields: a lower third showing only the lyric, a
+  // wall showing the lyric and the song title. A key this template does not
+  // declare is not a typo when a SIBLING destination declares it — it is the
+  // other destination's field, and this one simply does not use it. Only a key
+  // no destination knows at all is the typo this check exists for.
   for (const k of Object.keys(data)) {
-    if (!byKey.has(k)) problems.push(`This template has no field called “${k}”.`)
+    if (byKey.has(k)) continue
+    if (alsoKnown?.has(k)) continue
+    problems.push(`This template has no field called “${k}”.`)
   }
 
   return problems

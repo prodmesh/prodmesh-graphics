@@ -116,6 +116,18 @@ function normaliseDestinations(body, fallbackRev) {
  */
 function validateDestinations(db, dests, data) {
   const problems = []
+  // Every field ANY destination declares. One Item, several templates, each
+  // wanting what it wants (ADR 0018) — a lower third showing only the lyric and
+  // a wall showing the lyric and the song title is the ordinary case, and
+  // before this it could not be saved at all: each template refused the other's
+  // fields as typos. Blank destinations render nothing, so they contribute
+  // nothing.
+  const known = new Set()
+  for (const d of dests) {
+    if (d.blank) continue
+    for (const f of revision(db, d.template_rev)?.manifest?.fields ?? []) known.add(f.key)
+  }
+
   for (const d of dests) {
     if (d.blank) continue
     const r = revision(db, d.template_rev)
@@ -123,7 +135,9 @@ function validateDestinations(db, dests, data) {
       problems.push(`Destination ${d.output} · ${d.layer} names a template revision this server does not have.`)
       continue
     }
-    for (const p of validateItemData(r.manifest, data, { hasAsset: cas.has })) {
+    // REQUIRED is still per template: a wall that needs a title and does not
+    // have one is a hole in the wall, whatever the lower third thinks.
+    for (const p of validateItemData(r.manifest, data, { hasAsset: cas.has, alsoKnown: known })) {
       problems.push(`${d.output} · ${d.layer}: ${p}`)
     }
   }

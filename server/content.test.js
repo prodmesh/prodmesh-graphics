@@ -930,3 +930,63 @@ test('an asset uploaded without a name takes the next upload that has one', asyn
   // a wall of hashes for ever.
   assert.equal(list2.json.assets.find((a) => a.hash === put.json.hash).name, 'Plate.png')
 })
+
+/**
+ * One Item, several destinations, each with its own template (ADR 0018).
+ *
+ * The templates legitimately want different fields — a lower third showing only
+ * the lyric, a wall showing the lyric and the song title — and before this the
+ * Item could not be saved at all: each template refused the other's fields as
+ * typos, so the two rules cancelled each other out and the feature was
+ * unreachable from the screen meant to author it.
+ */
+test('destinations with different fields vouch for each other, and a real typo still does not', async () => {
+  const { m } = await publishFixture()
+
+  // A second template wanting a field the first does not have.
+  const second = { ...m, template_id: '01JCHTWOFIELDTEMPLATE0001', name: 'Wall' }
+  second.fields = [...(m.fields ?? []), { key: 'subtitle', type: 'text', label: 'Subtitle' }]
+  // Different BYTES, so it is a different revision: identical bytes dedupe to
+  // one `template_rev`, and both destinations would then resolve to the same
+  // manifest and prove nothing. The server stores a scene opaquely (ADR 0004),
+  // so a trailing byte is all it takes.
+  const scene = Buffer.concat([sceneBytes(), Buffer.from([0x20])])
+  second.template_rev = await cas.hashBuffer(scene)
+  await req('POST', '/api/templates', { id: second.template_id, name: second.name })
+  const pub2 = await req('POST', `/api/templates/${second.template_id}/publish`, {
+    scene: scene.toString('base64'),
+    manifest: second,
+  })
+  assert.ok([200, 201].includes(pub2.status), JSON.stringify(pub2.json))
+  assert.notEqual(second.template_rev, m.template_rev)
+
+  const data = Object.fromEntries((m.fields ?? []).map((f) => [f.key, 'x']))
+  data.subtitle = 'only the wall wants this'
+
+  const made = await req('POST', '/api/items', {
+    playlist_id: 'pl-test',
+    label: 'Two treatments',
+    template_rev: m.template_rev,
+    data,
+    destinations: [
+      { output: 'lt', layer: 'Lower Third', template_rev: m.template_rev, mode: 'auto' },
+      { output: 'wall', layer: 'Graphics', template_rev: second.template_rev, mode: 'auto' },
+    ],
+  })
+  assert.equal(made.status, 201, JSON.stringify(made.json))
+
+  // And the protection survives: a key NO destination knows is still a typo,
+  // named, rather than a value silently dropped on the way to a Sunday.
+  const typo = await req('POST', '/api/items', {
+    playlist_id: 'pl-test',
+    label: 'Typo',
+    template_rev: m.template_rev,
+    data: { ...data, sbutitle: 'oops' },
+    destinations: [
+      { output: 'lt', layer: 'Lower Third', template_rev: m.template_rev, mode: 'auto' },
+      { output: 'wall', layer: 'Graphics', template_rev: second.template_rev, mode: 'auto' },
+    ],
+  })
+  assert.equal(typo.status, 422)
+  assert.match(typo.json.label, /no field called “sbutitle”/)
+})

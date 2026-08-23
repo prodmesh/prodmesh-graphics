@@ -12,7 +12,16 @@ import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testi
 import { Edit } from './Edit'
 import { _reset as resetQuery } from '../../lib/useQuery'
 
-const TEMPLATES = [{ id: 'tpl-1', name: 'Lower Third', head_rev: 'blake3:rev' }]
+const TEMPLATES = [
+  { id: 'tpl-1', name: 'Lower Third', head_rev: 'blake3:rev' },
+  { id: 'tpl-2', name: 'LED wall', head_rev: 'blake3:rev2' },
+]
+
+/** Two templates that want DIFFERENT fields — the ADR 0018 case. */
+const MANIFESTS: Record<string, { fields: { key: string; type: string; label?: string; required?: boolean }[] }> = {
+  'tpl-1': { fields: [{ key: 'lyric', type: 'text', label: 'Lyric', required: true }] },
+  'tpl-2': { fields: [{ key: 'name', type: 'text', label: 'Line' }, { key: 'title', type: 'text' }] },
+}
 const PLAYLISTS = [{ id: 'pl-1', name: 'Amazing Grace', items: 2, mode: 'cue', tags: ['Hymn'] }]
 
 const entry = (id: string, label: string, entryId: string) => ({
@@ -83,6 +92,10 @@ beforeEach(() => {
       if (method === 'POST' && u === '/api/rundowns') {
         rundowns = [...rundowns, { id: 'rd-3', name: String((body as { name: string }).name) }]
         return json({ id: 'rd-3' }, 201)
+      }
+      if (u.startsWith('/api/templates/')) {
+        const id = u.split('/')[3]!
+        return json({ id, name: id, head: { manifest: MANIFESTS[id] ?? { fields: [] } } })
       }
       if (u === '/api/templates') return json({ templates: TEMPLATES })
       if (u.startsWith('/api/items?playlist=')) return json({ items: [PLAYLIST.items[0], CHORUS] })
@@ -317,4 +330,41 @@ test('a song with no named groups is told why, and offered nothing to press', as
   } finally {
     PLAYLIST.groups = groups
   }
+})
+
+/**
+ * One Item, several destinations, each rendering it with its OWN template
+ * (ADR 0018) — and those templates legitimately want different fields.
+ *
+ * The editor used to show only the FIRST destination's fields, so a wall
+ * template asking for a line the lower third does not declare was invisible,
+ * and the Item could not be saved from the screen meant to author it.
+ */
+test('the form shows every destination’s fields, and says which want what', async () => {
+  await paint()
+  await openPlaylist()
+  fireEvent.click(screen.getByText('New item'))
+  await screen.findByText('Where it goes')
+
+  // One destination: just its own field, and no noise about where it came from.
+  await waitFor(() => expect(screen.getByLabelText(/^Lyric/)).toBeDefined())
+  expect(screen.queryByText(/only/)).toBeNull()
+
+  fireEvent.click(screen.getByText('Add a destination'))
+  const pickers = screen.getAllByLabelText(/Rendered by|^Destination \d+ screen$/)
+  void pickers
+  const rendered = document.querySelectorAll('.edit-console__dest-card select')
+  // The second card's template picker is the last "Rendered by" select.
+  const templateSelects = [...rendered].filter((s) =>
+    [...(s as HTMLSelectElement).options].some((o) => o.textContent === 'LED wall'),
+  ) as HTMLSelectElement[]
+  await act(async () => {
+    fireEvent.change(templateSelects[templateSelects.length - 1]!, { target: { value: 'tpl-2' } })
+  })
+
+  // Now BOTH templates' fields are here, each saying which destination wants
+  // it — the wall's two, and the lower third's one.
+  await waitFor(() => expect(screen.getByLabelText(/^Line · LED wall only/)).toBeDefined())
+  expect(screen.getByLabelText(/^title · LED wall only/)).toBeDefined()
+  expect(screen.getByLabelText(/^Lyric · required · Lower Third only/)).toBeDefined()
 })

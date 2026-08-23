@@ -226,11 +226,15 @@ def main():
             label, data, dests = entry[0], entry[1], entry[2]
             section = entry[3] if len(entry) > 3 else None
             it = call("POST", "/api/items", {
+                # An Item belongs to the playlist it was written for (ADR 0026),
+                # and lands in its arrangement as it is created.
+                "playlist_id": pl["id"],
                 "label": label, "data": data,
                 "template_rev": dests[0]["template_rev"],
                 "destinations": dests,
             })
             ids.append({"item": it["id"], "section": section})
+        # Re-sent with the sections, which creating them cannot carry.
         call("PUT", f"/api/playlists/{pl['id']}/items", {"items": ids})
         playlist_ids.append(pl["id"])
         counts.append((name, mode, len(ids)))
