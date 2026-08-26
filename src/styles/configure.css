@@ -171,6 +171,149 @@
 .cfg-console__screen-add { display: flex; align-items: center; gap: 8px; padding-top: 8px; }
 .cfg-console__screen-add input { width: 200px; }
 
+/* ---- Output workspace ------------------------------------------------------
+   Outputs are compared as compact rows and edited one at a time. Hardware,
+   composition, and test controls all describe the same output, so they share
+   one detail surface instead of expanding into parallel control panels. */
+
+.cfg-console__outputs {
+  overflow: hidden;
+  border-radius: var(--pm-radius-6);
+  background: var(--pm-surface-chrome);
+  box-shadow: var(--pm-hairline);
+}
+.cfg-console__outputs-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 20px;
+  padding: 12px 14px;
+}
+.cfg-console__outputs-head > div:first-child { flex: 1; min-width: 0; }
+.cfg-console__outputs-head .c-grouphead { margin-bottom: 4px; }
+.cfg-console__output-workspace {
+  display: grid;
+  grid-template-columns: 280px minmax(0, 1fr);
+  min-height: 430px;
+  border-top: 1px solid var(--pm-border-hairline);
+}
+.cfg-console__output-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 8px;
+  border-right: 1px solid var(--pm-border-hairline);
+  background: var(--pm-surface-app);
+}
+.cfg-console__output-row {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  width: 100%;
+  padding: 10px;
+  border: 0;
+  border-radius: var(--pm-radius-4);
+  background: transparent;
+  color: var(--pm-text-secondary);
+  font: 11px/1.25 var(--pm-font-ui);
+  text-align: left;
+  cursor: pointer;
+}
+.cfg-console__output-row:hover { background: var(--pm-surface-raised); }
+.cfg-console__output-row--selected {
+  background: var(--pm-surface-field);
+  color: var(--pm-text-primary);
+  box-shadow: var(--pm-ring-armed);
+}
+.cfg-console__output-rowtop,
+.cfg-console__output-summary,
+.cfg-console__output-badges {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.cfg-console__output-rowtop b {
+  overflow: hidden;
+  color: var(--pm-text-primary);
+  font: 600 12px/1.2 var(--pm-font-mono);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.cfg-console__output-summary { color: var(--pm-text-muted); }
+.cfg-console__unsaved {
+  width: 6px;
+  height: 6px;
+  flex: 0 0 auto;
+  border-radius: 50%;
+  background: var(--pm-state-armed);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--pm-state-armed) 18%, transparent);
+}
+.cfg-console__output-detail {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 14px;
+}
+.cfg-console__output-title {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-height: 24px;
+}
+.cfg-console__output-detail > .cfg-console__screen-row {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(140px, 1fr));
+  align-items: end;
+}
+.cfg-console__output-detail > .cfg-console__screen-row > .c-formgroup { min-width: 0; }
+.cfg-console__output-detail > .cfg-console__screen-row > .cfg-console__note {
+  grid-column: 1 / -1;
+  margin: 0;
+}
+.cfg-console__output-detail > .cfg-console__screen-row > .edit-console__iconbtn {
+  justify-self: end;
+}
+.cfg-console__output-detail .cfg-console__output {
+  border-top: 0;
+  padding-top: 0;
+}
+.cfg-console__output-actions {
+  position: sticky;
+  bottom: 0;
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  margin: 2px -14px -14px;
+  padding: 10px 14px;
+  border-top: 1px solid var(--pm-border-hairline);
+  background: color-mix(in srgb, var(--pm-surface-chrome) 94%, transparent);
+  backdrop-filter: blur(8px);
+}
+.cfg-console__output-actionnote {
+  flex: 1;
+  min-width: 0;
+  color: var(--pm-text-muted);
+  font: 10px/1.3 var(--pm-font-mono);
+}
+
+@media (max-width: 1000px) {
+  .cfg-console__output-workspace { grid-template-columns: 1fr; }
+  .cfg-console__output-list {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+    border-right: 0;
+    border-bottom: 1px solid var(--pm-border-hairline);
+  }
+  .cfg-console__output-detail > .cfg-console__screen-row {
+    grid-template-columns: repeat(2, minmax(140px, 1fr));
+  }
+}
+
 /* ---- Diagnostics, users, stations ------------------------------------------
    Everything here was already reported by a node or already stored by the
    server, and none of it was on a screen. */

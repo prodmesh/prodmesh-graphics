@@ -8,7 +8,7 @@
  */
 
 import { afterEach, beforeEach, expect, test, vi } from 'vitest'
-import { act, render, screen, fireEvent, waitFor } from '@testing-library/react'
+import { act, render, screen, fireEvent, waitFor, within } from '@testing-library/react'
 import { Configure } from './Configure'
 import { _reset as resetQuery } from '../../lib/useQuery'
 
@@ -67,11 +67,15 @@ const NODE = {
 
 let users: { users: unknown[]; groups: unknown[] } = { users: [], groups: [] }
 let created: Record<string, unknown> | null = null
+let configuredOutputs: Record<string, unknown>[] = []
+let savedOutputConfig: Record<string, unknown> | null = null
 
 beforeEach(() => {
   resetQuery()
   users = { users: [], groups: [] }
   created = null
+  configuredOutputs = [{ id: 'wall', backend: 'ndi' }]
+  savedOutputConfig = null
   vi.stubGlobal(
     'fetch',
     vi.fn(async (url: string, init?: RequestInit) => {
@@ -80,12 +84,17 @@ beforeEach(() => {
         created = JSON.parse(String(init.body)) as Record<string, unknown>
         return new Response(JSON.stringify({ id: 'u1', granted_admin: true }), { status: 201 })
       }
+      if (u.endsWith('/output-config') && init?.method === 'PUT') {
+        savedOutputConfig = JSON.parse(String(init.body)) as Record<string, unknown>
+        return new Response(JSON.stringify({ delivered: true }), { status: 200 })
+      }
       const body =
         u === '/api/nodes' ? { nodes: [NODE] }
         : u === '/api/screens' ? { screens: [] }
         : u === '/api/templates' ? { templates: [] }
         : u === '/api/users' ? users
         : u === '/api/stations' ? { stations: [{ id: 's1', name: 'Booth Mac', trusted: false }] }
+        : u.endsWith('/output-config') ? { outputs: configuredOutputs, ack: null }
         : u.endsWith('/outputs') ? { outputs: [] }
         : {}
       return new Response(JSON.stringify(body), { status: 200 })
@@ -253,5 +262,47 @@ test('an output’s audio can be sent to a sound device instead of the video', a
   // Said out loud: the audio is NOT in the video any more, and two clocks are
   // now being held together. Matched on a contiguous run — the sentence is
   // broken up by the <b> around the device name.
-  await screen.findByText(/audio leaves on/)
+  await screen.findByText(
+    (_, element) => element?.tagName === 'P' && element.textContent?.includes('Audio leaves through BlackHole 2ch') === true,
+  )
+})
+
+test('multiple outputs stay compact and only the selected output is editable', async () => {
+  configuredOutputs = [
+    { id: 'wall', backend: 'ndi', ndi_name: 'Wall', audio_channels: 0 },
+    { id: 'stream', backend: 'ndi', ndi_name: 'Stream', audio_channels: 2 },
+    { id: 'confidence', backend: 'headless', audio_channels: 0 },
+  ]
+  await paint()
+
+  const navigator = await screen.findByRole('navigation', { name: 'Configured outputs' })
+  expect(within(navigator).getAllByRole('button')).toHaveLength(3)
+  expect(screen.getByLabelText('Output wall backend')).toBeDefined()
+  expect(screen.queryByLabelText('Output stream backend')).toBeNull()
+
+  fireEvent.click(within(navigator).getByRole('button', { name: /^streamNDI/ }))
+  expect(screen.queryByLabelText('Output wall backend')).toBeNull()
+  expect(screen.getByLabelText('Output stream backend')).toBeDefined()
+})
+
+test('hardware changes apply through the existing node output-config endpoint', async () => {
+  configuredOutputs = [
+    { id: 'wall', backend: 'ndi', ndi_name: 'Wall', audio_channels: 0 },
+    { id: 'stream', backend: 'ndi', ndi_name: 'Stream', audio_channels: 2 },
+  ]
+  await paint()
+  const navigator = await screen.findByRole('navigation', { name: 'Configured outputs' })
+  fireEvent.click(within(navigator).getByRole('button', { name: /^streamNDI/ }))
+
+  fireEvent.change(screen.getByLabelText('Output stream backend'), { target: { value: 'headless' } })
+  expect(screen.getByLabelText('Unsaved output configuration')).toBeDefined()
+  fireEvent.click(screen.getByRole('button', { name: 'Apply' }))
+
+  await waitFor(() => expect(savedOutputConfig).toEqual({
+    outputs: [
+      { id: 'wall', backend: 'ndi', ndi_name: 'Wall', audio_channels: 0 },
+      { id: 'stream', backend: 'headless', ndi_name: 'Stream', audio_channels: 2 },
+    ],
+    force: false,
+  }))
 })

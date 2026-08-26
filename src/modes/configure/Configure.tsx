@@ -227,6 +227,28 @@ type OutputsAck = {
   refused_on_air?: string[]
 }
 
+type OutputDefinition = {
+  output_id: string
+  mode: string
+  layers: string[]
+  color?: ColorConfig
+}
+
+const backendName = (backend: string) =>
+  backend === 'decklink'
+    ? 'SDI'
+    : backend === 'window'
+      ? 'Display'
+      : backend === 'headless'
+        ? 'Headless'
+        : 'NDI'
+
+const audioName = (output: OutputConfig) => {
+  const channels = output.audio_channels ?? 0
+  if (!channels) return 'No audio'
+  return `${channels}ch · ${output.audio_device || 'embedded'}`
+}
+
 /**
  * A node's output HARDWARE (ADR 0024).
  *
@@ -239,7 +261,7 @@ type OutputsAck = {
  * only those. An output with a graphic on it is refused unless the operator
  * says to interrupt it.
  */
-function OutputHardware({ node }: { node: FullNode }) {
+function OutputHardware({ node, definitions }: { node: FullNode; definitions: OutputDefinition[] }) {
   const { data } = useQuery<{ outputs: OutputConfig[]; ack: OutputsAck | null }>(
     keys.outputConfig(node.node_id),
   )
@@ -251,12 +273,27 @@ function OutputHardware({ node }: { node: FullNode }) {
   const [draft, setDraft] = useState<OutputConfig[] | null>(null)
   const [problem, setProblem] = useState<string | null>(null)
   const [note, setNote] = useState<string | null>(null)
-  const rows = draft ?? (data?.outputs?.length ? data.outputs : live)
+  const [selectedIndex, setSelectedIndex] = useState(0)
+  const persistedRows = data?.outputs?.length ? data.outputs : live
+  const rows = draft ?? persistedRows
   const devices = node.capabilities?.outputs ?? []
   const soundDevices = node.capabilities?.audio_devices ?? []
 
   const set = (i: number, changes: Partial<OutputConfig>) =>
     setDraft(rows.map((o, n) => (n === i ? { ...o, ...changes } : o)))
+
+  const selectedPosition = Math.min(selectedIndex, Math.max(0, rows.length - 1))
+  const selected = rows[selectedPosition]
+  const selectedIdentity = persistedRows[selectedPosition]?.id ?? selected?.id
+  const selectedDefinition = selected
+    ? definitions.find((output) => output.output_id === selectedIdentity)
+    : undefined
+  const selectedLive = selected
+    ? node.state?.outputs?.find((output) => output.id === selectedIdentity)
+    : undefined
+  const selectedLayers = selectedDefinition?.layers.length
+    ? selectedDefinition.layers
+    : (selectedLive?.layers ?? []).map((layer) => layer.name)
 
   const save = async (force: boolean) => {
     setProblem(null)
@@ -281,19 +318,94 @@ function OutputHardware({ node }: { node: FullNode }) {
 
   const ack = data?.ack
   return (
-    <details className="cfg-console__diag">
-      <summary>Output hardware</summary>
+    <section className="cfg-console__outputs" aria-label="Outputs">
+      <div className="cfg-console__outputs-head">
+        <div>
+          <GroupHeader label="Outputs" trailing={`${rows.length} configured`} />
+          <p className="cfg-console__dim">Select an output to configure its signal path and composition.</p>
+        </div>
+        <Button
+          variant="secondary"
+          onClick={() => {
+            const next = [
+              ...rows,
+              { id: `out-${rows.length}`, backend: 'ndi', ndi_name: `${node.name} ${rows.length}`, group: `g${rows.length}` },
+            ]
+            setDraft(next)
+            setSelectedIndex(next.length - 1)
+          }}
+        >
+          <Plus size={12} aria-hidden /> Add output
+        </Button>
+      </div>
 
-      {rows.map((o, i) => (
-        <div key={`${o.id}:${i}`} className="cfg-console__screen-row">
-          <FormGroup label="Id">
+      {rows.length ? (
+        <div className="cfg-console__output-workspace">
+          <nav className="cfg-console__output-list" aria-label="Configured outputs">
+            {rows.map((output, index) => {
+              const identity = persistedRows[index]?.id ?? output.id
+              const definition = definitions.find((item) => item.output_id === identity)
+              const liveOutput = node.state?.outputs?.find((item) => item.id === identity)
+              const layerCount = definition?.layers.length ?? liveOutput?.layers.length ?? 0
+              const isOnAir = liveOutput?.layers.some((layer) => Boolean(layer.occupant)) ?? false
+              const hasChanges = Boolean(
+                draft && JSON.stringify(output) !== JSON.stringify(persistedRows[index]),
+              )
+              return (
+                <button
+                  key={`${output.id}:${index}`}
+                  type="button"
+                  aria-current={index === selectedIndex ? 'true' : undefined}
+                  className={index === selectedIndex
+                    ? 'cfg-console__output-row cfg-console__output-row--selected'
+                    : 'cfg-console__output-row'}
+                  onClick={() => setSelectedIndex(index)}
+                >
+                  <span className="cfg-console__output-rowtop">
+                    <b>{output.id}</b>
+                    <span className="cfg-console__output-badges">
+                      {isOnAir ? <StatusPill tone="air" variant="subtle" size={9}>ON AIR</StatusPill> : null}
+                      {hasChanges ? <span className="cfg-console__unsaved" aria-label="Unsaved output configuration" /> : null}
+                    </span>
+                  </span>
+                  <span className="cfg-console__output-summary">
+                    <span>{backendName(output.backend)}</span>
+                    <span>{output.mode || definition?.mode || '1920×1080'}</span>
+                  </span>
+                  <span className="cfg-console__output-summary">
+                    <span>{audioName(output)}</span>
+                    <span>{layerCount} {layerCount === 1 ? 'layer' : 'layers'}</span>
+                  </span>
+                </button>
+              )
+            })}
+          </nav>
+
+          {selected ? (() => {
+            const o = selected
+            const i = Math.min(selectedIndex, rows.length - 1)
+            return (
+              <div className="cfg-console__output-detail">
+                <div className="cfg-console__output-title">
+                  <div>
+                    <span className="cfg-console__output-name">{o.id}</span>
+                    <span className="cfg-console__mono">{'  ·  '}{backendName(o.backend)}</span>
+                  </div>
+                  {selectedLive?.sync?.locked ? (
+                    <StatusPill tone="ready" variant="subtle" size={9}>REFERENCE LOCKED</StatusPill>
+                  ) : null}
+                </div>
+
+                <GroupHeader label="Signal path" />
+                <div className="cfg-console__screen-row">
+          <FormGroup label="Output ID">
             <input
               value={o.id}
               aria-label={`Output ${i + 1} id`}
               onChange={(e) => set(i, { id: e.target.value })}
             />
           </FormGroup>
-          <FormGroup label="Sends by">
+          <FormGroup label="Transport">
             <select
               value={o.backend}
               aria-label={`Output ${o.id} backend`}
@@ -307,7 +419,7 @@ function OutputHardware({ node }: { node: FullNode }) {
           </FormGroup>
 
           {o.backend === 'ndi' ? (
-            <FormGroup label="Seen on the network as">
+            <FormGroup label="Network name">
               <input
                 value={o.ndi_name ?? ''}
                 aria-label={`Output ${o.id} NDI name`}
@@ -318,7 +430,7 @@ function OutputHardware({ node }: { node: FullNode }) {
 
           {o.backend === 'decklink' ? (
             <>
-              <FormGroup label="Fill">
+              <FormGroup label="Fill connector">
                 {/* From the node's own capability report — what the machine
                     actually has, not what somebody typed. */}
                 <select
@@ -336,7 +448,7 @@ function OutputHardware({ node }: { node: FullNode }) {
                   ))}
                 </select>
               </FormGroup>
-              <FormGroup label="Key">
+              <FormGroup label="Key connector">
                 <select
                   value={o.key_device == null ? '' : String(o.key_device)}
                   aria-label={`Output ${o.id} key device`}
@@ -350,7 +462,7 @@ function OutputHardware({ node }: { node: FullNode }) {
                   ))}
                 </select>
               </FormGroup>
-              <FormGroup label="Mode">
+              <FormGroup label="Video mode">
                 {/* Only what THIS connector says it can do. The raster still
                     travels with the name — the node keeps no mode table, and
                     two tables that must agree is one more than there should be
@@ -405,7 +517,7 @@ function OutputHardware({ node }: { node: FullNode }) {
               audio to send — a destination for nothing is a question with no
               consequence. */}
           {(o.audio_channels ?? 0) > 0 ? (
-            <FormGroup label="Audio goes to">
+            <FormGroup label="Audio destination">
               <select
                 value={o.audio_device ?? ''}
                 aria-label={`Output ${o.id} audio destination`}
@@ -428,9 +540,7 @@ function OutputHardware({ node }: { node: FullNode }) {
           ) : null}
           {o.audio_device ? (
             <p className="cfg-console__note">
-              This output’s audio leaves on <b>{o.audio_device}</b> and is <b>not</b> embedded in
-              the video. The sound device has its own clock, so the node holds the two together and
-              reports how hard it is working.
+              Audio leaves through <b>{o.audio_device}</b>. The node keeps its clock aligned with video.
             </p>
           ) : null}
 
@@ -448,44 +558,67 @@ function OutputHardware({ node }: { node: FullNode }) {
             type="button"
             className="edit-console__iconbtn"
             aria-label={`Remove output ${o.id}`}
-            onClick={() => setDraft(rows.filter((_, n) => n !== i))}
+            onClick={() => {
+              const next = rows.filter((_, n) => n !== i)
+              setDraft(next)
+              setSelectedIndex(Math.max(0, Math.min(i, next.length - 1)))
+            }}
           >
             <Trash2 size={13} aria-hidden />
           </button>
-        </div>
-      ))}
+                </div>
 
-      <div className="cfg-console__screen-add">
-        <button
-          type="button"
-          className="edit-console__addbtn"
-          onClick={() =>
-            setDraft([
-              ...rows,
-              { id: `out-${rows.length}`, backend: 'ndi', ndi_name: `${node.name} ${rows.length}`, group: `g${rows.length}` },
-            ])
-          }
-        >
-          <Plus size={12} aria-hidden /> Add an output
-        </button>
-        <Button variant="secondary" disabled={!draft} onClick={() => void save(false)}>
-          Apply
-        </Button>
-        {ack?.refused_on_air?.length ? (
-          // Only offered once the node has said what it would not do — an
-          // "interrupt anyway" button on a quiet plant is a trap with no
-          // purpose.
-          <Button variant="secondary" onClick={() => void save(true)}>
-            Apply anyway (interrupts {ack.refused_on_air.join(', ')})
-          </Button>
-        ) : null}
-        {draft ? (
-          <Button variant="quiet" onClick={() => setDraft(null)}>Discard</Button>
-        ) : null}
-      </div>
+                <GroupHeader label="Composition" />
+                {selectedDefinition || selectedLive ? (
+                  <OutputEditor
+                    nodeId={node.node_id}
+                    outputId={o.id}
+                    mode={selectedDefinition?.mode || ''}
+                    color={selectedDefinition?.color}
+                    layers={selectedLayers}
+                  />
+                ) : (
+                  <div className="mode__stub">
+                    <p>Apply this output before configuring its layers.</p>
+                  </div>
+                )}
+
+                <div className="cfg-console__output-actions">
+                  <span className="cfg-console__output-actionnote">
+                    {draft ? 'Output configuration has unapplied changes.' : note || 'Configuration matches the node.'}
+                  </span>
+                  {draft ? (
+                    <Button
+                      variant="quiet"
+                      onClick={() => {
+                        setDraft(null)
+                        setSelectedIndex(Math.min(selectedIndex, Math.max(0, persistedRows.length - 1)))
+                      }}
+                    >
+                      Discard
+                    </Button>
+                  ) : null}
+                  <Button variant="secondary" disabled={!draft} onClick={() => void save(false)}>
+                    Apply
+                  </Button>
+                  {ack?.refused_on_air?.length ? (
+                    <Button variant="secondary" onClick={() => void save(true)}>
+                      Apply anyway (interrupts {ack.refused_on_air.join(', ')})
+                    </Button>
+                  ) : null}
+                </div>
+              </div>
+            )
+          })() : null}
+        </div>
+      ) : (
+        <div className="mode__stub">
+          <p>No outputs configured.</p>
+          <p>Add an output to define where this node sends graphics.</p>
+        </div>
+      )}
 
       {problem ? <p className="tl__problem" role="alert">{problem}</p> : null}
-      {note ? <p className="cfg-console__note" role="status">{note}</p> : null}
       {ack?.problems?.length ? (
         <p className="tl__problem" role="alert">
           The node could not apply all of it: {ack.problems.join('; ')}
@@ -497,7 +630,7 @@ function OutputHardware({ node }: { node: FullNode }) {
           would remove the graphic.
         </p>
       ) : null}
-    </details>
+    </section>
   )
 }
 
@@ -916,9 +1049,7 @@ function Stranger({ node }: { node: FullNode }) {
 }
 
 function AdoptedNode({ node }: { node: FullNode }) {
-  const { data } = useQuery<{
-    outputs: { output_id: string; mode: string; layers: string[]; color?: ColorConfig }[]
-  }>(`${keys.node(node.node_id)}/outputs`)
+  const { data } = useQuery<{ outputs: OutputDefinition[] }>(`${keys.node(node.node_id)}/outputs`)
   const caps = node.capabilities
   const outputs = data?.outputs ?? []
   const liveOutputs = node.state?.outputs ?? []
@@ -947,7 +1078,7 @@ function AdoptedNode({ node }: { node: FullNode }) {
         ]}
       />
 
-      <OutputHardware node={node} />
+      <OutputHardware node={node} definitions={outputs} />
 
       {/* What somebody needs when it is going wrong: where the node is, what
           it is running, whether it has the content we think it has, and how
@@ -1043,19 +1174,6 @@ function AdoptedNode({ node }: { node: FullNode }) {
         </div>
       ) : null}
 
-      {(outputs.length
-        ? outputs
-        : liveOutputs.map((o) => ({ output_id: o.id, mode: '', layers: [], color: undefined }))
-      ).map((o) => (
-        <OutputEditor
-          key={o.output_id}
-          nodeId={node.node_id}
-          outputId={o.output_id}
-          mode={o.mode}
-          color={o.color}
-          layers={o.layers.length ? o.layers : (liveOutputs.find((l) => l.id === o.output_id)?.layers ?? []).map((l) => l.name)}
-        />
-      ))}
     </div>
   )
 }
@@ -1123,16 +1241,12 @@ function OutputEditor({
   return (
     <div className="cfg-console__output">
       <div className="cfg-console__output-head">
-        <span className="cfg-console__output-name">
-          {outputId} <span className="cfg-console__mono">{mode || '1920x1080'}</span>
-        </span>
+        <span className="cfg-console__output-name">Layer stack</span>
         {saved ? (
           <StatusPill tone="ready" variant="subtle" size={10}>PUSHED TO THE NODE</StatusPill>
         ) : null}
       </div>
-      <p className="cfg-console__dim">
-        Bottom of the stack first. What is lower is covered by what is above it.
-      </p>
+      <p className="cfg-console__dim">Layers composite bottom to top.</p>
 
       {problem ? (
         <p className="cfg-console__problem" role="alert">{problem}</p>
