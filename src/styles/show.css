@@ -86,7 +86,7 @@
 .show-console__problem {
   margin: 0;
   border-radius: var(--pm-radius-6);
-  background: var(--pm-surface-raised);
+  background-color: var(--pm-surface-raised);
   box-shadow: var(--pm-hairline);
   padding: 10px 12px;
   display: flex;
@@ -177,11 +177,11 @@
   border: 0;
   outline: none;
   border-radius: var(--pm-radius-pill);
-  background: var(--pm-surface-raised);
+  background-color: var(--pm-surface-raised);
   box-shadow: var(--pm-hairline);
   color: var(--pm-text-primary);
   font-family: var(--pm-font-ui);
   font-size: 12px;
   font-weight: 600;
-  padding: 0 8px;
+  padding: 0 26px 0 8px;
 }

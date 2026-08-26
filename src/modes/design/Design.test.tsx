@@ -459,8 +459,8 @@ describe('revisions', () => {
 
     fireEvent.click(screen.getByRole('button', { name: /Update Items to the newest revision/ }))
     // The manifest diff, as sentences a designer can act on.
-    await screen.findByText(/Adds field “Campus” — required, so empty Items will be refused/)
-    await screen.findByText(/Adds timeline “Highlight” — a new cue button in Show/)
+    await screen.findByText(/Adds field “Campus”. Required; empty Items will be refused./)
+    await screen.findByText(/Adds timeline “Highlight”. Show gains a cue button./)
     expect(screen.getByText(/Pastor Dan/)).toBeDefined()
 
     updateItemsResponse = {
@@ -501,13 +501,13 @@ describe('theme tokens', () => {
 describe('the theme manager and the apply sweep', () => {
   test('a stale follower is named, and the sweep reports its verdicts', async () => {
     await openTemplate()
-    fireEvent.click(screen.getByRole('button', { name: /Themes — tokens/ }))
+    fireEvent.click(screen.getByRole('button', { name: /Themes/ }))
 
     const dialog = await screen.findByRole('dialog', { name: 'Themes' })
     // The Advent theme's token row is editable.
     expect(within(dialog).getByLabelText('Token brand.primary colour')).toBeDefined()
     // The follower list names the template and its staleness.
-    await within(dialog).findByText(/Lower third — an older version of this theme/)
+    await within(dialog).findByText(/Lower third · older theme version/)
     await within(dialog).findByText(/1 template was resolved under an older version/)
 
     fireEvent.click(within(dialog).getByRole('button', { name: /Republish 1 template/ }))
@@ -529,7 +529,7 @@ describe('masks', () => {
     selectInTree('wipe')
     // The sentence, because an invisible node that offers no colours needs to
     // say why once.
-    await screen.findByText(/reveals what falls inside its shape/)
+    await screen.findByText(/reveals content inside its shape/)
     // Shape and placement, yes.
     expect(screen.getByLabelText('Corner radius')).toBeDefined()
     expect(screen.getByLabelText('Node opacity')).toBeDefined()

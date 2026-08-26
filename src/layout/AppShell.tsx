@@ -204,15 +204,14 @@ export function AppShell() {
               // hole; a booth appliance locked behind a password nobody wrote
               // down is an outage. This is the third option (ADR 0013).
               <span className="console__footer-hint" role="status">
-                No users yet — anyone on this network can operate this server. Add a user in Configure
-                to turn permissions on.
+                Open access. Add a user in Configure to enable permissions.
               </span>
             ) : me && !me.user ? (
               // Read-only is a state, not a failure, and an operator who does not
               // know they are in it reads every refusal as the system being
               // broken.
               <span className="console__footer-hint" role="status">
-                Signed out — this station can watch, not change.
+                Signed out. View only.
               </span>
             ) : null}
           </div>

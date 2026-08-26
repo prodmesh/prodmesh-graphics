@@ -453,9 +453,7 @@ function SelectedNode({
             // A mask draws nothing, so selecting one and finding no colours is
             // exactly right and needs saying once, here.
             <p className="design-console__dim">
-              A mask reveals what falls inside its shape and hides the rest — everything
-              beside it in its container. It has no colour of its own: size it, round it,
-              and animate its position for a wipe.
+              A mask reveals content inside its shape. Size or animate it to create a wipe.
             </p>
           ) : null}
 
@@ -472,7 +470,7 @@ function SelectedNode({
                 {/* What it says. ${field} references bind Item data; typing one
                     declares the field, so publish never trips over bookkeeping
                     the designer was never shown. */}
-                <FormGroup label="Text — ${field} binds Item data">
+                <FormGroup label="Text binding (${field})">
                   <input
                     value={expr}
                     onChange={(e) => setExpr(e.target.value)}
@@ -506,7 +504,7 @@ function SelectedNode({
                       }}
                     >
                       {family && !faces.some((f) => f.family === family) ? (
-                        <option value={family}>{family} — no file on this server</option>
+                        <option value={family}>{family} (missing)</option>
                       ) : null}
                       {[...new Set(faces.map((f) => f.family))].map((f) => (
                         <option key={f} value={f}>{f}</option>
@@ -586,7 +584,7 @@ function SelectedNode({
                 <div className="design-console__size">
                   <FormGroup label="Clip comes from field">
                     <input
-                      value={facts.video.field ? '${' + facts.video.field + '}' : '— fixed asset —'}
+                      value={facts.video.field ? '${' + facts.video.field + '}' : 'Fixed asset'}
                       readOnly
                       aria-label="Video field"
                     />
@@ -597,9 +595,9 @@ function SelectedNode({
                       aria-label="Video fit"
                       onChange={(e) => edit((s) => s.setFit(selected, e.target.value))}
                     >
-                      <option value="cover">Scale to fill — crops</option>
-                      <option value="contain">Scale to fit — letterboxes</option>
-                      <option value="stretch">Stretch — distorts</option>
+                      <option value="cover">Fill (crop)</option>
+                      <option value="contain">Fit (letterbox)</option>
+                      <option value="stretch">Stretch (distort)</option>
                     </select>
                   </FormGroup>
                 </div>
@@ -626,7 +624,7 @@ function SelectedNode({
                     >
                       {facts.image.hash && !imageAssets.some((a) => a.hash === facts.image!.hash) ? (
                         <option value={facts.image.hash}>
-                          {shortRev(facts.image.hash)} — not on this server
+                          {shortRev(facts.image.hash)} (missing)
                         </option>
                       ) : null}
                       {/* By NAME, falling back to the hash. Picking one of four
@@ -646,9 +644,9 @@ function SelectedNode({
                       aria-label="Picture fit"
                       onChange={(e) => edit((s) => s.setFit(selected, e.target.value))}
                     >
-                      <option value="cover">Scale to fill — crops</option>
-                      <option value="contain">Scale to fit — letterboxes</option>
-                      <option value="stretch">Stretch — distorts</option>
+                      <option value="cover">Fill (crop)</option>
+                      <option value="contain">Fit (letterbox)</option>
+                      <option value="stretch">Stretch (distort)</option>
                     </select>
                   </FormGroup>
                 </div>
@@ -682,8 +680,8 @@ function SelectedNode({
                 aria-label="Placement"
                 onChange={(e) => edit((s) => s.setPosition(selected, e.target.value === 'absolute'))}
               >
-                <option value="relative">In the flow — neighbours move with it</option>
-                <option value="absolute">Pinned — moves freely</option>
+                <option value="relative">Flow (moves with neighbors)</option>
+                <option value="absolute">Pinned (moves freely)</option>
               </select>
             </FormGroup>
             {/* Per-axis sizing: a fixed number, or hugging what is inside —
@@ -804,8 +802,8 @@ function SelectedNode({
                   aria-label="Overflow"
                   onChange={(e) => edit((s) => s.setClip(selected, e.target.value === 'hide'))}
                 >
-                  <option value="show">Show — contents may spill out</option>
-                  <option value="hide">Hide — mask contents to this box</option>
+                  <option value="show">Show overflow</option>
+                  <option value="hide">Clip to box</option>
                 </select>
               </FormGroup>
             ) : null}
@@ -856,7 +854,7 @@ function SelectedNode({
                 on={!!facts.fill || !!facts.gradient}
                 onEnable={() => edit((s) => s.setFill(selected, 1, 1, 1, 1))}
                 onDisable={() => edit((s) => s.clearFill(selected))}
-                offNote="An unfilled box draws nothing and stops being clickable on the canvas — select it from the layer tree instead."
+                offNote="Unfilled boxes are not clickable on the canvas. Select them in Layers."
               >
                 <FormGroup label="Type">
                   <select
@@ -1080,9 +1078,7 @@ function SelectedNode({
           </section>
 
           <p className="design-console__dim">
-            Moving edits margins: a pinned node moves freely; one in the flow adjusts its
-            place, so its neighbours move with it — that is the layout being responsive,
-            not the editor being wrong.
+            Pinned nodes move freely. Flow nodes adjust margins and move their neighbors.
           </p>
         </>
       ) : null}
@@ -1138,7 +1134,7 @@ function FieldsEditor({
       <GroupHeader label="Fields" trailing={fields.length ? `${fields.length}` : undefined} />
       {fields.length === 0 ? (
         <p className="design-console__dim">
-          No fields yet. A field is what an Item fills in — add one here, or type{' '}
+          No fields yet. Add one here, or type{' '}
           {'${key}'} into a text node and it declares itself.
         </p>
       ) : null}
@@ -1183,7 +1179,7 @@ function FieldsEditor({
                 <option value="image">Picture</option>
                 <option value="video">Clip</option>
                 <option value="color">Colour</option>
-                <option value="timer">Timer — a countdown or a clock</option>
+                <option value="timer">Timer (countdown or clock)</option>
               </select>
             </FormGroup>
             <FormGroup label="Label">
@@ -1265,10 +1261,10 @@ function manifestDiff(from: Revision['manifest'], to: Revision['manifest']): str
   const ff = new Map(from.fields.map((f) => [f.key, f]))
   const tf = new Map(to.fields.map((f) => [f.key, f]))
   for (const [k, f] of tf) {
-    if (!ff.has(k)) lines.push(`Adds field “${f.label ?? k}”${f.required ? ' — required, so empty Items will be refused' : ''}`)
+    if (!ff.has(k)) lines.push(`Adds field “${f.label ?? k}”${f.required ? '. Required; empty Items will be refused.' : ''}`)
   }
   for (const [k, f] of ff) {
-    if (!tf.has(k)) lines.push(`Removes field “${f.label ?? k}” — its data stays on the Item but no longer renders`)
+    if (!tf.has(k)) lines.push(`Removes field “${f.label ?? k}”. Existing Item data remains but will not render.`)
   }
   for (const [k, f] of tf) {
     const o = ff.get(k)
@@ -1278,18 +1274,18 @@ function manifestDiff(from: Revision['manifest'], to: Revision['manifest']): str
   }
   const ot = new Set(from.timelines)
   const nt = new Set(to.timelines)
-  for (const t of to.timelines) if (!ot.has(t)) lines.push(`Adds timeline “${t}” — a new cue button in Show`)
-  for (const t of from.timelines) if (!nt.has(t)) lines.push(`Removes timeline “${t}” — its cue button goes away`)
+  for (const t of to.timelines) if (!ot.has(t)) lines.push(`Adds timeline “${t}”. Show gains a cue button.`)
+  for (const t of from.timelines) if (!nt.has(t)) lines.push(`Removes timeline “${t}”. Its cue button is removed.`)
   const oa = new Set(from.assets ?? [])
   const na = new Set(to.assets ?? [])
   const addedA = [...na].filter((h) => !oa.has(h)).length
   const droppedA = [...oa].filter((h) => !na.has(h)).length
   if (addedA || droppedA) {
-    lines.push(`Changes media: ${addedA} added, ${droppedA} no longer used — nodes stage the difference`)
+    lines.push(`Changes media: ${addedA} added, ${droppedA} removed. Nodes stage the difference.`)
   }
-  if (to.min_reader > from.min_reader) lines.push(`Needs newer nodes — reader ${to.min_reader} or later`)
+  if (to.min_reader > from.min_reader) lines.push(`Needs reader ${to.min_reader} or later.`)
   if (to.name !== from.name) lines.push(`Renames the template to “${to.name}”`)
-  if (!lines.length) lines.push('Same fields, timelines, and media — only the look changed.')
+  if (!lines.length) lines.push('Only the look changed.')
   return lines
 }
 
@@ -1844,7 +1840,7 @@ export function Design() {
         },
       )
       invalidate(keys.templates())
-      const bits = [`Published — revision ${shortRev(r.template_rev)}`]
+      const bits = [`Published · revision ${shortRev(r.template_rev)}`]
       if (r.warnings.length) bits.push(`${r.warnings.length} warning(s)`)
       // Named here, not discovered by a node at staging time on a Saturday.
       if (r.missing_assets.length) bits.push(`${r.missing_assets.length} asset(s) this server does not have`)
@@ -2066,7 +2062,7 @@ export function Design() {
           <Button
             variant="secondary"
             disabled={status !== 'ready' || imageAssets.length === 0}
-            title={imageAssets.length === 0 ? 'Add an image asset first — right rail' : undefined}
+            title={imageAssets.length === 0 ? 'Add an image asset in the right rail first' : undefined}
             onClick={() => addNode('image')}
           >
             <ImageIcon size={14} aria-hidden /> Add an image
@@ -2077,7 +2073,7 @@ export function Design() {
           <Button
             variant="secondary"
             disabled={status !== 'ready'}
-            title="A mask reveals what is inside its shape — animate it for a wipe"
+            title="Animate a mask to create a wipe"
             onClick={() => addNode('mask')}
           >
             <Scissors size={14} aria-hidden /> Add a mask
@@ -2273,7 +2269,7 @@ export function Design() {
                     onClick={() => setThemesOpen(true)}
                   >
                     <FolderOpen size={14} aria-hidden />
-                    <span>Themes — tokens, and applying them…</span>
+                    <span>Themes…</span>
                   </button>
                   {themes.length ? (
                     <>
@@ -2309,8 +2305,7 @@ export function Design() {
                       </FormGroup>
                       {docTheme && !activeTheme ? (
                         <p className="design-console__dim">
-                          This template was resolved under a theme version this server has moved
-                          past — pick the theme again to update its values.
+                          This template uses an older theme version. Choose the theme again to update it.
                         </p>
                       ) : null}
                     </>
@@ -2341,14 +2336,13 @@ export function Design() {
                 />
               ) : (
                 <p className="design-console__dim">
-                  Nothing is selected. Click a box on the canvas or a layer in the tree —
-                  drag to move, drag a handle to resize, arrows nudge, Alt ignores snapping.
+                  Select a canvas object or layer. Drag to move, use handles to resize, and use
+                  arrow keys to nudge. Hold Alt to ignore snapping.
                 </p>
               )
             ) : (
               <p className="design-console__dim">
-                Open a template from the browser or from a file. There is no canvas interaction
-                yet — no selection, no moving a box, no property editing.
+                Open a template to begin.
               </p>
             )}
 

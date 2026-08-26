@@ -338,7 +338,7 @@ export function MediaBrowser({
               {nodes
                 .filter((n) => n.staging && n.staging.pending > 0)
                 .map((n) =>
-                  `Still copying to ${n.name} — ${n.staging!.pending} file(s), ` +
+                  `Copying to ${n.name}: ${n.staging!.pending} file(s), ` +
                   `${Math.max(0, Math.round((n.staging!.total_bytes - n.staging!.done_bytes) / (1024 * 1024)))} MB left`)
                 .join(' · ')}
             </p>
@@ -379,10 +379,7 @@ export function MediaBrowser({
             <>
               <GroupHeader label="Videos" trailing={videos.length ? `${videos.length}` : undefined} />
               <UploadRow label="Add a video…" accept="video/*,.mov,.mp4,.mxf" onFile={(f) => void ingest(f)} />
-              <p className="mdb__dim">
-                Videos are probed on the way in, and long-GOP sources are converted to an
-                all-intra intermediate so they can hit a mark.
-              </p>
+              <p className="mdb__dim">Long-GOP video is converted for frame-accurate playout.</p>
               {jobs
                 .filter((j) => j.state !== 'done')
                 .map((j) => (
@@ -391,7 +388,7 @@ export function MediaBrowser({
                     <div className="mdb__name">
                       <span>{j.filename}</span>
                       <span className="mdb__meta">
-                        {j.state === 'failed' ? `failed — ${j.message ?? 'no reason given'}` : `${j.state}…`}
+                        {j.state === 'failed' ? `Failed: ${j.message ?? 'no reason given'}` : `${j.state}…`}
                       </span>
                     </div>
                     <div className="mdb__chips">

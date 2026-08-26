@@ -149,7 +149,7 @@ export function Edit() {
         <div className="console__toolbar-group">
           <Button
             disabled={currentList === 'find'}
-            title={currentList === 'find' ? 'Open a playlist first — an item belongs to one' : undefined}
+            title={currentList === 'find' ? 'Choose a playlist first' : undefined}
             onClick={() => setEditing('new')}
           >
             <Plus size={14} aria-hidden /> New item
@@ -556,7 +556,7 @@ function FindItems({
         className="edit-console__search"
         autoFocus
         value={q}
-        placeholder="Words in an item — its name, or anything typed into it"
+        placeholder="Search item names and content"
         aria-label="Search items"
         onChange={(e) => setQ(e.target.value)}
       />
@@ -611,8 +611,7 @@ function ArrangementPicker({
   if (!groups.length) {
     return (
       <p className="edit-console__dim">
-        Name the groups in Main — a Section on each row — and this song can have named
-        arrangements: an order of those groups, for a service that sings it differently.
+        Add a Section to each group. Arrangements reorder those groups for different services.
       </p>
     )
   }
@@ -634,7 +633,7 @@ function ArrangementPicker({
           aria-label="Arrangement"
           onChange={(e) => onPick(e.target.value || null)}
         >
-          <option value="">Main — every slide, and where they are edited</option>
+          <option value="">Main (all slides)</option>
           {list.map((a) => (
             <option key={a.id} value={a.id}>{a.name}</option>
           ))}
@@ -1017,8 +1016,8 @@ function PlaylistView({
       <div className="edit-console__mode">
         <FormGroup label="Playout mode">
           <select value={playlist.mode} onChange={(e) => void setMode(e.target.value)}>
-            <option value="cue">Cue — arm a row, then take it</option>
-            <option value="follow">Follow — navigating is taking</option>
+            <option value="cue">Cue: arm, then take</option>
+            <option value="follow">Follow: navigation takes</option>
           </select>
         </FormGroup>
         <span className="edit-console__dim">
@@ -1048,7 +1047,7 @@ function PlaylistView({
         <p className="edit-console__dim">
           {library.length
             ? 'Nothing arranged yet. Put its items in order below.'
-            : 'Empty. Start with New item — an item belongs to the playlist it is written for.'}
+            : 'No items. Choose New item to add one to this playlist.'}
         </p>
       ) : (
         contents.map((it, i) => (
@@ -1392,7 +1391,7 @@ function Destinations({
                 >
                   <option value="auto">Fires with the take</option>
                   <option value="on_request">Only when asked for</option>
-                  <option value="blank">Render nothing — clear this feed</option>
+                  <option value="blank">Clear this feed</option>
                 </select>
               </FormGroup>
             </div>
@@ -1405,8 +1404,7 @@ function Destinations({
             ) : null}
             {d.blank ? (
               <p className="edit-console__hint">
-                Taking this item will <b>clear</b> this feed. That is an instruction, not a gap —
-                it is how a full-screen graphic blanks the wall.
+                Taking this item will <b>clear</b> this feed. Use this to blank a full-screen graphic.
               </p>
             ) : null}
           </div>
@@ -1739,7 +1737,7 @@ function FieldInput({
     // Where an unexpected field came from. Without it, a Line box appearing
     // because the wall template wants one is a mystery.
     neededBy ? `· ${neededBy} only` : '',
-    field.max_len != null ? `· ${used}/${field.max_len}${over ? ' — too long' : ''}` : '',
+    field.max_len != null ? `· ${used}/${field.max_len}${over ? ' · over limit' : ''}` : '',
   ]
     .filter(Boolean)
     .join(' ')
@@ -1757,7 +1755,7 @@ function FieldInput({
         <input type="checkbox" checked={value === 'true'} onChange={(e) => onChange(String(e.target.checked))} />
       ) : field.type === 'enum' ? (
         <select value={value} onChange={(e) => onChange(e.target.value)}>
-          <option value="">—</option>
+          <option value="">Choose a value</option>
           {(field.options ?? []).map((o) => (
             <option key={o} value={o}>{o}</option>
           ))}
@@ -1861,9 +1859,9 @@ function MediaPicker({
   const short = (h: string) => h.replace(/^[a-z0-9]+:/, '').slice(0, 8)
   return (
     <select value={value} onChange={(e) => onChange(e.target.value)}>
-      <option value="">—</option>
+      <option value="">Choose media</option>
       {value && !options.some((a) => a.hash === value) ? (
-        <option value={value}>{short(value)} — not on this server</option>
+        <option value={value}>{short(value)} (not on this server)</option>
       ) : null}
       {options.map((a) => (
         <option key={a.hash} value={a.hash}>

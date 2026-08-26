@@ -504,8 +504,8 @@ export function TimelinePanel({
               }}
             >
               <title>
-                Drag to scrub — the playhead snaps to keys; hold Shift, Control, or Alt for
-                none. Right-click a key to delete it, or bare lane to add one.
+                Drag to scrub. Hold Shift, Control, or Alt to disable snapping. Right-click to
+                add or delete keys.
               </title>
               {PROPS.map((_, i) => (
                 <line key={i} className="tl__lane" x1={0} y1={(i + 1) * ROW_H - 0.5} x2={W} y2={(i + 1) * ROW_H - 0.5} />
@@ -547,7 +547,7 @@ export function TimelinePanel({
         )
       ) : timelines.length === 0 ? (
         <p className="tl__dim">
-          No timelines yet. Add one — In and Out are the ones a take plays.
+          No timelines yet. Add In or Out for Take playback.
         </p>
       ) : null}
 
@@ -618,7 +618,7 @@ export function TimelinePanel({
               }}
             />
           </FormGroup>
-          <FormGroup label="Easing — from this key">
+          <FormGroup label="Easing from this key">
             <select
               value={easeName(selKey.key.ease)}
               aria-label="Key easing"

@@ -80,13 +80,13 @@ test('this browser registers as a station once, and carries it on every request'
 test('a server with users offers a way in, and says the station is only watching', async () => {
   await paint()
   await screen.findByRole('button', { name: 'Sign in' })
-  await screen.findByText(/this station can watch, not change/i)
+  await screen.findByText(/signed out. view only/i)
 })
 
 test('an open server offers no sign in, because there is nobody to sign in as', async () => {
   me = { ...signedOut(), unconfigured: true }
   await paint()
-  await screen.findByText(/anyone on this network can operate this server/)
+  await screen.findByText(/open access/i)
   expect(screen.queryByRole('button', { name: 'Sign in' })).toBeNull()
 })
 

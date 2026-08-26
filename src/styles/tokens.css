@@ -71,8 +71,11 @@
   --pm-state-muted: var(--pm-ink-400);
 
   /* Actions */
-  --pm-action-primary-bg: var(--pm-red);
-  --pm-action-primary-fg: var(--pm-white);
+  /* A routine primary action is neutral. Red is opt-in at the component level
+     for TAKE and destructive-live confirmation, so a button cannot look live
+     merely because it is important. */
+  --pm-action-primary-bg: var(--pm-ink-200);
+  --pm-action-primary-fg: var(--pm-ink-850);
   --pm-action-secondary-bg: var(--pm-ink-700);
   --pm-action-secondary-fg: var(--pm-ink-200);
   --pm-action-quiet-bg: var(--pm-ink-600);

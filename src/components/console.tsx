@@ -111,7 +111,7 @@ export function Button({
   title,
 }: {
   children: ReactNode
-  variant?: 'primary' | 'secondary' | 'quiet'
+  variant?: 'primary' | 'secondary' | 'quiet' | 'armed' | 'live'
   /** The commit button. Carries the one drop shadow in the product. */
   take?: boolean
   block?: boolean

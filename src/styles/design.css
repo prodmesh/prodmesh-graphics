@@ -104,13 +104,14 @@
   border: 0;
   outline: none;
   border-radius: var(--pm-radius-4);
-  background: var(--pm-surface-field);
+  background-color: var(--pm-surface-field);
   color: var(--pm-text-primary);
   font-family: var(--pm-font-ui);
   font-size: 11px;
   padding: 0 8px;
 }
 .tl__field { display: flex; align-items: center; gap: 6px; }
+.tl__pick { padding-right: 26px; }
 /* The loop checkbox opts out of the text-input chrome above. */
 .tl__loop input { height: auto; padding: 0; accent-color: var(--pm-state-armed); }
 .tl__field > span {
@@ -716,11 +717,11 @@ button.design-console__file {
   border: 0;
   outline: none;
   border-radius: var(--pm-radius-4);
-  background: var(--pm-surface-field);
+  background-color: var(--pm-surface-field);
   color: var(--pm-text-primary);
   font-family: var(--pm-font-ui);
   font-size: 12px;
-  padding: 0 8px;
+  padding: 0 26px 0 8px;
 }
 .design-console__new-size {
   display: flex;

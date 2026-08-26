@@ -116,7 +116,7 @@ export function ThemeManager({
       })
       invalidate(keys.themes())
       setSelected(r.id)
-      setStatus(`Saved — the theme is now ${hash.replace(/^[a-z0-9]+:/, '').slice(0, 8)}.`)
+      setStatus(`Saved. Theme revision ${hash.replace(/^[a-z0-9]+:/, '').slice(0, 8)}.`)
       const f = await get<{ followers: Follower[] }>(`/api/themes/${r.id}/followers`)
       setFollowers(f.followers)
     } catch (e) {
@@ -142,7 +142,7 @@ export function ThemeManager({
         if (!f.mirror_hash) {
           lines.push({
             template: f.name,
-            note: 'has no editable copy on this server — republish it from its original file',
+            note: 'has no editable copy here. Republish it from the original file.',
             ok: false,
           })
           continue
@@ -319,7 +319,7 @@ export function ThemeManager({
                 followers.map((f) => (
                   <p key={f.id} className="thm__follower">
                     {f.name}
-                    {f.current ? ' — current' : ' — an older version of this theme'}
+                    {f.current ? ' · current' : ' · older theme version'}
                     {openDocId === f.id ? ' · open in the editor' : ''}
                   </p>
                 ))

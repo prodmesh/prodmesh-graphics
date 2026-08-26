@@ -46,11 +46,11 @@ type ColorConfig = {
 
 /** What each pattern proves (`docs/specs/color-and-key.md` §7). */
 const PATTERNS: { id: string; label: string; proves: string }[] = [
-  { id: 'ramp', label: 'Marked ramp', proves: 'range — the marks land at 16 and 235 narrow, 0 and 255 full' },
-  { id: 'bars', label: '75% colour bars', proves: 'matrix and primaries — vectorscope boxes' },
-  { id: 'softedge', label: 'Soft-edged white', proves: 'premultiplication — key it over bright AND dark; any fringe is a bug' },
+  { id: 'ramp', label: 'Marked ramp', proves: 'Range marks: 16/235 narrow, 0/255 full' },
+  { id: 'bars', label: '75% colour bars', proves: 'Matrix and primary alignment' },
+  { id: 'softedge', label: 'Soft-edged white', proves: 'Premultiplication over light and dark video' },
   { id: 'alpha', label: 'Alpha staircase', proves: 'key range and linearity' },
-  { id: 'line', label: 'Moving 1px line', proves: 'frame timing — tearing or stutter is a late frame' },
+  { id: 'line', label: 'Moving 1px line', proves: 'Frame timing and late-frame visibility' },
 ]
 
 type Capabilities = {
@@ -126,8 +126,7 @@ export function Configure() {
         <div className="console__toolbar-group">
           <Tag pill tone="raised">{SECTIONS.find((s) => s.id === section)?.label}</Tag>
           <span className="console__toolbar-note">
-            A node finds this server on the network by itself, and can always be given an address
-            by hand — --server &lt;host:port&gt;.
+            Nodes discover this server automatically. Manual address: --server &lt;host:port&gt;.
           </span>
         </div>
         <Tag size={10}>{`${adopted.length} adopted`}</Tag>
@@ -171,8 +170,7 @@ export function Configure() {
                   <div className="mode__stub">
                     <p>No playout node has been adopted yet.</p>
                     <p>
-                      Start a node and point it at this server. It finds this server on the network
-                      by itself, and you can always give it an address by hand —{' '}
+                      Start a node and point it at this server. For a manual connection, use{' '}
                       <code>--server &lt;host:port&gt;</code>.
                     </p>
                   </div>
@@ -302,9 +300,9 @@ function OutputHardware({ node }: { node: FullNode }) {
               onChange={(e) => set(i, { backend: e.target.value })}
             >
               <option value="ndi">NDI</option>
-              <option value="decklink">SDI — DeckLink</option>
+              <option value="decklink">SDI (DeckLink)</option>
               <option value="window">A window on this machine</option>
-              <option value="headless">Nothing — render and time only</option>
+              <option value="headless">Headless (render only)</option>
             </select>
           </FormGroup>
 
@@ -383,7 +381,7 @@ function OutputHardware({ node }: { node: FullNode }) {
                       Kept visible and named, because silently dropping it would
                       make the field look empty rather than wrong. */}
                   {o.mode && !MODES.some((m) => m.name === o.mode) ? (
-                    <option value={o.mode}>{o.mode} — not offered by this connector</option>
+                    <option value={o.mode}>{o.mode} (unavailable)</option>
                   ) : null}
                 </select>
               </FormGroup>
@@ -478,7 +476,7 @@ function OutputHardware({ node }: { node: FullNode }) {
           // "interrupt anyway" button on a quiet plant is a trap with no
           // purpose.
           <Button variant="secondary" onClick={() => void save(true)}>
-            Apply anyway — interrupts {ack.refused_on_air.join(', ')}
+            Apply anyway (interrupts {ack.refused_on_air.join(', ')})
           </Button>
         ) : null}
         {draft ? (
@@ -495,8 +493,8 @@ function OutputHardware({ node }: { node: FullNode }) {
       ) : null}
       {ack?.refused_on_air?.length ? (
         <p className="cfg-console__note">
-          Left alone because something is on air on {ack.refused_on_air.join(', ')} — closing a
-          device takes the graphic with it.
+          Left unchanged because {ack.refused_on_air.join(', ')} is on air. Closing the device
+          would remove the graphic.
         </p>
       ) : null}
     </details>
@@ -597,7 +595,7 @@ function Users() {
         <GroupHeader label="Users" trailing={`${users.length}`} />
         <p className="cfg-console__note">
           {users.length === 0
-            ? 'No users yet, so anyone on this network can operate this server. Adding the first user turns permissions on, and makes that user an Administrator — otherwise securing the server would lock everybody out of it.'
+            ? 'Open access is enabled. Add the first user to turn on permissions; that user becomes an Administrator.'
             : 'Permissions are on. A station with nobody signed in can do only what it is trusted to do.'}
         </p>
 
@@ -612,7 +610,7 @@ function Users() {
           <FormGroup label="Username">
             <input value={username} aria-label="New username" onChange={(e) => setUsername(e.target.value)} />
           </FormGroup>
-          <FormGroup label="PIN — four digits or more">
+          <FormGroup label="PIN (4+ digits)">
             <input
               type="password"
               value={pin}
@@ -622,7 +620,7 @@ function Users() {
           </FormGroup>
           <FormGroup label="Group">
             <select value={group} aria-label="New user group" onChange={(e) => setGroup(e.target.value)}>
-              <option value="">No group — can sign in and nothing else</option>
+              <option value="">No group (sign-in only)</option>
               {groups.map((g) => <option key={g.id} value={g.id}>{g.name}</option>)}
             </select>
           </FormGroup>
@@ -641,7 +639,7 @@ function Users() {
                 // nobody knows was granted is a permission nobody audits.
                 setNote(
                   made?.granted_admin
-                    ? `${username.trim()} is an Administrator — the account that turns permissions on has to be able to manage them. Permissions are now ON.`
+                    ? `${username.trim()} is now an Administrator. Permissions are on.`
                     : null,
                 )
                 setUsername('')
@@ -683,9 +681,7 @@ function Users() {
       <section className="cfg-console__section" aria-label="Stations">
         <GroupHeader label="Stations" trailing={`${stations.length}`} />
         <p className="cfg-console__note">
-          A TRUSTED station can operate with nobody signed in — the booth machine that has to work
-          when the volunteer who knows the PIN is not there. Every one of them is listed here on
-          purpose: the blast radius of that has to be visible rather than scattered.
+          Trusted stations can operate without a signed-in user. Review them regularly.
         </p>
         {stations.map((st) => (
           <div key={st.id} className="cfg-console__userrow">
@@ -807,7 +803,7 @@ function Screens({ nodes }: { nodes: FullNode[] }) {
                 ))}
                 {!outputs.some((o) => o.output_id === s.output) ? (
                   <option value={`${s.node_id ?? ''}|${s.output}`}>
-                    {s.output} — no node reports this
+                    {s.output} (unavailable)
                   </option>
                 ) : null}
               </select>
@@ -865,7 +861,7 @@ function Screens({ nodes }: { nodes: FullNode[] }) {
           type="button"
           className="edit-console__addbtn"
           disabled={!name.trim() || outputs.length === 0}
-          title={outputs.length === 0 ? 'Adopt a node first — a screen is one of its outputs' : undefined}
+          title={outputs.length === 0 ? 'Adopt a node before creating a screen' : undefined}
           onClick={() => {
             const first = outputs[0]!
             void run(async () => {
@@ -945,7 +941,7 @@ function AdoptedNode({ node }: { node: FullNode }) {
             label: 'Devices',
             value: caps?.outputs?.length
               ? caps.outputs.map((o) => `${o.device}${o.supports_key_fill ? ' · key+fill' : ''}`).join(', ')
-              : 'none — NDI has no enumerable hardware',
+              : 'No hardware list (NDI)',
           },
           { label: 'Max layers', value: String(caps?.max_layers ?? '?'), accent: true },
         ]}
@@ -997,7 +993,7 @@ function AdoptedNode({ node }: { node: FullNode }) {
             {liveOutputs.map((o) => (
               <KeyValueRow
                 key={o.id}
-                label={`${o.id} — frames`}
+                label={`${o.id} · frames`}
                 // A late frame is the number that matters here, so it is the
                 // one that gets the accent the moment there is one.
                 value={`${o.fps?.toFixed(2) ?? '?'} fps · ${o.late_frames ?? 0} late`}
@@ -1013,8 +1009,7 @@ function AdoptedNode({ node }: { node: FullNode }) {
               The node answers for itself at{' '}
               <a href={node.status_url} target="_blank" rel="noreferrer">
                 {node.status_url}
-              </a>{' '}
-              — that page works when THIS server does not, which is usually when you want it.
+              </a>. This page remains available if the control server is offline.
             </>
           ) : (
             'This node has not connected yet, so there is nowhere to point at.'
@@ -1040,7 +1035,7 @@ function AdoptedNode({ node }: { node: FullNode }) {
                 </StatusPill>
               ) : (
                 <StatusPill tone="muted" variant="subtle" size={10}>
-                  NO REFERENCE — FREE RUNNING
+                  NO REFERENCE · FREE RUNNING
                 </StatusPill>
               )}
             </div>
@@ -1216,7 +1211,7 @@ function OutputEditor({
             {PATTERNS.map((p) => (
               <Button
                 key={p.id}
-                variant={pattern === p.id ? 'primary' : 'secondary'}
+                variant={pattern === p.id ? 'armed' : 'secondary'}
                 title={`Proves ${p.proves}`}
                 onClick={() => {
                   const next = pattern === p.id ? null : p.id

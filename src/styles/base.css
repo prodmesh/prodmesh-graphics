@@ -23,6 +23,39 @@ code, pre { font-family: var(--pm-font-mono); font-size: 11px; }
 a { color: var(--pm-cyan); text-decoration: none; }
 a:hover { color: var(--pm-white); }
 
+/* Native selects keep native keyboard and assistive-technology behaviour, but
+   wear the same field chrome as the rest of the console. The chevron is two
+   CSS gradients, so it follows the token palette without an image asset. */
+select {
+  appearance: none;
+  height: 28px;
+  border: 0;
+  border-radius: var(--pm-radius-4);
+  background-color: var(--pm-surface-field);
+  background-image:
+    linear-gradient(45deg, transparent 50%, var(--pm-text-muted) 50%),
+    linear-gradient(135deg, var(--pm-text-muted) 50%, transparent 50%);
+  background-position:
+    calc(100% - 11px) 50%,
+    calc(100% - 7px) 50%;
+  background-repeat: no-repeat;
+  background-size: 4px 4px;
+  box-shadow: var(--pm-hairline);
+  color: var(--pm-text-primary);
+  cursor: pointer;
+  font-family: var(--pm-font-ui);
+  font-size: 12px;
+  padding: 0 26px 0 10px;
+}
+select:hover:not(:disabled) { background-color: var(--pm-surface-hover); }
+select:disabled { color: var(--pm-text-idle); cursor: default; opacity: 0.55; }
+select option { background-color: var(--pm-surface-field); color: var(--pm-text-primary); }
+
+:where(button, a, input, select, textarea):focus-visible {
+  outline: 1px solid var(--pm-state-armed);
+  outline-offset: 2px;
+}
+
 /* In chrome, prefer no animation; a 120ms opacity or colour change is the
    ceiling. Never animate a state change into place — the current state must
    be readable in the first frame (design system, Animation). */

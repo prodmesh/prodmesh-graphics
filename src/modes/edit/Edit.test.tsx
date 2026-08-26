@@ -325,7 +325,7 @@ test('a song with no named groups is told why, and offered nothing to press', as
   try {
     await paint()
     await openPlaylist()
-    await screen.findByText(/Name the groups in Main/)
+    await screen.findByText(/Add a Section to each group/)
     expect(screen.queryByLabelText('Arrangement')).toBeNull()
   } finally {
     PLAYLIST.groups = groups

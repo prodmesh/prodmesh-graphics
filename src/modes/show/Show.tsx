@@ -196,13 +196,13 @@ function RundownConsole({
           )}
           {r.known ? (
             <Tag tone={r.follow ? 'armed' : 'quiet'} size={10}>
-              {r.follow ? 'Follow — arrows take' : 'Cue — arrows move'}
+              {r.follow ? 'FOLLOW · TAKE ON NAV' : 'CUE · ARM ONLY'}
             </Tag>
           ) : null}
           <span className="console__toolbar-note">
             {r.follow
-              ? 'Navigating is taking. Mode belongs to the playlist, not this screen.'
-              : 'Arm a row, then commit it. Mode belongs to the playlist, not this screen.'}
+              ? 'Navigation takes items immediately.'
+              : 'Arrows arm items. Press Take to go on air.'}
           </span>
         </div>
         <ClearAll nodeId={node.node_id} outputId={outputId} disabled={!node.reachable} onProblem={r.setProblem} />
@@ -632,7 +632,7 @@ function ArmedDetail({
         // sends an operator to wait through something already decided.
         <p className="show-console__staging">
           {readiness?.unreadable
-            ? `cannot be played here — ${readiness.unreadable}`
+            ? `Cannot play here: ${readiness.unreadable}`
             : `still copying${readiness?.missing?.length ? ` · ${readiness.missing.length} file(s)` : ''}`}
         </p>
       ) : null}
@@ -750,7 +750,7 @@ function ClearAll({
 
   return (
     <Button
-      variant={primed ? 'primary' : 'secondary'}
+      variant={primed ? 'live' : 'secondary'}
       disabled={disabled}
       onClick={() => {
         if (!primed) {
@@ -1114,7 +1114,7 @@ function Preview({
         <div className="c-program__empty">
           {status.state === 'connecting' || status.state === 'waiting-for-key'
             ? `Connecting to ${name}’s preview…`
-            : `No preview from ${name}. ${status.detail} What’s on air is unaffected${anyOnAir ? ' — see the layers below' : ''}.`}
+            : `No preview from ${name}. ${status.detail} What’s on air is unaffected.${anyOnAir ? ' See layers below.' : ''}`}
         </div>
       ) : null}
     </>

@@ -25,7 +25,9 @@
   white-space: nowrap;
   background: var(--pm-action-primary-bg);
   color: var(--pm-action-primary-fg);
+  transition: background-color 120ms ease, color 120ms ease, filter 120ms ease;
 }
+.c-btn--primary { box-shadow: inset 0 0 0 1px rgb(255 255 255 / 16%); }
 .c-btn--secondary {
   background: var(--pm-action-secondary-bg);
   color: var(--pm-action-secondary-fg);
@@ -44,13 +46,26 @@
   font-weight: 800;
   font-size: 16px;
   letter-spacing: var(--pm-tracking-wordmark);
+  background: var(--pm-state-air);
+  color: var(--pm-white);
   box-shadow: var(--pm-shadow-take);
+}
+.c-btn--live {
+  background: var(--pm-state-air);
+  color: var(--pm-white);
+}
+.c-btn--armed {
+  background: var(--pm-state-armed-bg);
+  color: var(--pm-state-armed);
+  box-shadow: var(--pm-ring-armed);
 }
 .c-btn--block { width: 100%; }
 .c-btn:disabled { opacity: 0.45; cursor: default; }
 .c-btn--secondary:not(:disabled):hover,
 .c-btn--quiet:not(:disabled):hover { background: var(--pm-surface-hover); }
-.c-btn--primary:not(:disabled):hover, .c-btn--take:not(:disabled):hover { filter: brightness(1.08); }
+.c-btn--primary:not(:disabled):hover { filter: brightness(1.08); }
+.c-btn--take:not(:disabled):hover, .c-btn--live:not(:disabled):hover { filter: brightness(1.08); }
+.c-btn--armed:not(:disabled):hover { background: var(--pm-state-armed-bg); filter: brightness(1.12); }
 
 /* ---- Status dot / pill / tag -------------------------------------------- */
 
@@ -166,14 +181,14 @@
 .c-formgroup__box input,
 .c-formgroup__box select {
   width: 100%;
-  background: transparent;
+  background-color: transparent;
   border: none;
   outline: none;
   font-family: var(--pm-font-ui);
   font-size: 12px;
   color: var(--pm-text-primary);
 }
-.c-formgroup__box select option { background: var(--pm-surface-field); }
+.c-formgroup__box select { height: 35px; box-shadow: none; }
 
 .c-kv {
   min-height: 35px;
@@ -292,11 +307,13 @@
   white-space: nowrap;
   color: var(--pm-text-secondary);
   text-decoration: none;
+  transition: color 120ms ease, border-color 120ms ease, background-color 120ms ease;
 }
 .c-modetabs__tab:hover { color: var(--pm-text-primary); }
 .c-modetabs__tab--active {
-  border-color: var(--pm-red);
-  border-bottom-color: var(--pm-red);
+  border-color: transparent;
+  border-bottom-color: var(--pm-text-primary);
+  background: rgb(255 255 255 / 2%);
   font-weight: 600;
   color: var(--pm-text-primary);
 }
@@ -330,7 +347,7 @@
   white-space: nowrap;
 }
 .c-telemetry__engine { color: var(--pm-state-ready); }
-.c-telemetry__engine--unhealthy { color: var(--pm-state-air); }
+.c-telemetry__engine--unhealthy { color: var(--pm-text-secondary); }
 .c-telemetry__divider { width: 1px; height: 10px; background: var(--pm-border-hairline); flex-shrink: 0; }
 .c-telemetry__value { color: var(--pm-text-secondary); }
 
@@ -510,7 +527,7 @@
   color: var(--pm-text-muted);
 }
 .c-navitem:hover { background: var(--pm-surface-raised); }
-.c-navitem--active { background: var(--pm-surface-raised); box-shadow: var(--pm-hairline); color: var(--pm-red); }
+.c-navitem--active { background: var(--pm-state-armed-bg); box-shadow: var(--pm-ring-armed); color: var(--pm-state-armed); }
 .c-navitem__text { display: flex; flex-direction: column; gap: 3px; align-items: flex-start; flex-grow: 1; min-width: 0; }
 .c-navitem__title { font-weight: 600; font-size: 13px; line-height: 100%; color: var(--pm-text-secondary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; align-self: stretch; }
 .c-navitem--active .c-navitem__title { color: var(--pm-text-primary); }
@@ -666,7 +683,7 @@
 .c-nodecard__metric-value { font-family: var(--pm-font-mono); font-weight: 600; font-size: 14px; line-height: 100%; color: var(--pm-text-primary); white-space: nowrap; }
 .c-nodecard__metric-value--accent { color: var(--pm-state-armed); }
 .c-nodecard__status { font-size: 12px; line-height: 100%; color: var(--pm-state-ready); }
-.c-nodecard__status--unhealthy { color: var(--pm-state-air); }
+.c-nodecard__status--unhealthy { color: var(--pm-text-secondary); }
 
 /* ---- Console scrollbars ----------------------------------------------------- */
 

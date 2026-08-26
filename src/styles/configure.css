@@ -50,7 +50,7 @@
   box-shadow: var(--pm-hairline);
 }
 
-.cfg-console__scroll { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 20px; max-width: 980px; }
+.cfg-console__scroll { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 20px; max-width: 1200px; }
 .cfg-console__section { display: flex; flex-direction: column; gap: 8px; }
 
 .cfg-console__dim { margin: 0; font-size: 11px; line-height: 1.6; color: var(--pm-text-muted); }

@@ -134,9 +134,9 @@ test('the users page says an open server is open, and names what adding a user d
   await paint()
   fireEvent.click(screen.getByRole('button', { name: /Users & stations/ }))
 
-  await screen.findByText(/anyone on this network can operate this server/)
+  await screen.findByText(/open access is enabled/i)
   // The consequence is stated BEFORE the button is pressed, not after.
-  expect(screen.getByText(/makes that user an Administrator/)).toBeDefined()
+  expect(screen.getByText(/that user becomes an Administrator/)).toBeDefined()
 })
 
 test('adding the first user reports that it was made an administrator', async () => {
@@ -150,7 +150,7 @@ test('adding the first user reports that it was made an administrator', async ()
 
   await waitFor(() => expect(created).toEqual({ username: 'dan', pin: '1234', groups: [] }))
   // A permission nobody knows was granted is a permission nobody audits.
-  await screen.findByText(/dan is an Administrator/)
+  await screen.findByText(/dan is now an Administrator/)
 })
 
 /**

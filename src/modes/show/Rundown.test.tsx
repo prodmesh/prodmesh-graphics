@@ -163,7 +163,7 @@ describe('playout mode — ADR 0017', () => {
     const calls = serve()
     await paint()
 
-    expect(screen.getByText(/Cue — arrows move/)).toBeDefined()
+    expect(screen.getByText(/CUE · ARM ONLY/)).toBeDefined()
     const panel = screen.getByRole('region', { name: 'Rundown' })
     await act(async () => {
       panel.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowUp', bubbles: true }))
@@ -181,7 +181,7 @@ describe('playout mode — ADR 0017', () => {
     const calls = serve()
     await paint()
 
-    expect(screen.getByText(/Follow — arrows take/)).toBeDefined()
+    expect(screen.getByText(/FOLLOW · TAKE ON NAV/)).toBeDefined()
     const panel = screen.getByRole('region', { name: 'Rundown' })
     await act(async () => {
       panel.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowUp', bubbles: true }))
