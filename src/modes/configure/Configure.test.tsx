@@ -69,6 +69,8 @@ let users: { users: unknown[]; groups: unknown[] } = { users: [], groups: [] }
 let created: Record<string, unknown> | null = null
 let configuredOutputs: Record<string, unknown>[] = []
 let savedOutputConfig: Record<string, unknown> | null = null
+let outputDefinitions: Record<string, unknown>[] = []
+let layerPuts: { url: string; body: Record<string, unknown> }[] = []
 
 beforeEach(() => {
   resetQuery()
@@ -76,6 +78,8 @@ beforeEach(() => {
   created = null
   configuredOutputs = [{ id: 'wall', backend: 'ndi' }]
   savedOutputConfig = null
+  outputDefinitions = []
+  layerPuts = []
   vi.stubGlobal(
     'fetch',
     vi.fn(async (url: string, init?: RequestInit) => {
@@ -83,6 +87,10 @@ beforeEach(() => {
       if (u === '/api/users' && init?.method === 'POST') {
         created = JSON.parse(String(init.body)) as Record<string, unknown>
         return new Response(JSON.stringify({ id: 'u1', granted_admin: true }), { status: 201 })
+      }
+      if (/\/outputs\/[^/]+$/.test(u) && init?.method === 'PUT') {
+        layerPuts.push({ url: u, body: JSON.parse(String(init.body)) as Record<string, unknown> })
+        return new Response(JSON.stringify({ ok: true }), { status: 200 })
       }
       if (u.endsWith('/output-config') && init?.method === 'PUT') {
         savedOutputConfig = JSON.parse(String(init.body)) as Record<string, unknown>
@@ -95,7 +103,7 @@ beforeEach(() => {
         : u === '/api/users' ? users
         : u === '/api/stations' ? { stations: [{ id: 's1', name: 'Booth Mac', trusted: false }] }
         : u.endsWith('/output-config') ? { outputs: configuredOutputs, ack: null }
-        : u.endsWith('/outputs') ? { outputs: [] }
+        : u.endsWith('/outputs') ? { outputs: outputDefinitions }
         : {}
       return new Response(JSON.stringify(body), { status: 200 })
     }),
@@ -305,4 +313,59 @@ test('hardware changes apply through the existing node output-config endpoint', 
     ],
     force: false,
   }))
+})
+
+/**
+ * The workspace shows one output at a time, so the layer stack is now a single
+ * component that the selection re-points rather than one per output. React
+ * keeps mount-time state unless something tells it the identity changed — so
+ * without that, selecting the second output would show the first one's layers
+ * and write them to it.
+ */
+test('selecting another output shows that output’s layer stack, not the last one’s', async () => {
+  configuredOutputs = [
+    { id: 'wall', backend: 'ndi', ndi_name: 'Wall' },
+    { id: 'stream', backend: 'ndi', ndi_name: 'Stream' },
+  ]
+  outputDefinitions = [
+    { output_id: 'wall', mode: '1920x1080', layers: ['Lower Third', 'Ticker'] },
+    {
+      output_id: 'stream',
+      mode: '1920x1080',
+      layers: ['Bug'],
+      color: { matrix: 'bt2020', range: 'full', key_range: 'narrow', key_mode: 'fill' },
+    },
+  ]
+  await paint()
+
+  const navigator = await screen.findByRole('navigation', { name: 'Configured outputs' })
+  await screen.findByText('Lower Third')
+
+  fireEvent.click(within(navigator).getByRole('button', { name: /^streamNDI/ }))
+  await screen.findByText('Bug')
+  expect(screen.queryByText('Lower Third')).toBeNull()
+  expect(screen.queryByText('Ticker')).toBeNull()
+  // And the colour with it — every control in the stack saves on change, so a
+  // carried-over matrix is written to this output by the next click.
+  expect((screen.getByLabelText('Matrix') as HTMLSelectElement).value).toBe('bt2020')
+})
+
+/**
+ * The id field edits a DRAFT that the node has not been told about yet. The
+ * layer stack belongs to the output the node already knows, so it must be
+ * addressed by that id — a PUT to the typed one would upsert a second output
+ * row for a thing that does not exist and push it straight to the node.
+ */
+test('a layer change addresses the output the node knows, not an unapplied rename', async () => {
+  configuredOutputs = [{ id: 'wall', backend: 'ndi', ndi_name: 'Wall' }]
+  outputDefinitions = [{ output_id: 'wall', mode: '1920x1080', layers: ['Lower Third', 'Ticker'] }]
+  await paint()
+  await screen.findByText('Lower Third')
+
+  fireEvent.change(screen.getByLabelText('Output 1 id'), { target: { value: 'wall-renamed' } })
+  fireEvent.click(screen.getByRole('button', { name: 'Remove Ticker' }))
+
+  await waitFor(() => expect(layerPuts).toHaveLength(1))
+  expect(layerPuts[0]?.url).toBe(`/api/nodes/${NODE.node_id}/outputs/wall`)
+  expect(layerPuts[0]?.body.layers).toEqual(['Lower Third'])
 })

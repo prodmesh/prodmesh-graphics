@@ -572,7 +572,12 @@ function OutputHardware({ node, definitions }: { node: FullNode; definitions: Ou
                 {selectedDefinition || selectedLive ? (
                   <OutputEditor
                     nodeId={node.node_id}
-                    outputId={o.id}
+                    // The id FIELD edits a draft the node has not been told
+                    // about; the layer stack belongs to the output the node
+                    // already knows. Addressing the typed one would upsert a
+                    // second definition for an output that does not exist and
+                    // push it straight out.
+                    outputId={selectedIdentity ?? o.id}
                     mode={selectedDefinition?.mode || ''}
                     color={selectedDefinition?.color}
                     layers={selectedLayers}
@@ -584,7 +589,10 @@ function OutputHardware({ node, definitions }: { node: FullNode; definitions: Ou
                 )}
 
                 <div className="cfg-console__output-actions">
-                  <span className="cfg-console__output-actionnote">
+                  {/* The save result used to be its own live region. It is a
+                      line of chrome now, so it has to carry the role itself or
+                      a screen reader never hears that the node took it. */}
+                  <span className="cfg-console__output-actionnote" role="status">
                     {draft ? 'Output configuration has unapplied changes.' : note || 'Configuration matches the node.'}
                   </span>
                   {draft ? (
@@ -1199,14 +1207,32 @@ function OutputEditor({
   layers: string[]
   color?: ColorConfig
 }) {
+  const fromNode = color ?? { matrix: 'bt709', range: 'narrow', key_range: 'narrow', key_mode: 'fill' }
   const [draft, setDraft] = useState<string[]>(layers)
-  const [col, setCol] = useState<ColorConfig>(
-    color ?? { matrix: 'bt709', range: 'narrow', key_range: 'narrow', key_mode: 'fill' },
-  )
+  const [col, setCol] = useState<ColorConfig>(fromNode)
   const [pattern, setPattern] = useState<string | null>(null)
   const [adding, setAdding] = useState('')
   const [problem, setProblem] = useState<string | null>(null)
   const [saved, setSaved] = useState(false)
+
+  // One of these serves every output in turn, so what it holds has to follow
+  // the selection. `useState` seeds once, at mount — which would leave the
+  // last output's stack and colour on screen under the new one's name, and
+  // every control in here saves IMMEDIATELY, so the first click would write
+  // them to it. The same reset covers the ordinary first paint, where the
+  // stack shows what the node reports until the stored definition arrives a
+  // tick later.
+  const fromServer = JSON.stringify({ outputId, layers, color })
+  const [seen, setSeen] = useState({ outputId, fromServer })
+  if (seen.fromServer !== fromServer) {
+    const elsewhere = seen.outputId !== outputId
+    setSeen({ outputId, fromServer })
+    setDraft(layers)
+    setCol(fromNode)
+    // A test pattern is up on the output it was put up on. Selecting a
+    // different one does not clear it, so the armed button must not follow.
+    if (elsewhere) setPattern(null)
+  }
 
   const save = useCallback(
     async (next: string[]) => {
