@@ -51,7 +51,9 @@ impl Ring {
 
     /// Samples available to the consumer.
     pub fn len(&self) -> usize {
-        self.write.load(Ordering::Acquire).wrapping_sub(self.read.load(Ordering::Acquire))
+        self.write
+            .load(Ordering::Acquire)
+            .wrapping_sub(self.read.load(Ordering::Acquire))
     }
 
     pub fn is_empty(&self) -> bool {

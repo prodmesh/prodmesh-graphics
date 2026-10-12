@@ -1479,7 +1479,11 @@ fn render_group(
                     (Some(sink), _) => {
                         // Not yet draining: the ring is still filling to its
                         // working depth and its level says nothing about drift.
-                        if sink.primed() { sink.buffered() } else { 0 }
+                        if sink.primed() {
+                            sink.buffered()
+                        } else {
+                            0
+                        }
                     }
                     (None, Backend::DeckLink(d)) => d.stats().buffered_audio as u32,
                     // NDI paces itself and exposes no buffer to read, so there
@@ -1675,7 +1679,11 @@ fn render_group(
             // frame is corrected against exactly one buffer, so a second
             // destination would have nothing holding it in step and would walk
             // away over a service (ADR 0028).
-            let embedded: &[i32] = if out.audio_sink.is_some() { &[] } else { &out.audio };
+            let embedded: &[i32] = if out.audio_sink.is_some() {
+                &[]
+            } else {
+                &out.audio
+            };
             match &out.backend {
                 // NDI is opened with clock_video, so this call paces the loop.
                 Backend::Ndi(n) => {
@@ -1684,7 +1692,11 @@ fn render_group(
                     // a receiver holding sound for a frame that will not come.
                     n.send_audio_interleaved_32s(
                         embedded,
-                        if embedded.is_empty() { 0 } else { out.spec.audio_channels.max(0) as usize },
+                        if embedded.is_empty() {
+                            0
+                        } else {
+                            out.spec.audio_channels.max(0) as usize
+                        },
                     )?;
                 }
                 // DeckLink schedules against its own clock and blocks when the

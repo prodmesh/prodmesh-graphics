@@ -182,7 +182,10 @@ mod hostname_tests {
     fn a_node_is_named_by_the_short_hostname() {
         let name = super::hostname();
         if let Some(n) = name {
-            assert!(!n.contains('.'), "a node name should be the short host name, got {n:?}");
+            assert!(
+                !n.contains('.'),
+                "a node name should be the short host name, got {n:?}"
+            );
             assert!(!n.is_empty());
         }
     }

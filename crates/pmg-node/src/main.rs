@@ -549,7 +549,9 @@ fn capabilities(_rt: &runtime::Runtime) -> pmg_proto::Capabilities {
     if outputs.is_empty() {
         // Said out loud in the log, because "no card reported" in a browser
         // three rooms away is indistinguishable from a cable falling out.
-        tracing::info!("no DeckLink connectors reported — run `pmgctl decklink list` to find out why");
+        tracing::info!(
+            "no DeckLink connectors reported — run `pmgctl decklink list` to find out why"
+        );
     } else {
         tracing::info!(connectors = outputs.len(), "DeckLink capabilities reported");
     }

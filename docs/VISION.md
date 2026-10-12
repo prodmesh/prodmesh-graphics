@@ -63,20 +63,19 @@ The four things it does, in the order a user meets them:
   with no internet and no TLS. Everything it needs is on local disk before the
   service starts.
 
-## Commercial posture, and the seams that keep it open
+## Open, and the seams that keep it deployable
 
-This is being built **for our own campuses first**, and productizing it later is
-a decision to keep available rather than a plan to execute. That has one
-practical consequence and one structural one.
+This was built **for our own campuses first**, and it is now **MIT-licensed and
+public**, like the rest of the ProdMesh family (ADR 0030). Until October 2026 it
+was private and all rights reserved, to keep productization available; ADR 0030
+records why that stopped being worth protecting.
 
-The practical one: **this repo is private and all rights reserved**, unlike the
-rest of the ProdMesh family. Choosing a permissive license later is easy;
-un-choosing MIT is impossible.
+What survives from that posture is structural: **every ADR carries a `## Seam`
+section** naming what that decision must not foreclose. The question it asks is
+now "what must this not foreclose for somebody else who deploys it?" — and the
+list barely changed. Those seams, collected:
 
-The structural one: **every ADR carries a `## Seam` section** naming what that
-decision must not foreclose. Those seams, collected:
-
-| Seam | Why it matters if this is ever a product |
+| Seam | Why it matters to anyone who deploys it |
 |---|---|
 | **Scene format compatibility** | `format_version` + `min_reader`, unknown keys preserved on read, a frozen migration fixture per version step. Customers' templates must open in two years. |
 | **Font licensing** | Embedding font bytes in an export bundle is redistribution. Fine in-house; not fine shipped. One field — `include_fonts: bool` vs reference-by-identity — decided now rather than as a format break later. |

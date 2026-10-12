@@ -47,7 +47,13 @@ fn the_chain_composes_to_current() {
     let applied = migrate::migrate(&mut doc).expect("a 1.0 document migrates");
     assert_eq!(
         applied,
-        vec!["1.0-to-1.1", "1.1-to-1.2", "1.2-to-1.3", "1.3-to-1.4", "1.4-to-1.5"]
+        vec![
+            "1.0-to-1.1",
+            "1.1-to-1.2",
+            "1.2-to-1.3",
+            "1.3-to-1.4",
+            "1.4-to-1.5"
+        ]
     );
     assert_eq!(doc.format_version, migrate::CURRENT);
 }

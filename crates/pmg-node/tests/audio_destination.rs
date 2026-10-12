@@ -32,7 +32,10 @@ fn current(cfgs: &[OutputConfig]) -> Vec<OutputSpec> {
 
 #[test]
 fn changing_the_sound_device_restarts_that_group_and_only_that_group() {
-    let cfgs = [out("a", "BlackHole 2ch"), out("b", "Dante Virtual Soundcard")];
+    let cfgs = [
+        out("a", "BlackHole 2ch"),
+        out("b", "Dante Virtual Soundcard"),
+    ];
     let mut wanted = cfgs.clone();
     wanted[0].audio_device = "Dante Virtual Soundcard".into();
 

@@ -435,7 +435,10 @@ mod probe_tests {
             // Whatever came back has to be usable as an identity: an unnamed
             // connector in a picker is a row nobody can choose between.
             assert!(!d.display_name.is_empty(), "a connector must name itself");
-            assert!(d.audio_channels <= 64, "audio channels look like a default, not a report");
+            assert!(
+                d.audio_channels <= 64,
+                "audio channels look like a default, not a report"
+            );
         }
     }
 

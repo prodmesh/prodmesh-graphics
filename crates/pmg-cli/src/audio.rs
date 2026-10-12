@@ -40,7 +40,10 @@ fn usage() {
 }
 
 fn flag<'a>(args: &'a [String], name: &str) -> Option<&'a str> {
-    args.iter().position(|a| a == name).and_then(|i| args.get(i + 1)).map(String::as_str)
+    args.iter()
+        .position(|a| a == name)
+        .and_then(|i| args.get(i + 1))
+        .map(String::as_str)
 }
 
 fn list() -> Result<()> {
@@ -71,7 +74,11 @@ fn list() -> Result<()> {
         println!(
             "        {} channels   48 kHz {}",
             d.channels,
-            if d.supports_48k { "yes" } else { "NO — this device cannot carry our audio" }
+            if d.supports_48k {
+                "yes"
+            } else {
+                "NO — this device cannot carry our audio"
+            }
         );
     }
     println!();
@@ -86,8 +93,12 @@ fn list() -> Result<()> {
 /// This is the audio half of spike S3. The bar is the same: over the soak,
 /// **zero underruns**, and a buffer level that ends where it started.
 fn soak(args: &[String]) -> Result<()> {
-    let channels: u16 = flag(args, "--channels").and_then(|v| v.parse().ok()).unwrap_or(2);
-    let minutes: u64 = flag(args, "--minutes").and_then(|v| v.parse().ok()).unwrap_or(1);
+    let channels: u16 = flag(args, "--channels")
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(2);
+    let minutes: u64 = flag(args, "--minutes")
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(1);
     let free_run = args.iter().any(|a| a == "--free-run");
     let (fps_num, fps_den) = match flag(args, "--fps") {
         None => (60000u32, 1001u32),
@@ -105,9 +116,20 @@ fn soak(args: &[String]) -> Result<()> {
         target_frames: (48_000 * fps_den * 3 / fps_num).max(256),
     };
     let sink = audio::Sink::open(&cfg)?;
-    println!("device           {} ({})", sink.device_name(), sink.host_name());
+    println!(
+        "device           {} ({})",
+        sink.device_name(),
+        sink.host_name()
+    );
     println!("clock            {fps_num}/{fps_den} fps, 48 kHz, {channels} ch");
-    println!("correction       {}", if free_run { "OFF — open loop, on purpose" } else { "AudioSync" });
+    println!(
+        "correction       {}",
+        if free_run {
+            "OFF — open loop, on purpose"
+        } else {
+            "AudioSync"
+        }
+    );
     println!();
 
     let aclock = pmg_audio::AudioClock::new((fps_num, fps_den), 48_000)
@@ -115,9 +137,8 @@ fn soak(args: &[String]) -> Result<()> {
     let mut sync: Option<pmg_audio::AudioSync> = None;
 
     let frames = (minutes * 60 * fps_num as u64) / fps_den as u64;
-    let frame_dur = std::time::Duration::from_nanos(
-        (1_000_000_000u64 * fps_den as u64) / fps_num as u64,
-    );
+    let frame_dur =
+        std::time::Duration::from_nanos((1_000_000_000u64 * fps_den as u64) / fps_num as u64);
     let start = std::time::Instant::now();
     // A 1 kHz tone, because a drifting buffer is audible in it and a silent
     // soak proves only that nothing crashed.
@@ -185,7 +206,10 @@ fn soak(args: &[String]) -> Result<()> {
     println!("underruns        {}", sink.underruns());
     println!("dropped          {}", sink.dropped());
     if sink.underruns() > 0 {
-        bail!("FAIL — an underrun is an audible click, and there were {}", sink.underruns());
+        bail!(
+            "FAIL — an underrun is an audible click, and there were {}",
+            sink.underruns()
+        );
     }
     println!();
     println!("PASS");

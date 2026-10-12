@@ -104,7 +104,8 @@ impl GlyphSource for TextEngineGlyphs<'_> {
             // box and the widest line are the same number, and simply wrong for
             // the ordinary case of a fixed-width line of type. Centre did
             // nothing at all there, which is exactly what it looked like.
-            let align_dx = align_offset(align, max_width.unwrap_or(widest).max(widest), shaped.width);
+            let align_dx =
+                align_offset(align, max_width.unwrap_or(widest).max(widest), shaped.width);
             for g in &shaped.glyphs {
                 // Split the fractional position into a whole pixel and a phase, and
                 // rasterize AT that phase. Rounding here instead is precisely what

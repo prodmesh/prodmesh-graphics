@@ -2029,8 +2029,16 @@ pub fn apply_set_text_expr(doc: &mut SceneDoc, id: &str, expr: &str) -> Result<(
     // Only when it is unambiguous: exactly one key left, exactly one arrived,
     // nothing else in the document still says the old one, and the new one is
     // not already a field in its own right.
-    let gone: Vec<_> = was.iter().filter(|k| !referenced.contains(k)).cloned().collect();
-    let fresh: Vec<_> = referenced.iter().filter(|k| !was.contains(k)).cloned().collect();
+    let gone: Vec<_> = was
+        .iter()
+        .filter(|k| !referenced.contains(k))
+        .cloned()
+        .collect();
+    let fresh: Vec<_> = referenced
+        .iter()
+        .filter(|k| !was.contains(k))
+        .cloned()
+        .collect();
     if let ([old], [new]) = (gone.as_slice(), fresh.as_slice()) {
         let mut elsewhere = std::collections::BTreeSet::new();
         collect_referenced(&doc.root, &mut elsewhere);

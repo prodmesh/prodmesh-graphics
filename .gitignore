@@ -19,8 +19,8 @@ e2e-var/
 *.db-shm
 
 # Vendor SDKs — licensed separately, fetched by the developer (ADR 0003)
-sys/decklink-sys/vendor/
-sys/ndi-sys/vendor/
+sys/decklink-sys/vendor
+sys/ndi-sys/vendor
 
 # Secrets and local config
 .env

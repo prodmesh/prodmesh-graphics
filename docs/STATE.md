@@ -5,7 +5,7 @@ change that makes something real — not afterwards.
 
 `docs/ROADMAP.md` is where we are going. This is where we are.
 
-**Last updated: 2026-08-20 · M0–M4 complete · **M5 complete** except template variants, which is named and deferred rather than dropped (`docs/ROADMAP.md`). M6 begins.**
+**Last updated: 2026-10-10 · M0–M5 complete (template variants deferred) · M6 under way · MIT and public as of ADR 0030.** The component table below is current through M6q (2026-08-22); the summary prose above it dates from M1–M5.
 
 M5's own bar is met: the parity corpus is 106 real templates and primitives, and
 native and browser agree across all of them. The three features the format

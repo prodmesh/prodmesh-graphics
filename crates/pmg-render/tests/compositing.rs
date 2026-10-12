@@ -680,8 +680,16 @@ fn vertical_alignment_moves_the_ink_down_its_box() {
 
     // A 32 px block in a 128 px box: 96 px of room. Middle is half of it,
     // bottom is all of it.
-    assert_eq!(middle - top, 48.0, "middle should sit half the free space down");
-    assert_eq!(bottom - top, 96.0, "bottom should sit at the foot of the box");
+    assert_eq!(
+        middle - top,
+        48.0,
+        "middle should sit half the free space down"
+    );
+    assert_eq!(
+        bottom - top,
+        96.0,
+        "bottom should sit at the foot of the box"
+    );
 
     // And the default — what an absent field deserialises to — is the top,
     // which is what every document before format 1.5 renders.

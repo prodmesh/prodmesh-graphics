@@ -306,7 +306,7 @@ specifically shaped to avoid. Do not re-derive them.
   hardware-attributed, and live in `docs/INTEGRATION-NOTES.md`.
 - **Structural choices land as an ADR** in `docs/decisions/`, in the format the
   existing ones use, *plus* a `## Seam` section naming what the decision must not
-  foreclose. That section is how "in-house now, product later" stays real.
+  foreclose — for us, and for anyone else who deploys it (ADR 0030).
 - **No CDNs, ever.** Fonts and assets are bundled or served from the CAS. Booth
   machines have no internet. Inherited from the whole family.
 - **Rust:** stable toolchain pinned in `rust-toolchain.toml`; `thiserror` for
@@ -335,6 +335,8 @@ the version before it builds. Plain pushes never release. macOS artifacts are
 Developer ID signed and notarized from GitHub Actions secrets; certificates live
 in `~/Code/SIGNING/`.
 
-**This repo is private and all rights reserved.** See `LICENSE` and the posture
-section of `docs/VISION.md` — relicensing is a deliberate later decision, and
-defaulting to the family's MIT habit would foreclose it permanently.
+**This repo is public and MIT-licensed**, like the rest of the family (ADR
+0030). Being MIT is not permission to commit a vendor SDK header, bundle the NDI
+runtime, or link a GPL library: our licence cannot extend to theirs, and any of
+those would make a release something nobody may redistribute. Rehearsal and
+seed data stay fictional.

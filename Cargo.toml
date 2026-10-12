@@ -27,7 +27,7 @@ members = [
 version = "0.1.0"
 edition = "2021"
 rust-version = "1.90"
-license = "LicenseRef-Proprietary"
+license = "MIT"
 publish = false
 
 # Keep this in lockstep with package.json — the server and the node ship as a

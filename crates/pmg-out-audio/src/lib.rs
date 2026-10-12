@@ -106,11 +106,14 @@ pub fn devices() -> Vec<DeviceInfo> {
         };
         for d in devices {
             let name = d.to_string();
-            let configs: Vec<_> = d.supported_output_configs().map(|c| c.collect()).unwrap_or_default();
+            let configs: Vec<_> = d
+                .supported_output_configs()
+                .map(|c| c.collect())
+                .unwrap_or_default();
             let channels = configs.iter().map(|c| c.channels()).max().unwrap_or(0);
-            let supports_48k = configs.iter().any(|c| {
-                c.min_sample_rate() <= pmg_rate() && pmg_rate() <= c.max_sample_rate()
-            });
+            let supports_48k = configs
+                .iter()
+                .any(|c| c.min_sample_rate() <= pmg_rate() && pmg_rate() <= c.max_sample_rate());
             out.push(DeviceInfo {
                 host: id.name().to_string(),
                 default: Some(&name) == default_name.as_ref(),
@@ -168,7 +171,10 @@ impl Sink {
                     .find(|h| h.name().eq_ignore_ascii_case(want))
                     .with_context(|| {
                         let have: Vec<_> = hosts().into_iter().map(|h| h.name).collect();
-                        format!("This machine has no audio host called “{want}”. It has: {}", have.join(", "))
+                        format!(
+                            "This machine has no audio host called “{want}”. It has: {}",
+                            have.join(", ")
+                        )
                     })?;
                 cpal::host_from_id(id).context("that audio host would not open")?
             }
@@ -335,7 +341,14 @@ fn build_stream(
     format: cpal::SampleFormat,
     w: Wiring,
 ) -> Result<cpal::Stream> {
-    let Wiring { ring, underruns, primed, target_samples, mix_channels, dev_channels } = w;
+    let Wiring {
+        ring,
+        underruns,
+        primed,
+        target_samples,
+        mix_channels,
+        dev_channels,
+    } = w;
     // A device opened wider than the mix — 64-channel DVS fed 2 — gets silence
     // in the channels nobody addressed, rather than a repeat of channel 1.
     let err = |e| tracing::error!("audio device error: {e}");

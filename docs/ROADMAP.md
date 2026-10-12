@@ -285,7 +285,8 @@ dropped — one of three, the other two closed on 2026-08-20:
   the revision, so a publish is not a live change to everything on that screen.
 - Timers and utility data sources — the P1 input types.
 - Export and import bundles, with the `include_fonts` licensing flag.
-- Licensing hooks.
+- ~~Licensing hooks~~ **dropped 2026-10-10.** ADR 0030 made the project MIT and
+  public; there is no paid edition to gate.
 - ~~An installer~~ **the apps exist, 2026-08-22.** ADR 0029: **ProdMesh
   Director** and **ProdMesh Playout**, two signed menu-bar `.app` bundles from
   one launcher binary, each supervising its child and keeping its data in

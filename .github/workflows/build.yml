@@ -114,9 +114,9 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      # Every ADR carries a Seam section. "In-house now, product later" is only
+      # Every ADR carries a Seam section. "Deployable by somebody else" is only
       # real if it is a per-decision fact rather than an aspiration in VISION.md
-      # (docs/VISION.md §Commercial posture).
+      # (docs/VISION.md §Open, and ADR 0030).
       - name: every ADR has a Seam section
         run: |
           missing=0
