@@ -16,13 +16,12 @@ patterns, SSE topic hub, auth model, design tokens, ADR format) and
 gating, the hand-written-header shim pattern, release ritual). Deviations from
 both are listed under **Conventions** and each has a reason.
 
-> **Status: M0, and its three gating spikes have all passed.** S1 (render parity)
-> is bit-identical on Metal, S3 (DeckLink output) held 1080p59.94 for ten minutes
-> with zero late frames, and S6 (WebGPU in the browser) works. No scene format
-> and no server beyond health yet — but the renderer runs on both targets and
-> **both vendor boundaries are real**: `sys/ndi-sys` sends and receives frames,
-> `sys/decklink-sys` drives scheduled SDI output. Drive them with `pmgctl ndi`,
-> `pmgctl decklink`, and `pmgctl render-golden`.
+> **Status: M6, M0–M5 complete.** The whole loop is real: Design (the shared
+> Rust renderer on WebGPU), Edit, Show, Configure, the control server, PMG Link,
+> the CAS, and a playout node driving DeckLink SDI, NDI and host sound devices.
+> All three M0 spikes passed; S1 is bit-identical on Metal and untested on
+> D3D12/Vulkan. Drive the hardware with `pmgctl ndi`, `pmgctl decklink`, and
+> `pmgctl render-golden`; stand the whole system up with `tools/rehearsal.sh`.
 >
 > Read `docs/ROADMAP.md` for what is being built and in what order,
 > `docs/STATE.md` for what is actually real today, and
@@ -294,6 +293,13 @@ specifically shaped to avoid. Do not re-derive them.
   and rendered `the server answered 401` instead of the server's sentence.
   Anything that talks to the server goes through `src/lib/api.ts` — the headers
   and the refusal handling live there, once.
+- **A CI run that never started looks exactly like one that failed.** From
+  2026-08-22 every push was red because the Actions spending limit stopped jobs
+  before their first step, and after a while red stopped meaning anything.
+  Behind it were three real failures nobody saw for seven weeks: unformatted
+  Rust, the ALSA headers `cpal` needs on Linux, and a jsdom test that only a
+  slower machine loses. When CI is red, open the run and read WHY: "was not
+  started" and "exited 101" are different problems.
 - **Long-GOP H.264 is where frame-accurate seek goes to die.** Require an
   all-intra intermediate (ProRes 4444, DNxHR, HAP) for anything that must hit a
   mark; the server transcodes on ingest.

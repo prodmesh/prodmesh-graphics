@@ -91,8 +91,12 @@ Two rules do most of the architectural work:
 
 ## Build and run
 
+The full walk-through, from installing tools to a first take, is
+[docs/GETTING-STARTED.md](docs/GETTING-STARTED.md). The short version:
+
 You need the pinned Rust toolchain (`rust-toolchain.toml`, installed
-automatically by rustup), Node 20+, and a browser with WebGPU.
+automatically by rustup), the matching `wasm-bindgen` CLI, Node 20+, and a
+browser with WebGPU.
 
 ```bash
 cargo build --workspace
@@ -137,6 +141,7 @@ never committed here**:
 
 | Document | What it answers |
 |---|---|
+| [docs/GETTING-STARTED.md](docs/GETTING-STARTED.md) | From a clean machine to a graphic on air |
 | [docs/VISION.md](docs/VISION.md) | Why this exists, and what it refuses to be |
 | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | The mental model, the crate map, the invariants |
 | [docs/THEORY-OF-OPERATIONS.md](docs/THEORY-OF-OPERATIONS.md) | How a graphic actually gets on air, hop by hop |

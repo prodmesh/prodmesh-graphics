@@ -5,92 +5,64 @@ change that makes something real — not afterwards.
 
 `docs/ROADMAP.md` is where we are going. This is where we are.
 
-**Last updated: 2026-10-10 · M0–M5 complete (template variants deferred) · M6 under way · MIT and public as of ADR 0030.** The component table below is current through M6q (2026-08-22); the summary prose above it dates from M1–M5.
-
-M5's own bar is met: the parity corpus is 106 real templates and primitives, and
-native and browser agree across all of them. The three features the format
-described but nothing carried out — gradients, masks, hand-drawn easing curves —
-are carried out. What M5 leaves open is written down where the next person will
-look, not carried in someone's head.
+**Last updated: 2026-10-12 · M0–M5 complete (template variants deferred) · M6 under way · MIT and public (ADR 0030).**
 
 ---
 
 ## The honest summary
 
-**M0 is complete and all three of its gating spikes passed.** None of the
-foundational ADRs is a bet any more.
+**It runs a service, in rehearsal.** A designer builds a template in the
+browser with the same Rust the node renders with; an operator binds data,
+arranges Playlists into a Rundown, and takes; a node puts it on air over SDI or
+NDI at 1080p59.94 with zero late frames, keyed, with frame-synced audio. The
+seeded rehearsal (`tools/rehearsal.sh`) stands the whole thing up.
 
-- **S1** — native wgpu and browser WebGPU render **bit-identically**: 0/255 max
-  channel delta, zero geometric displacement. Measured on Metal; cross-backend
-  (D3D12, Vulkan) is still untested.
-- **S3** — the hand-written DeckLink shim sustained **1080p59.94 for ten minutes
-  with zero late and zero dropped frames**.
-- **S6** — WebGPU is comfortably available in-browser: real adapter and device,
-  244 KB bundle, ~5 ms per figure.
+**The foundational bets all came in.** Native wgpu and browser WebGPU render
+**bit-identically** across the 106-figure parity corpus (S1) — on Metal; D3D12
+and Vulkan are untested. The hand-written DeckLink shim held **1080p59.94 for
+ten minutes with zero late frames** (S3, internal clock). WebGPU is comfortably
+available in the browser (S6). S2's text shudder was root-caused to quad
+truncation of the antialiasing tail and fixed (0.34 px → 0.0066 px).
 
-**M1 is under way.** The scene format (M1a) and the layout solver (M1b) are done:
-a lower third compiles to canonical CBOR with a stable `template_rev`, and lays
-out with the band growing and shrinking against the name and collapsing when the
-title is empty — all verified as numbers, before any pixels.
+**The guarantees are tested, not asserted.**
 
-**The vertical slice renders.** `pmgctl take` compiles a template, binds an
-Item's data, solves layout, shapes and rasterizes text, and plays In → hold →
-Out over NDI with key and fill. Armed in **0.3–2 ms**; worst frame **13.9 ms
-against a 16.68 ms budget**, because per frame it only evaluates timelines and
-applies transforms.
+- *Autonomy.* Kill the control server and the node keeps rendering. A new
+  server with no memory adopts what is on air from the node's report.
+- *Cues.* A take does not report success until the node confirms it, and a late
+  take is refused rather than fired. Superseding, dedupe and deadlines live at
+  the node, so every path inherits them. The chaos harness put 1000+ takes
+  through five injected faults with none fired twice.
+- *Soak.* A two-hour soak had zero late frames over 432,000. Audio drift is
+  closed-loop against the card's buffer.
 
-**The control plane is real (M1e).** Templates publish as opaque CAS blobs with
-a validated manifest sidecar; Items pin the revision they were built against;
-PMG Link carries assignment and acked cues over CBOR; `POST /api/cue` blocks
-until the node confirms; Edit builds an Item and Show takes it. Verified end to
-end against a running server with a node speaking real CBOR: publish → CAS
-round-trip byte-identical → item → take → on-air state adopted from the node →
-take out → take log with the surface recorded.
+**Built in M6:** screens, timers, multi-destination Items, arrangements, a host
+sound-device output, outputs configured from the console, sign-in, and the two
+menu-bar apps. In October 2026 these became real as well:
 
-**M1 is end to end.** `pmg-node` dials PMG Link, stages assets over HTTP into
-its own CAS, persists its assignment, applies cues, and renders to NDI —
-verified against the real server at **59.94 fps with zero late frames** across
-three take/take-out cycles.
+- **Follow over a cue socket.** Run at band speed against a real node, every
+  cue was acked in 6–35 ms.
+- **Fonts matched by family, weight and slant**, with italic text (format 1.6).
+- **Node-side YCbCr for SDI.** The output's matrix and ranges are applied by
+  the node. It is opt-in, because it has never run on a card.
 
-**The autonomy invariant is tested, not asserted.** Killing the control server
-leaves the node rendering; a brand-new server process with no memory of any take
-adopts the graphic still in `hold` from the node's `StateReport`.
+**What it does not have**, plainly:
 
-**Design renders with the same Rust the node runs.** The browser's
-`compile_template` produced a byte-identical `template_rev` to `pmgctl` for the
-same document (2893 bytes, same hash), and the canvas is the shared renderer on
-WebGPU: **arm 22.5 ms, warm frames 3.34 ms**. Responsive layout and `visible_if`
-behave in the browser exactly as they do natively.
+- Template variants.
+- Export and import bundles.
+- A GPU display output (the crate is a placeholder).
+- GPI and MIDI listeners.
+- Signed and notarized installers.
+- Measurements of the things that need a scope or a reference generator: S9
+  colour on the wire, and genlock under a real reference.
 
-**The whole loop has been driven through the UI**: open a template → edit its
-data → scrub the In timeline → Publish → build an Item → Take → on air, with the
-node staging the published blob by its address.
-
-**What M1 does not have**, and is honest about: playlists and a rundown, layer
-stacks beyond one, preview, auth, discovery, DeckLink, and media. Those are M2
-and M3.
-
-**Spike S2's one failure is root-caused and fixed (2026-08-18).** Sub-pixel
-motion deviated from linear by 0.33 px for text and 0.21 px for a plain box; the
-cause was the rasterizer truncating the outer half of every antialiased edge —
-quads sized exactly to their geometry, while the coverage ramp and the bilinear
-reconstruction both extend half a pixel past it. Outsetting the box quad and
-every glyph quad (half a pixel, exact against the atlas's 1-texel pad) brings
-both to **~0.006 px**, the 8-bit quantisation floor. See
-`docs/spikes/S2-text-typography.md` §A3.
-
-`docs/INTEGRATION-NOTES.md` is no longer empty; seven entries came out of one
-afternoon, and three were version-skew failures that each presented as something
-other than what they were.
-
----
+The project became MIT-licensed and public in October 2026 (ADR 0030).
 
 ## Component status
 
 | Component | State |
 |---|---|
-| Documentation set | ✅ complete — 15 ADRs, 7 specs, 9 spike briefs |
-| Cargo workspace | 🟢 19 crates; `fmt`, `clippy -D warnings`, and the wasm32 pure-set job green in both SDK and no-SDK configs |
+| Documentation set | ✅ 30 ADRs, 8 specs (with the OpenAPI document), 10 spike briefs, and `docs/GETTING-STARTED.md` for someone outside the building |
+| Cargo workspace | 🟢 20 crates (18 + two `sys/`); `fmt`, `clippy -D warnings`, and the wasm32 pure-set job green in both SDK and no-SDK configs |
 | `pmgctl --selftest` | 🟢 gates the format's load-bearing guarantees: canonical CBOR round-trip, stable `template_rev`, JSON-mirror equivalence, `visible_if` collapse |
 | `sys/decklink-sys` | 🟢 enumeration, probing, modes, reference, **and scheduled output — 10 min at 1080p59.94, zero late, zero dropped** |
 | `sys/ndi-sys` | 🟢 runtime loading, find, receive, send — **frames verified in both directions**. ABI asserted statically and at runtime |
@@ -106,7 +78,7 @@ other than what they were.
 | `CueResult::Superseded` (ADR 0017) | 🟢 a take supersedes an unfired take to the same layers, and is **acked** rather than dropped. Batched from what has already arrived — `try_recv` only, so it can never delay a cue waiting to see whether a newer one shows up. Distinct from a late rejection: one is the system working, the other is it refusing, and a three-lamp panel needs different lamps. A replay of a cue that already fired is still `Deduped`. **Reaches the operator as a success since 2026-10-12** — the server had mapped it to 409 "the node refused that cue", so every superseded Follow keypress read as a failure |
 | Several destinations (ADR 0018) | 🟢 **complete.** One Item, N node/output/layer destinations, each with its own pinned `template_rev` and an `auto`/`on_request` mode. Migration 8 expands every existing Item into a list of one. Assignment fans per node; the node arms all destinations before placing any, so a fan-out is all-or-nothing *within* a node. `auto` fires with the take, `blank` clears its feed as an instruction, and `on_request` waits for **`take_also`** — the "Also full screen" action. 100 server tests |
 | `pmg-proto` | 🟢 the wire contract, with checked-in CBOR fixtures the JavaScript tests decode |
-| Item destinations in Edit | 🟢 **ADR 0018 is authorable.** An Item's destinations are a list: output and layer picked from what the node actually reports (a layer typed by hand is a cue the node will refuse, discovered at the take), a template per destination, and one control for the three things a destination can BE — fires with the take, only when asked for, or render nothing and clear this feed. The old single Template select is gone: the first destination's template decides the fields, because the Item carries one set of data checked against every destination and two places to set one thing is the confusion to avoid. Everything in the rehearsal was built by a script against the API before this |
+| Item destinations in Edit | 🟢 **ADR 0018 is authorable.** An Item's destinations are a list: output and layer picked from what the node actually reports (a layer typed by hand is a cue the node will refuse, discovered at the take), a template per destination, and one control for the three things a destination can BE — fires with the take, only when asked for, or render nothing and clear this feed. The old single Template select is gone. (The form first showed only the FIRST destination's fields; since M6n it shows every destination's — row below.) Everything in the rehearsal was built by a script against the API before this |
 | Design / Edit / Show | 🟢 all three real. Design compiles and renders with the shared Rust; Show takes on air and does not lie |
 | `pmg-wasm` | 🟢 `compile_template` + `DesignSession` — the browser half of ADR 0001, pinned by a native test |
 | Fonts | 🟢 **matched, not merely loaded** (2026-10-12). Uploaded as CAS assets and fetched by hash; one rule in `pmg_text::build_font_db`, shared by the designer and the node: every face registers under its own name, weight and slant — **every face of a collection**, where only the first of a `.ttc` was read; a declaration that pins a file by hash gets that file under its declared family; a family nothing answers to gets every face at each face's OWN weight. Selection decides slant first — Regular and Italic at 400 used to tie and the first file loaded won — then weight by CSS Fonts §5.2 rather than load order. **Italic text** is format 1.6 (`font.style`), with an Italic control in Design that pins the italic file beside the upright so a node stages both; verified on the Design canvas with Arial and Arial Italic. Still not done: synthetic italic and bold for a family that lacks the face (it renders the nearest real face instead), font stretch, and a family picker that lists every face of a collection |
@@ -140,8 +112,8 @@ other than what they were.
 | `pmg-out-ndi` | 🟢 the shared sender — one unpremultiply loop for the node and the CLI |
 | `streamHub` | ✅ ported from ProdMesh-Control — refcounted topics, conflation, snapshot-on-join |
 | `cueLog` | ✅ the log-tail bridge from ADR 0008, with gap recovery. 6 tests |
-| PMG Link | ⬜ spec only |
-| CAS | ⬜ spec only |
+| PMG Link | 🟢 real — `server/nodeLink.js` and `pmg-proto`, rows above |
+| CAS | 🟢 real — `server/cas.js` and `pmg-cas`, rows above |
 | Web app | 🟢 **the operator console** (ADR 0020) — the design-system tokens and 20+ components transcribed to first-party TSX/CSS, fonts bundled (no CDN), a header/footer console shell over the four modes. Show: rundown rail, live H.264 program well, layer strip, section jump map, slide grid, armed inspector with per-destination readiness; Edit: playlists + rundown composition, section authoring, playout-mode control, multi-destination item inspector; Design: template browser + publish rail. Verified against the rehearsal service end to end — take → on air → two marks → take log. 31 web tests |
 | `pmg-scene` | 🟢 **full document model**, canonical CBOR + JSON mirror, `template_rev`, validation, manifest, total binding evaluation. 25 tests |
 | `pmg-layout` | 🟢 **flexbox solver** over `TextMeasure` (taffy, ADR 0016). Shrink-and-grow and `visible_if` removal verified as numbers. 12 tests |
@@ -149,8 +121,6 @@ other than what they were.
 | Colour pipeline | 🟢 **composites in linear, encodes once at output** (ADR 0012, which said so since M0 and was not implemented until 2026-08-17). Scene draws into `Rgba16Float`; one full-screen pass encodes to `Rgba8Unorm`. Un-premultiplies before the transfer function and re-premultiplies after, because `encode(a·c) ≠ a·encode(c)` and the error is largest at the low alphas a soft edge is made of. Alpha is never converted — it is coverage, and the key must stay a monotone alpha signal. Encoding is per FRAME, not per layer |
 | Coverage gamma | 🟢 **stem darkening in the rasterizer**, γ = 1/1.45. Geometric coverage is right when composited in linear light and too dark when a downstream keyer blends the encoded values — a 50%-covered edge of white type lands at 128/255 and displays as 21% of the light it should carry. We cannot fix the switcher, so the compensation goes where the coverage is made, as FreeType and Skia both do. Approximate by nature: the exact correction depends on a background this process never sees. Measured lift 138.5 → 151.0 mean edge alpha with solid pixels and edge count unchanged |
 | `pmg-render` | 🟢 **scene rendering** — boxes with analytic-AA rounded corners, text from the coverage atlas, composed transforms, timeline animation. Plus the S1 parity corpus |
-| `pmg-wasm` | 🟡 the parity harness — renders the corpus in-browser and posts raw RGBA back. 244 KB |
-| `pmg-out-ndi` / `pmg-out-decklink` | ⬜ not started — `pmgctl` drives `sys/` directly for now |
 | Outputs are configuration (M6f) | 🟢 **the shell command stops being the interface** (ADR 0024). A node's outputs were `--output` flags; the server could edit layers and colour and nothing else, so NDI → DeckLink meant editing a launch line and restarting. Now: the **node owns them** — `outputs.json` in its state dir, read at boot without asking anyone, because ADR 0009 says a node that boots with the server down must still drive its outputs. Flags are the SEED for a node that has no file; once one exists they are ignored, or the saved configuration would be a lie. **Hardware and content stay separately owned**: the file holds backend, device, key device, mode, audio, preview port and clock group; the assignment still holds layers and colour. `SetOutputs` is its own message rather than a field in the assignment, so fixing a typo in a lower third cannot rebuild an output backend. Applying is **live and per GROUP** — the runtime's one stop flag became one per group — so renaming the wall does not interrupt the key feed. An output with a graphic on it is **refused by name** and keeps running; `force` interrupts it deliberately. The node persists and reports **what it APPLIED**, never what it was asked for, so a refused change leaves nothing lurking for the next boot to surprise somebody with. Verified on an isolated server+node: seeded from flags, reconfigured from the browser, restarted with NO flags and came up with all three outputs including one that only ever existed because the server asked for it; a rename restarted exactly one group; an on-air output was refused and `force` pushed it through. **Three bugs found by driving it.** (1) An NDI sender was torn down because a DeckLink display-mode string differed — a frame of black for a field that output never reads; `same_hardware` now compares per backend. (2) The server learned a node's outputs only when it had NONE, so an output added by reconfiguration was never recorded and every destination naming it was silently filtered out of every cue — it now learns outputs it has never seen while never overwriting an operator's layer stack. (3) A take whose destinations resolved to nothing built a cue with `output: undefined`, which CBOR encodes as `undefined` and the node **could not decode at all** — the frame was dropped and the operator was told "undefined didn't confirm the take". A cue is never built with a hole in it now |
 | Configure UX pass (M6e) | 🟢 **a rail, a node's own details, and the users page the footer has been promising since M2.** (1) **Sections behind a rail** — Playout nodes · Screens · Users & stations — the pattern Edit and Show already use rather than a second row of tabs, and somewhere for audio routing and preferences to land. (2) **Diagnostics per node**, folded away because it is for when something is wrong: the node's ADDRESS (it existed only inside `preview_url`, so an operator debugging a node could not read its IP off the screen they were looking at), its id, assignment gen acked, last seen, scene-reader major, decoders, and per-output fps and LATE FRAMES — plus a link to the node's own status page, the surface that still works when the control server does not, which is exactly when someone wants it. The node now REPORTS its api and preview ports in `Hello` rather than the server assuming 8520/8521, so a node started elsewhere is still reachable and a switched-off preview does not get a link that 404s. (3) **Users, groups and stations**, which existed server-side in full (ADR 0013) with no UI at all — the footer said "add a user in Configure" and pointed at nothing. **Found by building it**: creating the first user turns enforcement on for good, and a first user with no group would have turned it on holding NOTHING — unable to create a group, grant a permission, or add anybody else, with no way back that does not involve a text editor and the database file. The first user now gets the wildcard, the response says `granted_admin`, and both the page and the button's answer say so out loud, because a permission nobody knows was granted is a permission nobody audits |
 | Screens (M6d) | 🟢 **a named place in the building** (ADR 0023) — the other half of M6's multi-screen line, and the first thing in Configure that is about the ROOM rather than a machine. An Item's destination may name a **screen** — "LED Wall" — instead of `node/output/layer`, and the wiring lives in one row an operator can edit. Two things decide the design. **The node never hears about it**: resolution happens on the control server, so the protocol is unchanged and a node running yesterday's build works with screens the day they exist. And **a screen names a TEMPLATE, never a revision** — the Item still pins at save time, or every publish would become a silent live change to every graphic going there, which is the exact failure pinning exists to prevent; a screen's template going stale reuses M5v's guided republish rather than inventing an answer. Resolution is ONE function called from both the assignment build and the cue path, because those two disagreeing means a graphic staged for one place and fired at another. Deleting a screen Items point at is refused and NAMES them (the fields editor's rule); a row orphaned by database surgery falls back to the triple stored beside it, so a graphic goes where it used to rather than nowhere. The raw triple stays legal — a fresh install must be able to address its own hardware before anyone has invented a name for it. **Verified live**: two screens named, an Item pointed at "LED Wall" (pinning the countdown template from the screen), taken to `wall`, then the screen moved to `fs` with **no Item edited** — the next take landed on `fs`, and the node's own report showed both. Edit shows "Goes to: LED Wall" with the wiring beside it as a readable line, and no operator meets a 26-character node id anywhere |
@@ -198,7 +168,7 @@ other than what they were.
 | Design add/delete (M5c) | 🟢 **Add a box** (into the selection, else the root — fresh `box-N` id, arrives filled, fixed-size, in flow, and selected) and **delete** (inspector button and the Delete key; a container takes its contents; the root is refused with a sentence). Found and fixed in the driving: the selection-chrome effect was deselecting every freshly-added node — for one commit the new id does not exist in the old session, and a miss now only clears chrome; deselection requires a NEWER session to confirm the node is gone |
 | Design properties inspector (M5b) | 🟢 fill (colour + alpha, and REMOVE — an unfilled box is structural and says so), corner radius, node opacity, fixed size, and the **placement pin** (relative ↔ absolute, with the flexbox consequences stated). All edits go through `pmg_render::interact` doc editors and re-arm via **`DesignSession.rearm`**, which keeps the GPU device — an edit costs a solve, not an adapter request. Driven live: radius typed and rendered, fill recoloured, node pinned and dragged freely while its sibling held still |
 | Design canvas interaction (M5a, ADR 0019) | 🟢 **the first authoring increment.** `pmg_render::interact` — hit-testing with the shader's own rounded-box SDF, world transforms and clip rects SHARED with `draw` (one computation, not two), handles, drag with snap-to-edges/centres, and doc edits (move = margins, resize = fixed px). `pmg-wasm` exposes it on `DesignSession`; React draws the chrome at the coordinates Rust reports (SVG overlay in the canvas's own viewBox). Verified live: click → cyan selection → drag ghost → release → document edit → re-solve → chrome follows. 12 new Rust tests. Also fixed in passing: Design's canvas had rendered NOTHING since the linear-composite refactor (2026-08-17) — it drew into 8-bit while the pipelines target `Rgba16Float`; it now goes through `LinearFrame` + encode like the node. And the fontless gate moved into Rust: a boxes-only template arms with no fonts, which is how a designer starts from nothing |
-| CI | 🟡 workflows written and green locally; **never run on GitHub Actions** — no remote yet |
+| CI | 🟢 GitHub Actions, public since 2026-10-10. **Red from 2026-08-22 to 2026-10-12 without anyone seeing it**: most runs never started (the private repo's spending limit), which hid three real failures behind them — `cargo fmt`, a jsdom `EventSource` race that only a slower runner loses, and the ALSA headers `cpal` needs on Linux. Green since |
 | Rust toolchain on the dev box | ✅ 1.90.0 + `wasm32-unknown-unknown` |
 
 ### What `--selftest` actually asserts today
@@ -274,15 +244,16 @@ for a decision:
 
 The next three things that matter:
 
-1. **M1c — the text stack.** The riskiest piece left, and where R3 lives:
-   subpixel glyph positioning (or animated text shudders), premultiplied AA edges
-   (or it fringes over live video), and the vertical-metric choice that can never
-   be changed once templates exist.
-2. **Run the parity corpus on Windows (D3D12)**, so ADR 0001's promise can be
-   stated without the "measured on Metal" qualification.
+1. **Node-side YCbCr on a DeckLink, then S9 on a scope.** The encode is built
+   and tested against its reference, but it has not played on a card and nothing
+   has measured the wire. Until both have happened it stays opt-in.
+2. **Run the parity corpus on Windows (D3D12) and Linux (Vulkan)**, so ADR
+   0001's promise can be stated without the "measured on Metal" qualification.
+   Now that the repo is public, this is the most useful thing a contributor
+   with that hardware could do.
 3. **S3's remaining legs at church**, where there is a reference generator: the
-   soak locked to blackburst or tri-level, and scope confirmation that a fill+key
-   pair genuinely shares a clock.
+   soak locked to blackburst or tri-level, and scope confirmation that a
+   fill+key pair genuinely shares a clock.
 
 M0's spikes were scheduled so the project would be allowed to fail early. It
 didn't. That is a good outcome and not a reason to stop writing down what is
