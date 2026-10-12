@@ -76,6 +76,15 @@ what makes HDR and wider gamuts additive rather than a schema break.
 **v1 is SDR Rec.709.** `pq` and `hlg` are named so the field does not need
 changing later; setting them is rejected in v1.
 
+### 4.0 Who applies it
+
+The four fields mean something only where the NODE encodes YCbCr. An SDI
+output with `ycbcr: true` sends 10-bit 4:2:2 `v210` encoded by the node with
+these settings applied (ADR 0012). Without it the card converts 8-bit RGB with
+its own matrix and range, and these fields change nothing on the wire. NDI
+carries RGB and the receiver converts; `ycbcr` is refused there. Full range is
+clamped to 4–1019 on SDI, because 0–3 and 1020–1023 are timing-reference codes.
+
 ### 4.1 The key is not a colour
 
 Fill goes RGB→YCbCr through `matrix`.

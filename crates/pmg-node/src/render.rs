@@ -170,6 +170,103 @@ impl Target {
     }
 }
 
+/// The node's own YCbCr encode for one SDI output: the linear composite into
+/// `v210` fill and key, applying the output's colour configuration (ADR 0012).
+///
+/// Both planes come back in ONE submit and one wait — two round trips per
+/// frame would be two chances to miss the budget for the same picture.
+pub struct V210Out {
+    encoder: pmg_render::ycbcr::YcbcrEncoder,
+    target: pmg_render::ycbcr::YcbcrTarget,
+    fill_rb: wgpu::Buffer,
+    key_rb: wgpu::Buffer,
+    /// Readback rows are padded to wgpu's 256-byte copy alignment; a `v210`
+    /// row at 1280 wide is 3456 bytes and is not.
+    padded: usize,
+}
+
+impl V210Out {
+    pub fn new(gpu: &Gpu, width: u32, height: u32) -> Self {
+        let target = pmg_render::ycbcr::YcbcrTarget::new(&gpu.device, width, height);
+        let padded = target
+            .row_bytes()
+            .div_ceil(wgpu::COPY_BYTES_PER_ROW_ALIGNMENT as usize)
+            * wgpu::COPY_BYTES_PER_ROW_ALIGNMENT as usize;
+        let rb = |label| {
+            gpu.device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some(label),
+                size: (padded * height as usize) as u64,
+                usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+                mapped_at_creation: false,
+            })
+        };
+        Self {
+            encoder: pmg_render::ycbcr::YcbcrEncoder::new(&gpu.device),
+            fill_rb: rb("pmg-v210-fill-rb"),
+            key_rb: rb("pmg-v210-key-rb"),
+            target,
+            padded,
+        }
+    }
+
+    /// Encode the target's linear composite and read both planes back,
+    /// unpadded — exactly the bytes a DeckLink `v210` frame holds.
+    pub fn encode_and_read(
+        &self,
+        gpu: &Gpu,
+        from: &Target,
+        levels: &pmg_color::v210::Levels,
+    ) -> Result<(Vec<u8>, Vec<u8>)> {
+        self.encoder
+            .encode(&gpu.device, &gpu.queue, from.view(), &self.target, levels);
+        let mut enc = gpu.device.create_command_encoder(&Default::default());
+        for (tex, buf) in [
+            (self.target.fill(), &self.fill_rb),
+            (self.target.key(), &self.key_rb),
+        ] {
+            enc.copy_texture_to_buffer(
+                tex.as_image_copy(),
+                wgpu::TexelCopyBufferInfo {
+                    buffer: buf,
+                    layout: wgpu::TexelCopyBufferLayout {
+                        offset: 0,
+                        bytes_per_row: Some(self.padded as u32),
+                        rows_per_image: Some(self.target.height),
+                    },
+                },
+                tex.size(),
+            );
+        }
+        gpu.queue.submit(Some(enc.finish()));
+
+        let (tx, rx) = std::sync::mpsc::channel();
+        for buf in [&self.fill_rb, &self.key_rb] {
+            let tx = tx.clone();
+            buf.slice(..).map_async(wgpu::MapMode::Read, move |r| {
+                let _ = tx.send(r);
+            });
+        }
+        gpu.device.poll(wgpu::PollType::wait_indefinitely()).ok();
+        rx.recv()??;
+        rx.recv()??;
+
+        let row = self.target.row_bytes();
+        let unpad = |buf: &wgpu::Buffer| -> Result<Vec<u8>> {
+            let mapped = buf.slice(..).get_mapped_range().context("mapped range")?;
+            let mut out = Vec::with_capacity(row * self.target.height as usize);
+            for y in 0..self.target.height as usize {
+                out.extend_from_slice(&mapped[y * self.padded..y * self.padded + row]);
+            }
+            Ok(out)
+        };
+        let fill = unpad(&self.fill_rb);
+        let key = unpad(&self.key_rb);
+        self.fill_rb.unmap();
+        self.key_rb.unmap();
+        Ok((fill?, key?))
+    }
+}
+
 /// Draw one occupant's current frame into the target.
 ///
 /// `load` decides whether this draw starts from nothing or composites over the

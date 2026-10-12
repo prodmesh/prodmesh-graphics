@@ -152,6 +152,19 @@ typedef enum {
     PMG_DL_KEY_EMBEDDED      = 3
 } pmg_dl_key_mode;
 
+/*
+ * What the caller hands pmg_dl_output_schedule.
+ *
+ * BGRA8: the card converts RGB to YCbCr with ITS OWN matrix and range — the
+ * output's colour configuration cannot reach the wire. V210: 10-bit 4:2:2
+ * YCbCr the caller has already encoded (pmg_color::v210), passed through
+ * untouched; rows are ((width + 47) / 48) * 128 bytes. ADR 0012.
+ */
+typedef enum {
+    PMG_DL_PIXEL_BGRA8 = 0,
+    PMG_DL_PIXEL_V210  = 1
+} pmg_dl_pixel_format;
+
 typedef struct {
     pmg_dl_mode     mode;
     pmg_dl_key_mode key_mode;
@@ -159,6 +172,7 @@ typedef struct {
     int32_t         use_reference;
     int32_t         preroll_frames;  /* 3-5 typical; spike S3 measures ours  */
     int32_t         audio_channels;  /* 0 for none                           */
+    int32_t         pixel_format;    /* pmg_dl_pixel_format                  */
 } pmg_dl_output_config;
 
 pmg_dl_result pmg_dl_output_open(pmg_dl_device *dev,
@@ -184,7 +198,7 @@ pmg_dl_result pmg_dl_output_set_callback(pmg_dl_output *out,
 /*
  * Schedule one frame.
  *
- * `fill` is premultiplied-over-black BGRA/v210 per the configured mode.
+ * `fill` is premultiplied-over-black, in the configured pixel_format.
  * `key` is the alpha plane and is NULL unless key_mode is FILL_KEY_PAIR.
  *
  * The key is NOT a colour: it does not go through a colour matrix. The caller

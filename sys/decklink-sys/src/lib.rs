@@ -156,6 +156,28 @@ pub struct pmg_dl_output_config {
     pub use_reference: i32,
     pub preroll_frames: i32,
     pub audio_channels: i32,
+    pub pixel_format: i32,
+}
+
+/// What a scheduled frame's bytes are (`pmg_dl_pixel_format`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[repr(i32)]
+pub enum PixelFormat {
+    /// 8-bit BGRA. The card converts to YCbCr with its own matrix and range.
+    #[default]
+    Bgra8 = 0,
+    /// 10-bit 4:2:2 YCbCr, already encoded (`pmg_color::v210`), passed through.
+    V210 = 1,
+}
+
+impl PixelFormat {
+    /// Bytes per row of a frame `width` pixels wide.
+    pub const fn row_bytes(self, width: u32) -> usize {
+        match self {
+            PixelFormat::Bgra8 => width as usize * 4,
+            PixelFormat::V210 => (width as usize).div_ceil(48) * 128,
+        }
+    }
 }
 
 /// Whether this build has a real SDK behind it.
@@ -491,6 +513,26 @@ impl Output {
         preroll: i32,
         audio_channels: i32,
     ) -> Result<Self, Error> {
+        Self::open_as(
+            dev,
+            mode,
+            key_mode,
+            preroll,
+            audio_channels,
+            PixelFormat::Bgra8,
+        )
+    }
+
+    /// Open with an explicit pixel format — `V210` when the caller encodes
+    /// YCbCr itself and the card must pass it through.
+    pub fn open_as(
+        dev: &Device,
+        mode: &Mode,
+        key_mode: KeyMode,
+        preroll: i32,
+        audio_channels: i32,
+        pixel: PixelFormat,
+    ) -> Result<Self, Error> {
         if !available() {
             return Err(Error::NoSdk);
         }
@@ -510,6 +552,7 @@ impl Output {
                 use_reference: 0,
                 preroll_frames: preroll,
                 audio_channels,
+                pixel_format: pixel as i32,
             };
             let mut raw: *mut pmg_dl_output = std::ptr::null_mut();
             // SAFETY: cfg is a local, out-pointer to a local; the shim writes
@@ -520,14 +563,14 @@ impl Output {
             }
             Ok(Output {
                 raw,
-                row_bytes: (mode.width as usize) * 4,
+                row_bytes: pixel.row_bytes(mode.width as u32),
                 height: mode.height as usize,
                 audio_channels: audio_channels.max(0) as usize,
             })
         }
         #[cfg(not(decklink_sdk_present))]
         {
-            let (_, _, _, _, _) = (dev, mode, key_mode, preroll, audio_channels);
+            let _ = (dev, mode, key_mode, preroll, audio_channels, pixel);
             Err(Error::NoSdk)
         }
     }
@@ -551,6 +594,13 @@ impl Output {
     ///
     /// An empty slice means this output carries no audio, which is normal.
     pub fn schedule_bgra_with_audio(&self, fill: &[u8], audio: &[i32]) -> Result<(), Error> {
+        self.schedule_with_audio(fill, audio)
+    }
+
+    /// Schedule one frame in whatever pixel format the output was opened
+    /// with ([`Self::open_as`]), and the audio that belongs to it. The audio
+    /// rules are [`Self::schedule_bgra_with_audio`]'s.
+    pub fn schedule_with_audio(&self, fill: &[u8], audio: &[i32]) -> Result<(), Error> {
         #[cfg(decklink_sdk_present)]
         {
             if fill.len() < self.row_bytes * self.height {

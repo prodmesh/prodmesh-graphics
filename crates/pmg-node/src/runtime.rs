@@ -230,6 +230,9 @@ pub struct OutputSpec {
     /// the instrument that answers "is ANY picture coming out of this node" when
     /// the answer for H.264 is no.
     pub preview_mjpeg: bool,
+    /// Encode `v210` here, applying the output's colour configuration,
+    /// instead of letting the card convert BGRA (ADR 0012). DeckLink only.
+    pub ycbcr: bool,
 }
 
 pub struct Options {
@@ -1104,6 +1107,7 @@ pub fn spec_from_config(
         // A test instrument, never configuration.
         inject_stall_at_s: existing.and_then(|e| e.inject_stall_at_s),
         preview_mjpeg: existing.is_some_and(|e| e.preview_mjpeg),
+        ycbcr: cfg.ycbcr,
     }
 }
 
@@ -1139,6 +1143,8 @@ fn same_hardware(a: &OutputSpec, b: &OutputSpec) -> bool {
             a.decklink_device == b.decklink_device
                 && a.decklink_key_device == b.decklink_key_device
                 && a.decklink_mode == b.decklink_mode
+                // The frame pool's pixel format is fixed when the output opens.
+                && a.ycbcr == b.ycbcr
         }
         // `window` and `headless` have nothing else to open.
         _ => true,
@@ -1165,6 +1171,7 @@ pub fn config_from_spec(o: &OutputSpec) -> pmg_proto::OutputConfig {
         audio_host: o.audio_host.clone(),
         preview_port: o.preview_port,
         group: o.group.clone(),
+        ycbcr: o.ycbcr,
     }
 }
 
@@ -1283,6 +1290,12 @@ fn render_group(
     struct Live {
         spec: OutputSpec,
         target: Target,
+        /// The node's own YCbCr encode, when this output asks for it.
+        v210: Option<crate::render::V210Out>,
+        /// The slowest frame since the last report. `late_frames` says a frame
+        /// missed; this says by how much the others did not — the headroom a
+        /// change spends, which is the number to compare before and after.
+        worst_ms: f64,
         backend: Backend,
         renderers: crate::render::RendererCache,
         /// Atlases for instances being morphed AWAY from. Separate cache because
@@ -1359,6 +1372,10 @@ fn render_group(
         };
         outputs.push(Live {
             spec: spec.clone(),
+            v210: spec
+                .ycbcr
+                .then(|| crate::render::V210Out::new(&gpu, spec.width, spec.height)),
+            worst_ms: 0.0,
             target,
             backend,
             renderers: crate::render::RendererCache::default(),
@@ -1430,7 +1447,7 @@ fn render_group(
             }
 
             // --- snapshot, under the lock, briefly ------------------------
-            let (plan, pattern) = {
+            let (plan, pattern, color) = {
                 let e = engine.lock().unwrap();
                 let Some(o) = e.outputs.iter().find(|o| o.id == out.spec.id) else {
                     continue;
@@ -1458,7 +1475,7 @@ fn render_group(
                             .collect::<Vec<_>>()
                     })
                     .collect();
-                (plan, o.test_pattern.clone())
+                (plan, o.test_pattern.clone(), o.color.clone())
             };
 
             // --- draw, with the lock released -----------------------------
@@ -1574,17 +1591,44 @@ fn render_group(
                 .collect();
             out.tween_renderers.retain(&morphing);
 
-            let mut rgba = out.target.read(&gpu)?;
-            if let Some(name) = &pattern {
-                if let Some(p) = pmg_color::patterns::Pattern::parse(name) {
-                    let f =
-                        pmg_color::patterns::render(p, out.spec.width, out.spec.height, out.frame);
-                    // The generator works in STRAIGHT alpha, which is the only
-                    // way the alpha staircase means anything; the boundary
-                    // wants premultiplied like every other frame.
-                    rgba = pmg_color::patterns::to_rgba8_premultiplied(&f);
+            let pattern_frame = pattern
+                .as_deref()
+                .and_then(pmg_color::patterns::Pattern::parse)
+                .map(|p| {
+                    pmg_color::patterns::render(p, out.spec.width, out.spec.height, out.frame)
+                });
+
+            // The node's own YCbCr, when this output asks for it (ADR 0012):
+            // the output's matrix and ranges applied here, on the GPU, from the
+            // LINEAR composite. A test pattern goes through the reference
+            // encoder instead — the same arithmetic, which the GPU is tested
+            // against — so the instrument measures the configuration, not the
+            // card's opinion of it.
+            let v210 = match &out.v210 {
+                Some(v) => {
+                    let levels = levels_of(&color);
+                    Some(match &pattern_frame {
+                        Some(f) => pmg_color::v210::encode(&f.rgba, f.width, f.height, &levels),
+                        None => v.encode_and_read(&gpu, &out.target, &levels)?,
+                    })
                 }
-            }
+                None => None,
+            };
+
+            // 8-bit RGBA: what an RGB backend sends, and what the confidence
+            // preview is made from. A v210 output with no preview skips it —
+            // a readback nobody consumes is budget spent on nothing.
+            let previewing = out.preview.is_some() || out.preview_h264.is_some();
+            let rgba = if v210.is_none() || previewing {
+                match &pattern_frame {
+                    // Generated premultiplied and linear, like a rendered
+                    // frame, so it is encoded exactly the way one is.
+                    Some(f) => pmg_color::patterns::to_rgba8_premultiplied(f),
+                    None => out.target.read(&gpu)?,
+                }
+            } else {
+                Vec::new()
+            };
             out.frame += 1;
 
             // Audio has no error to check — the API takes a wrong sample count
@@ -1672,6 +1716,18 @@ fn render_group(
             }
 
             let ms = t0.elapsed().as_secs_f64() * 1000.0;
+            out.worst_ms = out.worst_ms.max(ms);
+            if out.frame.is_multiple_of(300) {
+                tracing::info!(
+                    output = %out.spec.id,
+                    frame = out.frame,
+                    worst_ms = format!("{:.2}", out.worst_ms),
+                    budget_ms = format!("{budget_ms:.2}"),
+                    ycbcr = out.v210.is_some(),
+                    "frame time"
+                );
+                out.worst_ms = 0.0;
+            }
             if ms > budget_ms {
                 if let Ok(mut e) = engine.lock() {
                     if let Some(o) = e.outputs.iter_mut().find(|o| o.id == out.spec.id) {
@@ -1707,7 +1763,10 @@ fn render_group(
                 // DeckLink schedules against its own clock and blocks when the
                 // queue is full — the same pacing, against a clock that can be
                 // genlocked.
-                Backend::DeckLink(d) => d.send_rgba_premultiplied_with_audio(&rgba, embedded)?,
+                Backend::DeckLink(d) => match &v210 {
+                    Some((fill, key)) => d.send_v210_with_audio(fill, key, embedded)?,
+                    None => d.send_rgba_premultiplied_with_audio(&rgba, embedded)?,
+                },
                 Backend::Headless => std::thread::sleep(Duration::from_millis(budget_ms as u64)),
             }
             // The sound device is fed AFTER the picture, for the same reason
@@ -1821,7 +1880,41 @@ fn render_group(
     Ok(())
 }
 
+/// An output's colour configuration as the encoder's numbers.
+///
+/// The server refuses anything outside the closed sets (`PUT` outputs answers
+/// 422), so an unknown value here means a newer server than node. It falls
+/// back to the documented default — BT.709, narrow — rather than to black.
+fn levels_of(c: &pmg_proto::ColorConfig) -> pmg_color::v210::Levels {
+    use pmg_color::{Matrix, Range};
+    let matrix = match c.matrix.as_str() {
+        "bt601" => Matrix::Bt601,
+        "bt2020" => Matrix::Bt2020,
+        _ => Matrix::Bt709,
+    };
+    let range = |r: &str| {
+        if r == "full" {
+            Range::Full
+        } else {
+            Range::Narrow
+        }
+    };
+    pmg_color::v210::Levels::new(matrix, range(&c.range), range(&c.key_range))
+}
+
 fn open_backend(spec: &OutputSpec) -> Result<Backend> {
+    // Refused rather than ignored: an operator who turned node-side YCbCr on
+    // for an NDI feed believes their matrix is applied, and it would not be.
+    // Headless is allowed — it has no wire, and it is how the encode's cost is
+    // measured on a machine with no card.
+    if spec.ycbcr && !matches!(spec.backend.as_str(), "decklink" | "headless") {
+        anyhow::bail!(
+            "output {} is set to encode YCbCr, which only an SDI (DeckLink) output can carry. \
+             {} carries RGB and its receiver does the conversion.",
+            spec.id,
+            spec.backend.to_uppercase()
+        );
+    }
     match spec.backend.as_str() {
         "headless" => Ok(Backend::Headless),
         "decklink" => {
@@ -1832,6 +1925,11 @@ fn open_backend(spec: &OutputSpec) -> Result<Backend> {
                 key_mode: pmg_out_decklink::KeyMode::FillOnly,
                 audio_channels: spec.audio_channels,
                 preroll: 3,
+                pixel: if spec.ycbcr {
+                    pmg_out_decklink::PixelFormat::V210
+                } else {
+                    pmg_out_decklink::PixelFormat::Bgra8
+                },
             })?;
             let (w, h) = s.size();
             if (w, h) != (spec.width, spec.height) {

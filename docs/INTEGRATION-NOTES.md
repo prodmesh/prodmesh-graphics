@@ -1020,6 +1020,43 @@ the last inch is missing. Recorded here rather than implied complete, because
 "the matrix setting exists" and "the matrix setting does anything" are very
 different claims to make to someone about to trust a colour pipeline.
 
+**2026-10-12 — the last inch, for SDI, opt-in, and not yet on a card.** An
+output with `ycbcr` set has the node encode 10-bit 4:2:2 `v210` itself: fill
+through the configured matrix and range, key as `Y = alpha` in its own range
+with chroma at 512, both from the LINEAR composite so the ten bits are real.
+`pmg_color::v210` is the reference; `pmg_render::ycbcr` runs the same
+arithmetic as a fragment pass (the node's WebGL2-level limits allow no compute)
+and is tested against it — fill within one code value, key exact, across three
+matrix/range combinations at a width that pads. The shim opens frames as
+`bmdFormat10BitYUV` with DeckLink's padded stride (`(w + 47) / 48 * 128`).
+
+Measured on an M3 Max MacBook Pro, headless, 1080p59.94, empty frame (the
+encode costs the same whatever the content): worst frame per five seconds
+**5.5–6.9 ms** with the encode against **4.3–4.6 ms** without — about 1.5–2.5 ms
+for the pass and two readbacks, inside a 16.68 ms budget. On a card it also
+replaces the CPU BGRA swizzle, which this run did not pay.
+
+What is still NOT known, and why it is opt-in:
+
+- **It has not run on a DeckLink.** No card was attached. The frame format,
+  stride and scheduling are the SDK's documented ones; whether the Quad 2
+  accepts and plays them for ten minutes is spike S3 again, in a new format.
+- **Nothing has measured the wire.** S9 — ramp endpoints at 64/940, key chroma
+  at 512, bars on a vectorscope — needs the scope.
+- **Full range is clamped to 4–1019**, not 0–1023: 0–3 and 1020–1023 are SDI
+  timing-reference codes. Deliberate, and worth knowing before a plant asks why
+  full-range white reads 1019.
+- **The transfer is the sRGB curve**, the same one the 8-bit path uses, so
+  switching an output to node-side YCbCr changes who applies the matrix, not
+  how bright the picture is. BT.709's OETF differs in the toe; offering it is a
+  per-output transfer setting the format does not have yet.
+- **Colour signalling is not sent.** A 2020 matrix goes out without telling the
+  card it is 2020, so anything downstream that reads the payload ID assumes 709.
+- **NDI is unchanged and refuses the setting.** NDI carries RGB and its receiver
+  converts; there is no matrix of ours for it to apply.
+- **`key_mode` in the colour settings still decides nothing.** Fill-only versus
+  fill+key is whether the output names a key connector.
+
 ---
 
 ## The node is authoritative about which outputs EXIST

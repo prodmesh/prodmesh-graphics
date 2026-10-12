@@ -43,7 +43,7 @@
 
 use anyhow::{bail, Context, Result};
 
-pub use decklink_sys::KeyMode;
+pub use decklink_sys::{KeyMode, PixelFormat};
 
 /// How many quarter-frame backoffs before a full queue stops being backpressure
 /// and starts being a fault. At 59.94 this is about two seconds.
@@ -137,6 +137,8 @@ pub struct Sender {
     /// The frame convention follows THIS, not whether a key port happens to be
     /// open — see `send_rgba_premultiplied`.
     key_mode: KeyMode,
+    /// BGRA for the card to convert, or v210 the node encoded itself.
+    pixel: PixelFormat,
     /// Reused between frames so a service does not allocate two buffers a frame.
     fill_buf: std::cell::RefCell<Vec<u8>>,
     key_buf: std::cell::RefCell<Vec<u8>>,
@@ -202,6 +204,43 @@ pub fn build_frames(rgba: &[u8], fill: &mut [u8], key: &mut [u8], paired: bool, 
     }
 }
 
+/// Schedule one frame, treating a full queue as the backpressure it is.
+///
+/// BUSY is BACKPRESSURE, not a failure. The card's scheduling queue is full,
+/// which means it has not returned a frame yet — that is exactly how a
+/// scheduled output paces its producer, and it is the mechanism the render
+/// loop relies on instead of a timer of its own. Treating it as an error
+/// (which the first version did) made the node exit on its very first frame
+/// with "DeckLink call failed with code -5", which reads like a hardware fault
+/// and is not one.
+///
+/// Backing off a quarter of a frame rather than spinning: a busy-wait here
+/// steals CPU from the render thread it is pacing.
+fn schedule_with_backoff(
+    out: &decklink_sys::Output,
+    frame: &[u8],
+    audio: &[i32],
+    fps: f64,
+    what: &str,
+) -> Result<()> {
+    let quarter = std::time::Duration::from_micros((250_000.0 / fps) as u64);
+    for attempt in 0.. {
+        match out.schedule_with_audio(frame, audio) {
+            Ok(()) => return Ok(()),
+            Err(e) => {
+                if attempt >= MAX_BACKOFFS {
+                    // Long past backpressure. Something is actually wrong.
+                    return Err(anyhow::anyhow!(
+                        "the DeckLink {what} queue stayed full for {MAX_BACKOFFS} attempts: {e}"
+                    ));
+                }
+                std::thread::sleep(quarter);
+            }
+        }
+    }
+    unreachable!("the loop returns")
+}
+
 pub struct Config {
     pub device_index: usize,
     /// Second device index for the key half. `None` means a single port.
@@ -214,6 +253,9 @@ pub struct Config {
     /// 0 is the right setting for a lower-third key feed, which has nothing to
     /// say, and is not a degraded configuration.
     pub audio_channels: i32,
+    /// `V210` when the node encodes YCbCr itself, applying the output's colour
+    /// configuration; frames then arrive by [`Sender::send_v210_with_audio`].
+    pub pixel: PixelFormat,
 }
 
 impl Sender {
@@ -251,12 +293,13 @@ impl Sender {
             );
         }
 
-        let fill = decklink_sys::Output::open_with_audio(
+        let fill = decklink_sys::Output::open_as(
             &dev,
             mode,
             cfg.key_mode,
             cfg.preroll,
             cfg.audio_channels,
+            cfg.pixel,
         )
         .context("opening the fill output")?;
 
@@ -264,8 +307,15 @@ impl Sender {
             Some(i) => {
                 let kdev = decklink_sys::Device::open(i as i32)
                     .with_context(|| format!("opening DeckLink device {i} for the key"))?;
-                let out = decklink_sys::Output::open(&kdev, mode, KeyMode::FillOnly, cfg.preroll)
-                    .context("opening the key output")?;
+                let out = decklink_sys::Output::open_as(
+                    &kdev,
+                    mode,
+                    KeyMode::FillOnly,
+                    cfg.preroll,
+                    0,
+                    cfg.pixel,
+                )
+                .context("opening the key output")?;
                 // The device handle must outlive the output it opened.
                 std::mem::forget(kdev);
                 Some(out)
@@ -276,6 +326,7 @@ impl Sender {
         let (w, h) = (mode.width as u32, mode.height as u32);
         Ok(Self {
             key_mode: cfg.key_mode,
+            pixel: cfg.pixel,
             fill,
             key,
             width: w,
@@ -308,6 +359,9 @@ impl Sender {
     /// twice would put the same audio on two SDI feeds that a plant may well
     /// sum.
     pub fn send_rgba_premultiplied_with_audio(&self, rgba: &[u8], audio: &[i32]) -> Result<()> {
+        if self.pixel != PixelFormat::Bgra8 {
+            bail!("this output was opened for v210; send it encoded frames");
+        }
         let n = (self.width * self.height) as usize;
         if rgba.len() < n * 4 {
             bail!("frame is {} bytes, expected {}", rgba.len(), n * 4);
@@ -336,56 +390,44 @@ impl Sender {
         let straight = matches!(self.key_mode, KeyMode::Embedded);
         build_frames(rgba, &mut fill, &mut key, paired, straight);
 
-        // BUSY is BACKPRESSURE, not a failure.
-        //
-        // The card's scheduling queue is full, which means it has not returned a
-        // frame yet — that is exactly how a scheduled output paces its producer,
-        // and it is the mechanism this loop relies on instead of a timer of its
-        // own. Treating it as an error (which the first version did) makes the
-        // node exit on its very first frame with "DeckLink call failed with code
-        // -5", which reads like a hardware fault and is not one.
-        //
-        // Backing off a quarter of a frame rather than spinning: a busy-wait
-        // here steals CPU from the render thread it is pacing.
-        let quarter = std::time::Duration::from_micros(
-            (250_000.0 / (self.fps_num as f64 / self.fps_den as f64)) as u64,
-        );
-        for attempt in 0.. {
-            match self.fill.schedule_bgra_with_audio(&fill, audio) {
-                Ok(()) => break,
-                Err(e) => {
-                    if attempt >= MAX_BACKOFFS {
-                        // Long past backpressure. Something is actually wrong.
-                        return Err(anyhow::anyhow!(
-                            "the DeckLink fill queue stayed full for {} attempts: {e}",
-                            MAX_BACKOFFS
-                        ));
-                    }
-                    std::thread::sleep(quarter);
-                }
-            }
+        self.schedule_pair(&fill, paired.then_some(&key[..]), audio)
+    }
+
+    /// Schedule one frame the node has already encoded as `v210` — the fill
+    /// and, when a key port is open, the key — with this frame's audio.
+    ///
+    /// Passed through untouched: the matrix, the ranges and the key's
+    /// `Y = alpha` were applied on the GPU (`pmg_render::ycbcr`), which is the
+    /// whole point. The card converting again is exactly what this replaces.
+    pub fn send_v210_with_audio(&self, fill: &[u8], key: &[u8], audio: &[i32]) -> Result<()> {
+        if self.pixel != PixelFormat::V210 {
+            bail!("this output was opened for BGRA; v210 frames would be read as colour garbage");
         }
-        if let Some(k) = &self.key {
-            // Scheduled straight after the fill so both land on the same display
-            // time. They are kept in step by us, not by the hardware, so any
-            // delay inserted between these two calls is a delay between the fill
-            // and its key.
-            for attempt in 0.. {
-                match k.schedule_bgra(&key) {
-                    Ok(()) => break,
-                    Err(e) => {
-                        if attempt >= MAX_BACKOFFS {
-                            return Err(anyhow::anyhow!(
-                                "the DeckLink key queue stayed full for {} attempts: {e}",
-                                MAX_BACKOFFS
-                            ));
-                        }
-                        std::thread::sleep(quarter);
-                    }
-                }
-            }
+        let want = PixelFormat::V210.row_bytes(self.width) * self.height as usize;
+        if fill.len() < want || (self.key.is_some() && key.len() < want) {
+            bail!(
+                "a v210 frame is {want} bytes; got fill {} and key {}",
+                fill.len(),
+                key.len()
+            );
+        }
+        self.schedule_pair(fill, self.key.as_ref().map(|_| key), audio)
+    }
+
+    /// Fill, then key, back to back — so both land on the same display time.
+    ///
+    /// They are kept in step by us, not by the hardware, so any delay inserted
+    /// between these two calls is a delay between the fill and its key.
+    fn schedule_pair(&self, fill: &[u8], key: Option<&[u8]>, audio: &[i32]) -> Result<()> {
+        schedule_with_backoff(&self.fill, fill, audio, self.fps(), "fill")?;
+        if let (Some(port), Some(bytes)) = (&self.key, key) {
+            schedule_with_backoff(port, bytes, &[], self.fps(), "key")?;
         }
         Ok(())
+    }
+
+    fn fps(&self) -> f64 {
+        self.fps_num as f64 / self.fps_den as f64
     }
 
     /// What the card says about its reference input, right now.

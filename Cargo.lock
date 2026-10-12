@@ -1476,6 +1476,7 @@ name = "pmg-render"
 version = "0.1.0"
 dependencies = [
  "pmg-anim",
+ "pmg-color",
  "pmg-layout",
  "pmg-media",
  "pmg-scene",

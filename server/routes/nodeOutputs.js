@@ -74,6 +74,17 @@ router.put('/api/nodes/:id/output-config', mayConfigure, (req, res) => {
         'The key half of a fill+key pair has to be a different port from the fill.',
       )
     }
+    // Refused, not dropped: someone who ticked it for an NDI feed believes
+    // their matrix and ranges are applied, and they would not be — NDI carries
+    // RGB and its receiver converts (ADR 0012).
+    if (o.ycbcr === true && o.backend !== 'decklink') {
+      return fail(
+        res,
+        422,
+        'validation_failed',
+        `Output “${id}” can’t encode YCbCr: only an SDI output carries it. ${String(o.backend).toUpperCase()} sends RGB and the receiver converts.`,
+      )
+    }
     outputs.push({
       id,
       backend: o.backend,
@@ -94,6 +105,9 @@ router.put('/api/nodes/:id/output-config', mayConfigure, (req, res) => {
       audio_host: String(o.audio_host ?? ''),
       preview_port: Number(o.preview_port ?? 0),
       group: String(o.group ?? 'default'),
+      // The node encodes v210 itself, applying the colour settings, instead
+      // of handing the card RGB to convert with its own.
+      ycbcr: o.ycbcr === true,
     })
   }
 

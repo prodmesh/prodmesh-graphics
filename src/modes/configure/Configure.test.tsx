@@ -351,6 +351,23 @@ test('selecting another output shows that output’s layer stack, not the last o
 })
 
 /**
+ * Every colour control saves on change — and it saved the value from BEFORE
+ * the change, because the handler read state its own update had not reached.
+ * Each pick took effect one pick late, and the first one never.
+ */
+test('a colour pick saves what was picked, not what it replaced', async () => {
+  configuredOutputs = [{ id: 'wall', backend: 'ndi', ndi_name: 'Wall' }]
+  outputDefinitions = [{ output_id: 'wall', mode: '1920x1080', layers: ['Lower Third'] }]
+  await paint()
+  await screen.findByText('Lower Third')
+
+  fireEvent.change(screen.getByLabelText('Matrix'), { target: { value: 'bt601' } })
+  await waitFor(() => expect(layerPuts).toHaveLength(1))
+  const colour = layerPuts[0]?.body.color as { matrix?: string } | undefined
+  expect(colour?.matrix).toBe('bt601')
+})
+
+/**
  * The id field edits a DRAFT that the node has not been told about yet. The
  * layer stack belongs to the output the node already knows, so it must be
  * addressed by that id — a PUT to the typed one would upsert a second output

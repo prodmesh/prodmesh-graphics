@@ -16,6 +16,7 @@ pmg-scene = { path = "../pmg-scene" }
 pmg-layout = { path = "../pmg-layout" }
 pmg-anim = { path = "../pmg-anim" }
 pmg-text = { path = "../pmg-text" }
+pmg-color = { path = "../pmg-color" }
 wgpu = { workspace = true }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]

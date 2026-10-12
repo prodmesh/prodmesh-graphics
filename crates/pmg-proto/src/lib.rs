@@ -230,6 +230,16 @@ pub struct OutputConfig {
     /// interrupts.
     #[serde(default)]
     pub group: String,
+    /// The node encodes 10-bit YCbCr itself (`v210`), applying this output's
+    /// colour configuration — matrix, range, key range — rather than handing
+    /// the card 8-bit RGB to convert with its own. DeckLink only: NDI carries
+    /// RGB and its receiver converts. ADR 0012.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub ycbcr: bool,
+}
+
+fn is_false(b: &bool) -> bool {
+    !*b
 }
 
 fn default_width() -> u32 {

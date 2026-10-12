@@ -13,6 +13,7 @@
 #![forbid(unsafe_code)]
 
 pub mod patterns;
+pub mod v210;
 
 /// Signal range. `narrow` is what a switcher expects; some plants want a
 /// full-range key, which is why fill and key carry this independently

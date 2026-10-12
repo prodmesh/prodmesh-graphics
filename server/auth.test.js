@@ -416,6 +416,30 @@ test('an output’s audio destination survives the server (ADR 0028)', async () 
   assert.equal(out.audio_host, 'CoreAudio')
 })
 
+test('node-side YCbCr is kept for an SDI output and refused for any other (ADR 0012)', async () => {
+  admin()
+  const login = await req('POST', '/api/auth/login', { username: 'jbeale', pin: '1234' })
+  const auth = { authorization: `Bearer ${login.json.token}` }
+  db.handle()
+    .prepare("INSERT OR REPLACE INTO nodes (node_id,name,adopted,last_seen) VALUES ('n1','booth',1,0)")
+    .run()
+
+  const sdi = await req('PUT', '/api/nodes/n1/output-config', {
+    outputs: [{ id: 'lt', backend: 'decklink', device: 1, mode: '1080p59.94', ycbcr: true }],
+  }, auth)
+  assert.equal(sdi.status, 200)
+  const back = await req('GET', '/api/nodes/n1/output-config', null, auth)
+  assert.equal(back.json.outputs[0].ycbcr, true)
+
+  // NDI carries RGB; an operator who ticked this would believe their matrix
+  // is applied when it is not.
+  const ndi = await req('PUT', '/api/nodes/n1/output-config', {
+    outputs: [{ id: 'wall', backend: 'ndi', ycbcr: true }],
+  }, auth)
+  assert.equal(ndi.status, 422)
+  assert.match(ndi.json.label, /only an SDI output/)
+})
+
 // ---------------------------------------------------------------------------
 // The cue socket enforces the same boundary as POST /api/cue (ADR 0017)
 // ---------------------------------------------------------------------------

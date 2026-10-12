@@ -30,6 +30,7 @@ pub mod scene;
 pub mod text_source;
 pub mod timeline;
 pub mod tween;
+pub mod ycbcr;
 
 pub use draw::SceneRenderer;
 pub use scene::{

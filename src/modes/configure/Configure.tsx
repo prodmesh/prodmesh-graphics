@@ -218,6 +218,8 @@ type OutputConfig = {
   audio_channels?: number
   preview_port?: number
   group?: string
+  /** The node encodes v210 itself, applying the colour settings (ADR 0012). */
+  ycbcr?: boolean
 }
 
 type OutputsAck = {
@@ -279,8 +281,17 @@ function OutputHardware({ node, definitions }: { node: FullNode; definitions: Ou
   const devices = node.capabilities?.outputs ?? []
   const soundDevices = node.capabilities?.audio_devices ?? []
 
+  // Leaving DeckLink drops node-side YCbCr with it: the server refuses it on
+  // any other backend, and a save that fails on a box the operator can no
+  // longer see is a riddle.
   const set = (i: number, changes: Partial<OutputConfig>) =>
-    setDraft(rows.map((o, n) => (n === i ? { ...o, ...changes } : o)))
+    setDraft(
+      rows.map((o, n) => {
+        if (n !== i) return o
+        const next = { ...o, ...changes }
+        return next.backend === 'decklink' || !next.ycbcr ? next : { ...next, ycbcr: false }
+      }),
+    )
 
   const selectedPosition = Math.min(selectedIndex, Math.max(0, rows.length - 1))
   const selected = rows[selectedPosition]
@@ -461,6 +472,17 @@ function OutputHardware({ node, definitions }: { node: FullNode; definitions: Ou
                     <option key={d.device} value={n}>{d.device}</option>
                   ))}
                 </select>
+              </FormGroup>
+              <FormGroup label="Encode YCbCr on the node">
+                {/* Off, the card converts 8-bit RGB with its own matrix and
+                    range and the Colour settings change nothing on the wire.
+                    On, the node sends 10-bit YCbCr with them applied. */}
+                <input
+                  type="checkbox"
+                  checked={o.ycbcr === true}
+                  aria-label={`Output ${o.id} encodes YCbCr on the node`}
+                  onChange={(e) => set(i, { ycbcr: e.target.checked })}
+                />
               </FormGroup>
               <FormGroup label="Video mode">
                 {/* Only what THIS connector says it can do. The raster still
@@ -1234,14 +1256,18 @@ function OutputEditor({
     if (elsewhere) setPattern(null)
   }
 
+  // `colour` is passed by a colour change rather than read from state: the
+  // state update has not landed when the select's handler calls this, so
+  // reading `col` saved the value from BEFORE the change — every pick took
+  // effect one pick late.
   const save = useCallback(
-    async (next: string[]) => {
+    async (next: string[], colour: ColorConfig = col) => {
       setProblem(null)
       try {
         await put(`${keys.node(nodeId)}/outputs/${outputId}`, {
           layers: next,
           mode: mode || '1920x1080',
-          color: col,
+          color: colour,
         })
         setDraft(next)
         setSaved(true)
@@ -1316,6 +1342,10 @@ function OutputEditor({
       <div className="cfg-console__grid">
         <div className="cfg-console__fieldset">
           <GroupHeader label="Colour" />
+          <p className="cfg-console__dim">
+            Applied by the node on an SDI output set to encode YCbCr. Otherwise the card, or the
+            NDI receiver, converts with its own settings.
+          </p>
           {([
             ['matrix', 'Matrix', ['bt709', 'bt601', 'bt2020']],
             ['range', 'Fill range', ['narrow', 'full']],
@@ -1330,7 +1360,7 @@ function OutputEditor({
                 onChange={(e) => {
                   const next = { ...col, [field]: e.target.value }
                   setCol(next)
-                  void save(draft)
+                  void save(draft, next)
                 }}
               >
                 {options.map((o) => (

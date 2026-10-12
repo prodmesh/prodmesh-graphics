@@ -562,7 +562,12 @@ pmg_dl_result pmg_dl_output_open(pmg_dl_device *dev, const pmg_dl_output_config 
     op->out = o;
     op->width = cfg->mode.width;
     op->height = cfg->mode.height;
-    op->row_bytes = cfg->mode.width * 4;      /* 8-bit BGRA */
+    /* v210 rows are padded to 48 pixels — DeckLink's own layout, and the one
+     * pmg_color::v210 writes. "width / 6 * 16" is short for 1280 and shears
+     * the picture. */
+    const bool v210 = cfg->pixel_format == PMG_DL_PIXEL_V210;
+    op->row_bytes = v210 ? ((cfg->mode.width + 47) / 48) * 128
+                         : cfg->mode.width * 4;
     op->frame_duration = dur;
     op->time_scale = scale;
     op->preroll = cfg->preroll_frames > 0 ? cfg->preroll_frames : 3;
@@ -618,7 +623,8 @@ pmg_dl_result pmg_dl_output_open(pmg_dl_device *dev, const pmg_dl_output_config 
      * malloc on the critical path. */
     for (int i = 0; i < kPoolSize; i++) {
         if (o->CreateVideoFrame(op->width, op->height, op->row_bytes,
-                                bmdFormat8BitBGRA, bmdFrameFlagDefault,
+                                v210 ? bmdFormat10BitYUV : bmdFormat8BitBGRA,
+                                bmdFrameFlagDefault,
                                 &op->pool[i]) != S_OK) {
             delete op;
             return PMG_DL_ERR_INTERNAL;

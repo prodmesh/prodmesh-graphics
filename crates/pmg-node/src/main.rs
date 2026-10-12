@@ -67,8 +67,9 @@ USAGE:
     --output <spec>        Repeatable. key=value,key=value — keys: id, backend,
                            group, name, mode, device, key, preview, audio
                            (embedded channel count), layers
-                           (semicolon-separated), size, fps. Replaces the plain
-                           output flags entirely when given.
+                           (semicolon-separated), size, fps, ycbcr (1 to
+                           encode v210 here). Replaces the plain output flags
+                           entirely when given.
                            e.g. --output id=sdi,backend=decklink,device=1,key=3,group=ref
     --output-id <id>       Id for the single default output. Default out-0
     --layers <a,b,c>       Layer names, in order. Default \"Lower Third\"
@@ -80,6 +81,9 @@ USAGE:
     --decklink-key <index> Second port for the key half of a fill+key pair.
                            Omit for fill only.
     --decklink-mode <name> Display mode name, e.g. 1080p59.94
+    --ycbcr                Encode 10-bit YCbCr (v210) on the node, applying the
+                           output's matrix and ranges, instead of letting the
+                           card convert BGRA. DeckLink or headless only.
     --font <file.ttf>      A face to use when the assignment carries no font
                            asset. Provisional — see runtime.rs.
     --headless             Render and time frames, but send nothing.
@@ -137,6 +141,7 @@ fn parse_output(
         audio_host: String::new(),
         preview_mjpeg: false,
         inject_stall_at_s: None,
+        ycbcr: false,
     };
 
     for pair in spec.split(',') {
@@ -162,6 +167,9 @@ fn parse_output(
             // can still mean after the machine is rebuilt.
             "audio-device" => out.audio_device = v.into(),
             "audio-host" => out.audio_host = v.into(),
+            // The node encodes v210 itself, applying the colour configuration
+            // (ADR 0012). Off by default until it has run on the card.
+            "ycbcr" => out.ycbcr = matches!(v, "1" | "true" | "yes" | "on"),
             // Semicolons, because commas already separate the pairs.
             "layers" => {
                 out.layers = v
@@ -331,6 +339,7 @@ fn main() -> Result<()> {
             audio_host: arg(&args, "--audio-host").unwrap_or_default(),
             preview_mjpeg: args.iter().any(|a| a == "--preview-mjpeg"),
             inject_stall_at_s: arg(&args, "--inject-stall-at").and_then(|s| s.parse().ok()),
+            ycbcr: args.iter().any(|a| a == "--ycbcr"),
             preview_port: arg(&args, "--preview-port")
                 .and_then(|s| s.parse().ok())
                 .unwrap_or(pmg_preview::PREVIEW_PORT),
