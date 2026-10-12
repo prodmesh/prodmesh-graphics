@@ -699,6 +699,32 @@ pub struct FontSpec {
     /// The named values are real; this records the font token they came from.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub token: Option<String>,
+    /// `"normal"` or `"italic"` (format 1.6); absent means normal. `"oblique"`
+    /// is read as italic, because a family ships one slanted face or the
+    /// other and matching treats them alike. A string rather than an enum so
+    /// a value this reader does not know is preserved and renders upright,
+    /// rather than failing the whole document.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub style: Option<String>,
+}
+
+impl FontSpec {
+    /// Whether this text asks for a slanted face.
+    pub fn italic(&self) -> bool {
+        is_slanted(self.style.as_deref())
+    }
+}
+
+impl FontRef {
+    /// Whether this declaration names a slanted face.
+    pub fn italic(&self) -> bool {
+        is_slanted(self.style.as_deref())
+    }
+}
+
+/// The one reading of a style string, for text and declarations alike.
+pub fn is_slanted(style: Option<&str>) -> bool {
+    matches!(style, Some(s) if s.eq_ignore_ascii_case("italic") || s.eq_ignore_ascii_case("oblique"))
 }
 
 fn default_line_height() -> f32 {

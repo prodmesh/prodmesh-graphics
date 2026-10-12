@@ -351,7 +351,7 @@ export function MediaBrowser({
               {fonts.length === 0 ? <p className="mdb__dim">No fonts yet. A template renders only with a font this server holds.</p> : null}
               {fonts.map((a) => {
                 const face = faces.find((f) => f.hash === a.hash)
-                return row(a, face ? `${face.family} · ${face.weight}` : 'Unreadable font file')
+                return row(a, face ? `${face.family} · ${face.weight}${face.italic ? ' italic' : ''}` : 'Unreadable font file')
               })}
             </>
           ) : null}

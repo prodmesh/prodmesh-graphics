@@ -58,10 +58,11 @@ jobs:
           components: rustfmt, clippy
       - uses: Swatinem/rust-cache@v2
 
-      # pmg-out-audio (ADR 0028) reaches the host sound device through cpal,
-      # which on Linux builds against ALSA. Without the headers alsa-sys's
-      # build script panics before clippy sees a line of ours.
-      - run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libasound2-dev
+      # ALSA headers: pmg-out-audio (ADR 0028) reaches the host sound device
+      # through cpal, and without them alsa-sys's build script panics before
+      # clippy sees a line of ours. DejaVu: the bold and oblique faces
+      # pmg-text's matching tests choose between (-core has no oblique).
+      - run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libasound2-dev fonts-dejavu-core fonts-dejavu-extra
       - run: cargo fmt --all --check
       - run: cargo clippy --workspace --all-targets -- -D warnings
       # Builds without the DeckLink SDK present. That is a supported

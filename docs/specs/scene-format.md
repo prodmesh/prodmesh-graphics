@@ -11,7 +11,7 @@ Decisions and reasoning: [ADR 0005](../decisions/0005-the-pmg-scene-format.md).
 | Compiled scene | `.pmgscene` |
 | Template (scene + manifest) | `.pmgtemplate` |
 | Export bundle (with assets) | `.pmgpkg` |
-| Current version | `1.5`, `min_reader: 1` — see §9.2 |
+| Current version | `1.6`, `min_reader: 1` — see §9.2 |
 
 ## 1. Encoding
 
@@ -480,6 +480,31 @@ MAY name a system font only through an explicit fallback chain:
 
 and Design MUST flag it: *this will differ between machines*.
 
+### 7.1 How a family resolves to a face
+
+A text node names `font.family`, `font.weight` and (from 1.6) `font.style` —
+`"normal"` (the default) or `"italic"`; `"oblique"` reads as italic. A reader
+resolves it against the supplied font files in this order, and the browser
+designer and the node run the same implementation (`pmg_text::build_font_db`):
+
+1. Every face of every file — each face of a collection — answers to the
+   family, weight and slant the file states.
+2. A `fonts[]` declaration whose `asset` hash matches a supplied file makes that
+   file's faces answer to the declared family too. The document's own statement
+   of which bytes it means wins over a guess from names.
+3. A declared family no face answers to is served by every face, each at its
+   own weight and slant, so a document whose font is missing still renders.
+
+Selection then prefers the requested slant (falling back to the other rather
+than to nothing), and chooses weight by the CSS Fonts §5.2 order: from 400–500,
+heavier up to 500, then lighter, then heavier; below 400, lighter first; above
+500, heavier first. Nothing is synthesised: a family with no italic face
+renders slanted text upright.
+
+An italic is a different file, so it is a different declaration:
+`{ "family": "Inter", "weight": 400, "style": "italic", "asset": "blake3:…" }`
+beside the upright's. That is what makes a node stage both.
+
 ## 8. Compilation and the manifest
 
 The compiler (`pmg-scene`, run in the browser as WASM and in `pmgctl` natively —
@@ -552,7 +577,11 @@ reader ignores the field and draws the text at the top of its box, which is
 what every document before 1.5 does anyway. It arrived alongside the fix that
 made `align` mean what it says — alignment is relative to the node's own box,
 not to its widest line, so a single centred line in a wide box is centred
-rather than untouched.
+rather than untouched. 1.6 added `font.style` on a text node — italic text
+(§7.1). A 1.5 reader ignores it and draws the words upright in the same family
+and weight: the slant is missing and nothing else is. `fonts[].style` was in
+the format from the start and never read; from 1.6 it decides which face a
+declaration pins.
 
 ### 9.3 Migration
 

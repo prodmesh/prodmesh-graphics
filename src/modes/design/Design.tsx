@@ -63,6 +63,18 @@ import {
 } from './useDesign'
 import { newId } from '../../lib/ids'
 import { MediaBrowser } from './MediaBrowser'
+
+/**
+ * The uploaded face a pick should pin: same family, same slant if the family
+ * has one, then the nearest weight.
+ */
+function nearestFace(faces: FaceInfo[], family: string, weight: number, italic: boolean) {
+  const inFamily = faces.filter((f) => f.family === family)
+  const sameSlant = inFamily.filter((f) => f.italic === italic)
+  return (sameSlant.length ? sameSlant : inFamily).toSorted(
+    (a, b) => Math.abs(a.weight - weight) - Math.abs(b.weight - weight),
+  )[0]
+}
 import { ThemeManager } from './ThemeManager'
 import { useDocHistory } from './useHistory'
 import { LayerTree } from './LayerTree'
@@ -429,18 +441,19 @@ function SelectedNode({
     edit((s) => s.setFontSize(selected, v))
   }
 
-  const commitFont = (familyOverride?: string, weightOverride?: number) => {
+  const commitFont = (familyOverride?: string, weightOverride?: number, italicOverride?: boolean) => {
     const fam = (familyOverride ?? family).trim()
     const wt = weightOverride ?? Number(weight)
+    const it = italicOverride ?? facts?.text?.italic ?? false
     if (!facts?.text || !fam || !Number.isFinite(wt)) return
-    if (fam === facts.text.family && wt === facts.text.weight) return
+    if (fam === facts.text.family && wt === facts.text.weight && it === facts.text.italic) return
     // The nearest face in the picked family carries the hash — that is the
-    // file a node will stage for this declaration.
-    const match = faces
-      .filter((f) => f.family === fam)
-      .toSorted((a, b) => Math.abs(a.weight - wt) - Math.abs(b.weight - wt))[0]
+    // file a node will stage for this declaration. Same slant first: an
+    // italic is a different file, and pinning the upright's hash to an
+    // italic declaration would stage the wrong one.
+    const match = nearestFace(faces, fam, wt, it)
     edit((s) =>
-      s.setFontFamily(selected, fam, Math.max(1, Math.min(1000, Math.round(wt))), match?.hash),
+      s.setFontFamily(selected, fam, Math.max(1, Math.min(1000, Math.round(wt))), it, match?.hash),
     )
   }
 
@@ -495,9 +508,7 @@ function SelectedNode({
                         // to what the node already has — switching family should
                         // not also silently switch Regular to Bold.
                         const wt = Number(weight) || 400
-                        const face = faces
-                          .filter((f) => f.family === fam)
-                          .toSorted((a, b) => Math.abs(a.weight - wt) - Math.abs(b.weight - wt))[0]
+                        const face = nearestFace(faces, fam, wt, facts.text?.italic ?? false)
                         setFamily(fam)
                         if (face) setWeight(String(face.weight))
                         commitFont(fam, face?.weight)
@@ -531,6 +542,18 @@ function SelectedNode({
                       onBlur={() => commitFont()}
                       onKeyDown={enterCommits(() => commitFont())}
                       aria-label="Font weight"
+                    />
+                  </FormGroup>
+                  <FormGroup label="Italic">
+                    {/* Its own control rather than a weight, because it is a
+                        different FILE: the picker pins the italic face's hash,
+                        so a node stages it beside the upright. */}
+                    <input
+                      type="checkbox"
+                      checked={facts.text.italic}
+                      disabled={!!facts.text?.token}
+                      onChange={(e) => commitFont(undefined, undefined, e.target.checked)}
+                      aria-label="Italic"
                     />
                   </FormGroup>
                 </div>

@@ -748,6 +748,8 @@ pub struct TextFacts {
     pub expr: String,
     pub family: String,
     pub weight: u16,
+    /// Asks for a slanted face (format 1.6).
+    pub italic: bool,
     pub size: f32,
     pub align: String,
     /// Where the block sits vertically in its box (format 1.5).
@@ -786,6 +788,7 @@ pub fn node_facts(doc: &SceneDoc, id: &str) -> Result<NodeFacts, String> {
             expr: binding.expr.clone(),
             family: font.family.clone(),
             weight: font.weight,
+            italic: font.italic(),
             size: font.size,
             // `Stretch` is what an absent field deserialises to and it reads as
             // the start edge, so it is reported as such rather than as a fourth
@@ -1275,6 +1278,7 @@ pub fn apply_add_text(doc: &mut SceneDoc, parent: Option<&str>) -> Result<String
                 tracking: 0.0,
                 line_height: 1.2,
                 token: None,
+                style: None,
             },
             valign: Align::default(),
             align: Align::Start,
@@ -2139,31 +2143,39 @@ pub fn apply_set_font_size(doc: &mut SceneDoc, id: &str, size: f32) -> Result<()
     Ok(())
 }
 
-/// Set a text node's family and weight, declaring the family in `doc.fonts`
-/// when it is new — a family named by content but not declared would fail
-/// compile. `asset` is the font file's content hash when the caller knows it
-/// (a picker does; typed input may not): carried on the declaration, it is
-/// what lets a node stage exactly the bytes the designer chose.
+/// Set a text node's family, weight and slant, declaring the face in
+/// `doc.fonts` when it is new — a family named by content but not declared
+/// would fail compile. `asset` is the font file's content hash when the caller
+/// knows it (a picker does; typed input may not): carried on the declaration,
+/// it is what lets a node stage exactly the bytes the designer chose.
+///
+/// The declaration is per FACE — family, weight AND slant — because an italic
+/// is a different file. Keyed on family and weight alone, picking the italic
+/// would have overwritten the upright's hash, and the node would have staged
+/// one or the other, never both.
 pub fn apply_set_font_family(
     doc: &mut SceneDoc,
     id: &str,
     family: &str,
     weight: u16,
+    italic: bool,
     asset: Option<&str>,
 ) -> Result<(), String> {
     let family = family.trim();
     if family.is_empty() {
         return Err("a font family needs a name".into());
     }
+    let style = italic.then(|| "italic".to_string());
     {
         let (_, font, _, _) = text_content_mut(doc, id)?;
         font.family = family.to_string();
         font.weight = weight;
+        font.style = style.clone();
     }
     match doc
         .fonts
         .iter_mut()
-        .find(|f| f.family == family && f.weight == weight)
+        .find(|f| f.family == family && f.weight == weight && f.italic() == italic)
     {
         Some(f) => {
             if let Some(hash) = asset {
@@ -2173,7 +2185,7 @@ pub fn apply_set_font_family(
         None => doc.fonts.push(pmg_scene::doc::FontRef {
             family: family.to_string(),
             weight,
-            style: None,
+            style,
             asset: asset.map(String::from),
             system_fallback: false,
         }),
@@ -2965,7 +2977,15 @@ mod tests {
 
         // Size clamps; a new family is declared beside the first.
         apply_set_font_size(&mut doc, &id, 0.0).unwrap();
-        apply_set_font_family(&mut doc, &id, "IBM Plex Sans", 600, Some("blake3:ffff")).unwrap();
+        apply_set_font_family(
+            &mut doc,
+            &id,
+            "IBM Plex Sans",
+            600,
+            false,
+            Some("blake3:ffff"),
+        )
+        .unwrap();
         // The picked file's hash rides on the declaration — staging needs it.
         assert_eq!(
             doc.fonts
@@ -3383,5 +3403,25 @@ mod tests {
             nested.contains("one mask at a time"),
             "the refusal explains itself: {nested}"
         );
+    }
+
+    #[test]
+    fn an_italic_is_its_own_declaration_beside_the_upright() {
+        let mut doc = pmg_scene::fixture::lower_third();
+        let id = apply_add_text(&mut doc, None).unwrap();
+        apply_set_font_family(&mut doc, &id, "Inter", 400, false, Some("blake3:upright")).unwrap();
+        apply_set_font_family(&mut doc, &id, "Inter", 400, true, Some("blake3:italic")).unwrap();
+        // Both files are declared, so a node stages both — keyed on family and
+        // weight alone, the italic's hash replaced the upright's.
+        let inter: Vec<_> = doc.fonts.iter().filter(|f| f.family == "Inter").collect();
+        assert_eq!(inter.len(), 2);
+        assert!(inter
+            .iter()
+            .any(|f| !f.italic() && f.asset.as_deref() == Some("blake3:upright")));
+        assert!(inter
+            .iter()
+            .any(|f| f.italic() && f.asset.as_deref() == Some("blake3:italic")));
+        assert!(node_facts(&doc, &id).unwrap().text.unwrap().italic);
+        pmg_scene::validate::compile(&doc).expect("still a valid document");
     }
 }

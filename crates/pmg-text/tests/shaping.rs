@@ -11,7 +11,8 @@
 use pmg_layout::TextMeasure;
 use pmg_scene::doc::FontSpec;
 use pmg_text::{
-    build_font_db, face_info, quantize, FontDb, Measurer, TextEngine, Wrap, SUBPIXEL_PHASES,
+    build_font_db, face_info, faces_in, quantize, FontDb, Measurer, TextEngine, Wrap,
+    SUBPIXEL_PHASES,
 };
 
 /// Somewhere to get real font bytes on a developer machine or a CI runner.
@@ -63,6 +64,7 @@ fn spec(size: f32) -> FontSpec {
         tracking: 0.0,
         line_height: 1.2,
         token: None,
+        style: None,
     }
 }
 
@@ -605,10 +607,10 @@ fn two_declared_families_select_two_different_faces() {
     let (b_family, b_weight) = face_info(&b_bytes).expect("second font has a name");
 
     let declared = vec![
-        (a_family.clone(), a_weight),
-        (b_family.clone(), b_weight),
+        decl(&a_family, a_weight, None, None),
+        decl(&b_family, b_weight, None, None),
         // And one family no face answers to: the fallback shim serves it.
-        ("Ghost Grotesk".to_string(), 400),
+        decl("Ghost Grotesk", 400, None, None),
     ];
     let db = build_font_db(&[a_bytes, b_bytes], &declared).expect("builds");
 
@@ -623,4 +625,187 @@ fn two_declared_families_select_two_different_faces() {
         db.select("Ghost Grotesk", 400).is_some(),
         "an unmatched declared family still renders via the fallback"
     );
+}
+
+/// A `fonts[]` declaration, as a document carries it.
+fn decl(
+    family: &str,
+    weight: u16,
+    style: Option<&str>,
+    asset: Option<String>,
+) -> pmg_scene::doc::FontRef {
+    pmg_scene::doc::FontRef {
+        family: family.into(),
+        weight,
+        style: style.map(String::from),
+        asset,
+        system_fallback: false,
+    }
+}
+
+#[test]
+fn upright_text_gets_the_upright_face_whatever_loaded_first() {
+    // Regular and Italic at the same weight used to TIE, and the first file
+    // loaded won — so uploading the italic before the regular put every plain
+    // lower third in italics.
+    let (b, _) = font_bytes();
+    let mut db = FontDb::new();
+    let italic = db.add_face_styled(b.clone(), 0, "Fam", 400, true).unwrap();
+    let upright = db.add_face_styled(b.clone(), 0, "Fam", 400, false).unwrap();
+    assert_eq!(db.select("Fam", 400), Some(upright));
+    assert_eq!(db.select_style("Fam", 400, true), Some(italic));
+
+    // A family with no slanted face still renders slanted text — upright,
+    // rather than not at all.
+    let mut plain = FontDb::new();
+    let only = plain.add_face_styled(b, 0, "Plain", 700, false).unwrap();
+    assert_eq!(plain.select_style("Plain", 700, true), Some(only));
+}
+
+#[test]
+fn weight_ties_follow_css_not_load_order() {
+    let (b, _) = font_bytes();
+    let mut db = FontDb::new();
+    let light = db.add_face(b.clone(), "Fam", 300).unwrap();
+    let medium = db.add_face(b.clone(), "Fam", 500).unwrap();
+    let extra = db.add_face(b, "Fam", 800).unwrap();
+    // 400 sits between 300 and 500, equally far: CSS goes up to 500 first.
+    assert_eq!(db.select("Fam", 400), Some(medium));
+    // Above 500, heavier first even when lighter is nearer.
+    assert_eq!(db.select("Fam", 600), Some(extra));
+    // Below 400, lighter first.
+    assert_eq!(db.select("Fam", 350), Some(light));
+}
+
+#[test]
+fn a_declaration_pinned_by_hash_gets_that_file() {
+    // The document says which bytes it means. A family renamed in the
+    // document — or a file that calls itself something else — must resolve to
+    // the pinned file, not fall back to whichever face loaded first.
+    let (a, _) = font_bytes();
+    let (a_family, _) = face_info(&a).unwrap();
+    let b = second_font_bytes(&a_family);
+    let (_, b_weight) = face_info(&b).unwrap();
+    let pin = pmg_scene::validate::address_of(&b);
+
+    let db = build_font_db(
+        &[a, b.clone()],
+        &[decl("Brand Sans", b_weight, None, Some(pin))],
+    )
+    .unwrap();
+    let face = db
+        .select("Brand Sans", b_weight)
+        .expect("the pinned family resolves");
+    assert_eq!(
+        db.bytes_of(face),
+        Some(b.as_slice()),
+        "and to the file it pinned"
+    );
+}
+
+/// A bold face — heavier than [`font_bytes`]'s regular one, so weight
+/// matching has something real to choose between.
+fn bold_font_bytes() -> Vec<u8> {
+    const CANDIDATES: &[&str] = &[
+        "/System/Library/Fonts/Supplemental/Arial Bold.ttf",
+        "/System/Library/Fonts/Supplemental/Georgia Bold.ttf",
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
+        "/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf",
+        "C:\\Windows\\Fonts\\arialbd.ttf",
+    ];
+    CANDIDATES
+        .iter()
+        .find_map(|p| std::fs::read(p).ok())
+        .unwrap_or_else(|| panic!("no bold font found; install one of {CANDIDATES:?}"))
+}
+
+#[test]
+fn the_fallback_keeps_each_face_at_its_own_weight() {
+    // A missing family gets every face — at each face's OWN weight. They all
+    // used to register at the declared weight, tie, and resolve to whichever
+    // loaded first, so a missing family lost its bold.
+    let (regular, _) = font_bytes();
+    let bold = bold_font_bytes();
+    let (_, bold_weight) = face_info(&bold).unwrap();
+    assert!(bold_weight >= 600, "the bold candidate is bold");
+
+    // Bold loaded FIRST, so load order would get this wrong.
+    let db = build_font_db(
+        &[bold.clone(), regular.clone()],
+        &[decl("Ghost Grotesk", 400, None, None)],
+    )
+    .unwrap();
+    let file = |w: u16| {
+        db.bytes_of(db.select("Ghost Grotesk", w).unwrap())
+            .unwrap()
+            .to_vec()
+    };
+    assert_eq!(file(400), regular, "regular text stays regular");
+    assert_eq!(file(700), bold, "and bold text finds the bold");
+}
+
+/// Wrap whole font files into one collection (`.ttc`), shifting each table
+/// offset by where its font now starts — enough of the format for a reader.
+fn make_collection(fonts: &[&[u8]]) -> Vec<u8> {
+    let header = 12 + 4 * fonts.len();
+    let mut out = vec![0u8; header];
+    out[0..4].copy_from_slice(b"ttcf");
+    out[4..8].copy_from_slice(&0x0001_0000u32.to_be_bytes());
+    out[8..12].copy_from_slice(&(fonts.len() as u32).to_be_bytes());
+    for (i, f) in fonts.iter().enumerate() {
+        while !out.len().is_multiple_of(4) {
+            out.push(0);
+        }
+        let base = out.len() as u32;
+        out[12 + 4 * i..16 + 4 * i].copy_from_slice(&base.to_be_bytes());
+        let mut font = f.to_vec();
+        let tables = u16::from_be_bytes([font[4], font[5]]) as usize;
+        for t in 0..tables {
+            let at = 12 + 16 * t + 8;
+            let off = u32::from_be_bytes(font[at..at + 4].try_into().unwrap());
+            font[at..at + 4].copy_from_slice(&(off + base).to_be_bytes());
+        }
+        out.extend_from_slice(&font);
+    }
+    out
+}
+
+#[test]
+fn every_face_of_a_collection_is_reachable() {
+    // Only face 0 of a .ttc was ever read, so the Bold inside Helvetica.ttc
+    // was in the file and unreachable.
+    let (a, _) = font_bytes();
+    let (a_family, _) = face_info(&a).unwrap();
+    let b = second_font_bytes(&a_family);
+    let (b_family, b_weight) = face_info(&b).unwrap();
+    let ttc = make_collection(&[&a, &b]);
+
+    let infos = faces_in(&ttc);
+    assert_eq!(infos.len(), 2, "both faces are seen");
+    assert_eq!(infos[1].family, b_family);
+    let db = build_font_db(&[ttc], &[]).unwrap();
+    assert!(
+        db.select(&b_family, b_weight).is_some(),
+        "the second face resolves"
+    );
+}
+
+#[test]
+fn an_italic_file_says_it_is_italic() {
+    const CANDIDATES: &[&str] = &[
+        "/System/Library/Fonts/Supplemental/Arial Italic.ttf",
+        "/System/Library/Fonts/Supplemental/Georgia Italic.ttf",
+        "/System/Library/Fonts/Supplemental/Times New Roman Italic.ttf",
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans-Oblique.ttf",
+        "/usr/share/fonts/truetype/liberation/LiberationSans-Italic.ttf",
+        "C:\\Windows\\Fonts\\ariali.ttf",
+    ];
+    let bytes = CANDIDATES
+        .iter()
+        .find_map(|p| std::fs::read(p).ok())
+        .unwrap_or_else(|| panic!("no italic font found; install one of {CANDIDATES:?}"));
+    let info = &faces_in(&bytes)[0];
+    assert!(info.italic, "{} reads as upright", info.family);
+    let (upright, _) = font_bytes();
+    assert!(!faces_in(&upright)[0].italic);
 }

@@ -72,63 +72,148 @@ struct Face {
     offset: u32,
     family: String,
     weight: u16,
+    italic: bool,
 }
 
 impl Face {
     fn font(&self) -> swash::FontRef<'_> {
         // Offset was validated when the face was added.
-        swash::FontRef::from_index(&self.bytes, self.offset as usize)
-            .unwrap_or_else(|| swash::FontRef::from_index(&self.bytes, 0).expect("validated"))
+        swash::FontRef::from_offset(&self.bytes, self.offset)
+            .or_else(|| swash::FontRef::from_index(&self.bytes, 0))
+            .expect("validated")
     }
 }
 
+/// What one face in a font file says about itself.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FaceInfo {
+    /// Index within a collection (`.ttc`/`.otc`); 0 for a single font.
+    pub index: usize,
+    pub family: String,
+    pub weight: u16,
+    /// Italic or oblique. Matching treats them alike: a family ships one or
+    /// the other, and a template asking for a slant wants whichever it has.
+    pub italic: bool,
+}
+
+/// Every face in a font file — one for a `.ttf`, several for a collection.
+///
+/// A collection used to contribute only its first face, so the Bold and Italic
+/// inside `Helvetica.ttc` were in the file and unreachable.
+pub fn faces_in(bytes: &[u8]) -> Vec<FaceInfo> {
+    use swash::StringId;
+    let Some(data) = swash::FontDataRef::new(bytes) else {
+        return Vec::new();
+    };
+    (0..data.len())
+        .filter_map(|index| {
+            let font = data.get(index)?;
+            let strings = font.localized_strings();
+            let family = strings
+                .find_by_id(StringId::TypographicFamily, None)
+                .or_else(|| strings.find_by_id(StringId::Family, None))
+                .map(|s| s.chars().collect::<String>())
+                .filter(|s| !s.trim().is_empty())?;
+            let attrs = font.attributes();
+            Some(FaceInfo {
+                index,
+                family,
+                weight: attrs.weight().0,
+                italic: attrs.style() != swash::Style::Normal,
+            })
+        })
+        .collect()
+}
+
 /// What a font file says about itself: the name to offer in a picker, and the
-/// weight the designer gets by picking it.
+/// weight the designer gets by picking it. The first face of a collection.
 ///
 /// The **typographic** family is preferred over the plain one — "IBM Plex
 /// Sans", not "IBM Plex Sans SemiBold" — because that is the axis a family
 /// dropdown groups by; the weight carries the rest.
 pub fn face_info(bytes: &[u8]) -> Option<(String, u16)> {
-    use swash::StringId;
-    let font = swash::FontRef::from_index(bytes, 0)?;
-    let strings = font.localized_strings();
-    let family = strings
-        .find_by_id(StringId::TypographicFamily, None)
-        .or_else(|| strings.find_by_id(StringId::Family, None))
-        .map(|s| s.chars().collect::<String>())
-        .filter(|s| !s.trim().is_empty())?;
-    Some((family, font.attributes().weight().0))
+    faces_in(bytes)
+        .into_iter()
+        .next()
+        .map(|f| (f.family, f.weight))
 }
 
-/// Build a database from raw faces plus the families a document declares.
+/// Build a database from raw font files and the fonts a document declares.
 ///
-/// Every face registers under **its own name** first, so a document naming two
-/// real families gets two real faces — registering every face under every
-/// family (the M1 shim) made `select` resolve both to whichever face landed
-/// first, and every text box rendered in one font. The shim survives only as
-/// the FALLBACK: a declared family no face answered to gets every face, so a
-/// document older than real names (or missing its font) still renders rather
-/// than failing on bookkeeping.
+/// Three rules, in order, and the order is the design:
+///
+/// 1. **Every face registers under its own name**, weight and slant — each
+///    face of a collection, not just the first. A document naming two real
+///    families gets two real faces.
+/// 2. **A declaration that pins a file by hash gets that file**, under the
+///    declared family. The hash is the document's own statement of which bytes
+///    it means (`fonts[].asset`), so a family renamed in the document, or one
+///    whose file calls itself something else, still resolves to the face the
+///    designer chose rather than to a guess.
+/// 3. **A declared family nothing answered to gets every face**, at each
+///    face's OWN weight and slant — the M1 shim, kept as the fallback so an
+///    old document, or one whose font is missing, renders rather than failing
+///    on bookkeeping. It used to register them all at the declared weight,
+///    where they tied and the first file loaded won, so a missing family lost
+///    its bold.
 ///
 /// One implementation, used by the browser designer and the playout node —
 /// two copies of this rule would be two ways for the preview and the output
 /// to disagree about which font a family means.
-pub fn build_font_db(faces: &[Vec<u8>], declared: &[(String, u16)]) -> Result<FontDb, TextError> {
+pub fn build_font_db(
+    faces: &[Vec<u8>],
+    declared: &[pmg_scene::doc::FontRef],
+) -> Result<FontDb, TextError> {
     let mut db = FontDb::new();
-    let mut named: Vec<String> = Vec::new();
-    for bytes in faces {
-        if let Some((family, weight)) = face_info(bytes) {
-            db.add_face(bytes.clone(), family.clone(), weight)?;
-            named.push(family);
+    let files: Vec<(Arc<Vec<u8>>, Vec<FaceInfo>)> = faces
+        .iter()
+        .map(|b| (Arc::new(b.clone()), faces_in(b)))
+        .collect();
+
+    for (bytes, infos) in &files {
+        for f in infos {
+            db.add_shared(bytes.clone(), f.index, f.family.clone(), f.weight, f.italic)?;
         }
     }
-    for (family, weight) in declared {
-        if named.iter().any(|n| n == family) {
+
+    // Hashed once per file, and only when something is pinned: fonts run to
+    // megabytes, and most documents pin nothing the file names don't already say.
+    let addresses: Vec<String> = if declared.iter().any(|d| d.asset.is_some()) {
+        files
+            .iter()
+            .map(|(b, _)| pmg_scene::validate::address_of(b))
+            .collect()
+    } else {
+        Vec::new()
+    };
+    for d in declared {
+        let Some(hash) = d.asset.as_deref() else {
+            continue;
+        };
+        for ((bytes, infos), address) in files.iter().zip(&addresses) {
+            if address != hash {
+                continue;
+            }
+            for f in infos
+                .iter()
+                .filter(|f| !f.family.eq_ignore_ascii_case(&d.family))
+            {
+                db.add_shared(bytes.clone(), f.index, d.family.clone(), f.weight, f.italic)?;
+            }
+        }
+    }
+
+    let mut fell_back: Vec<String> = Vec::new();
+    for d in declared {
+        if db.has_family(&d.family) || fell_back.iter().any(|f| f.eq_ignore_ascii_case(&d.family)) {
             continue;
         }
-        for bytes in faces {
-            db.add_face(bytes.clone(), family.clone(), *weight)?;
+        for (bytes, infos) in &files {
+            for f in infos {
+                db.add_shared(bytes.clone(), f.index, d.family.clone(), f.weight, f.italic)?;
+            }
         }
+        fell_back.push(d.family.clone());
     }
     Ok(db)
 }
@@ -152,42 +237,96 @@ impl FontDb {
         Self::default()
     }
 
-    /// Load a face from font bytes.
+    /// Load a face from font bytes, upright, under the given name and weight.
     pub fn add_face(
         &mut self,
         bytes: Vec<u8>,
         family: impl Into<String>,
         weight: u16,
     ) -> Result<FaceId, TextError> {
-        let bytes = Arc::new(bytes);
-        let font = swash::FontRef::from_index(&bytes, 0).ok_or(TextError::BadFont)?;
-        let offset = font.offset;
+        self.add_shared(Arc::new(bytes), 0, family.into(), weight, false)
+    }
+
+    /// Load face `index` of a file, stating its slant as well.
+    pub fn add_face_styled(
+        &mut self,
+        bytes: Vec<u8>,
+        index: usize,
+        family: impl Into<String>,
+        weight: u16,
+        italic: bool,
+    ) -> Result<FaceId, TextError> {
+        self.add_shared(Arc::new(bytes), index, family.into(), weight, italic)
+    }
+
+    fn add_shared(
+        &mut self,
+        bytes: Arc<Vec<u8>>,
+        index: usize,
+        family: String,
+        weight: u16,
+        italic: bool,
+    ) -> Result<FaceId, TextError> {
+        let offset = swash::FontRef::from_index(&bytes, index)
+            .ok_or(TextError::BadFont)?
+            .offset;
         self.faces.push(Face {
             bytes,
             offset,
-            family: family.into(),
+            family,
             weight,
+            italic,
         });
         Ok(FaceId(self.faces.len() as u32 - 1))
     }
 
-    /// Pick the closest face for a family and weight.
+    /// The file a face was loaded from — what a family actually resolved to.
     ///
-    /// Nearest weight within the family, because a template asking for 600 on a
-    /// machine that only has 400 and 700 should render rather than fail — a
-    /// missing lower third is worse than a slightly wrong one.
+    /// Asked by the question "which font is this text really in?", which is
+    /// the one a designer has when a preview and an output disagree.
+    pub fn bytes_of(&self, id: FaceId) -> Option<&[u8]> {
+        self.faces.get(id.0 as usize).map(|f| f.bytes.as_slice())
+    }
+
+    /// Whether any face answers to this family name.
+    pub fn has_family(&self, family: &str) -> bool {
+        self.faces
+            .iter()
+            .any(|f| f.family.eq_ignore_ascii_case(family))
+    }
+
+    /// The closest UPRIGHT face for a family and weight. See [`Self::select_style`].
     pub fn select(&self, family: &str, weight: u16) -> Option<FaceId> {
-        let mut best: Option<(u32, FaceId)> = None;
-        for (i, f) in self.faces.iter().enumerate() {
-            if !f.family.eq_ignore_ascii_case(family) {
-                continue;
-            }
-            let d = f.weight.abs_diff(weight) as u32;
-            if best.is_none_or(|(bd, _)| d < bd) {
-                best = Some((d, FaceId(i as u32)));
-            }
-        }
-        best.map(|(_, id)| id)
+        self.select_style(family, weight, false)
+    }
+
+    /// Pick the closest face for a family, weight and slant.
+    ///
+    /// The slant is decided first: with Regular and Italic both at 400, plain
+    /// text must get Regular every time, and it used to get whichever file
+    /// happened to load first. A family with no face in the asked-for slant
+    /// falls back to the other rather than to nothing.
+    ///
+    /// Weight then follows CSS Fonts §5.2, so a template means the same thing
+    /// here as in the browser that designed it: from 400–500, heavier up to
+    /// 500 first, then lighter, then heavier; below 400, lighter first; above
+    /// 500, heavier first. Nearest-by-distance agreed with that except on
+    /// ties, and a tie broken by load order is the kind of answer that changes
+    /// when somebody uploads one more file. A missing lower third is worse
+    /// than a slightly wrong one, so there is always an answer if the family
+    /// has any face at all.
+    pub fn select_style(&self, family: &str, weight: u16, italic: bool) -> Option<FaceId> {
+        let in_family = || {
+            self.faces
+                .iter()
+                .enumerate()
+                .filter(move |(_, f)| f.family.eq_ignore_ascii_case(family))
+        };
+        let want_slant = in_family().any(|(_, f)| f.italic == italic);
+        in_family()
+            .filter(|(_, f)| !want_slant || f.italic == italic)
+            .min_by_key(|(i, f)| (weight_rank(weight, f.weight), *i))
+            .map(|(i, _)| FaceId(i as u32))
     }
 
     pub fn len(&self) -> usize {
@@ -621,7 +760,10 @@ impl pmg_layout::TextMeasure for Measurer {
         max_lines: usize,
     ) -> (f32, f32) {
         let mut eng = self.0.borrow_mut();
-        let Some(face) = eng.db.select(&font.family, font.weight) else {
+        let Some(face) = eng
+            .db
+            .select_style(&font.family, font.weight, font.italic())
+        else {
             // A missing face measures as nothing rather than panicking. The
             // document is still laid out, and the absent font is a validation
             // concern rather than a render-thread failure.
@@ -681,6 +823,34 @@ pub fn selftest() -> Result<(), String> {
         return Err("SUBPIXEL_PHASES changed — every cached glyph phase depends on it".into());
     }
     Ok(())
+}
+
+/// How well `have` serves a request for `want`, lower is better — the CSS
+/// Fonts §5.2 order as a sort key: (preference tier, distance).
+fn weight_rank(want: u16, have: u16) -> (u8, u16) {
+    let d = want.abs_diff(have);
+    if d == 0 {
+        return (0, 0);
+    }
+    if (400..=500).contains(&want) {
+        if have > want && have <= 500 {
+            (1, d)
+        } else if have < want {
+            (2, d)
+        } else {
+            (3, d)
+        }
+    } else if want < 400 {
+        if have < want {
+            (1, d)
+        } else {
+            (2, d)
+        }
+    } else if have > want {
+        (1, d)
+    } else {
+        (2, d)
+    }
 }
 
 #[cfg(test)]

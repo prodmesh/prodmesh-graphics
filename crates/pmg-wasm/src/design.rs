@@ -56,23 +56,13 @@ pub fn compile(doc_json: &str) -> Result<Compiled, String> {
     })
 }
 
-/// Build a font database from raw face bytes.
+/// Build a font database from raw face bytes and the document's declarations.
 ///
-/// Every face is first registered under **its own name** — the family and
-/// weight the file itself states — so a family picked from the dropdown
-/// resolves to the face that actually carries it. Then, for any family the
-/// document declares that no face answered to, every face is registered under
-/// that name as well: the M1 shim, kept as the fallback so a template written
-/// before real names existed (or one whose font is renamed) still renders
-/// rather than failing on bookkeeping.
+/// The matching rules live in `pmg_text::build_font_db`, once, because the
+/// node uses them too: faces under their own names, pinned files under the
+/// family that pins them, and every face for a family nothing answered to.
 fn font_db(doc: &SceneDoc, faces: &[Vec<u8>]) -> Result<FontDb, String> {
-    let mut families: Vec<(String, u16)> = doc
-        .fonts
-        .iter()
-        .map(|f| (f.family.clone(), f.weight))
-        .collect();
-    families.sort();
-    families.dedup();
+    let mut declared = doc.fonts.clone();
 
     // A template that names fonts and is given none must FAIL, not render.
     //
@@ -81,20 +71,27 @@ fn font_db(doc: &SceneDoc, faces: &[Vec<u8>]) -> Result<FontDb, String> {
     // template with nothing in it. That is the same class of failure S2 found
     // with missing scripts: silently drawing nothing (or tofu) rather than
     // saying what is missing. Name the families, so the answer is actionable.
-    if !families.is_empty() && faces.is_empty() {
-        let names: Vec<&str> = families.iter().map(|(f, _)| f.as_str()).collect();
+    if !declared.is_empty() && faces.is_empty() {
+        let mut names: Vec<&str> = declared.iter().map(|f| f.family.as_str()).collect();
+        names.dedup();
         return Err(format!(
             "no font supplied. This template needs {} — add it as an asset so every machine renders it the same way.",
             names.join(", ")
         ));
     }
-    if families.is_empty() {
-        families.push(("Default".into(), 400));
+    if declared.is_empty() {
+        declared.push(pmg_scene::doc::FontRef {
+            family: "Default".into(),
+            weight: 400,
+            style: None,
+            asset: None,
+            system_fallback: false,
+        });
     }
 
     // The registration rule itself is shared with the node (pmg-text), so the
     // preview and the output cannot disagree about which font a family means.
-    pmg_text::build_font_db(faces, &families).map_err(|e| format!("font: {e}"))
+    pmg_text::build_font_db(faces, &declared).map_err(|e| format!("font: {e}"))
 }
 
 /// Everything expensive, done once — exactly as a node does it at arm.
@@ -426,10 +423,11 @@ pub fn set_font_family(
     id: &str,
     family: &str,
     weight: u16,
+    italic: bool,
     asset: Option<&str>,
 ) -> Result<String, String> {
     let mut doc = armed.doc.clone();
-    interact::apply_set_font_family(&mut doc, id, family, weight, asset)?;
+    interact::apply_set_font_family(&mut doc, id, family, weight, italic, asset)?;
     edited_json(doc)
 }
 

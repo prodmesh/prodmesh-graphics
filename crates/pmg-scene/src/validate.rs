@@ -77,6 +77,40 @@ pub fn validate(doc: &SceneDoc) -> Result<Vec<Warning>, SceneError> {
         .filter(|f| f.ty == FieldType::Timer)
         .map(|f| f.key.as_str())
         .collect();
+    // A font style this reader does not know is kept and drawn upright. Say so
+    // at publish, where a typo ("itallic") can still be fixed, rather than on
+    // air where it just looks like the slant was forgotten.
+    let known_style = |s: &Option<String>| match s.as_deref() {
+        None => true,
+        Some(v) => ["normal", "italic", "oblique"]
+            .iter()
+            .any(|k| v.eq_ignore_ascii_case(k)),
+    };
+    doc.root.walk(&mut |n| {
+        if let Some(Content::Text { font, .. }) = &n.content {
+            if !known_style(&font.style) {
+                warnings.push(Warning {
+                    code: "unknown_font_style",
+                    detail: format!(
+                        "node {:?} asks for font style {:?}; it will render upright",
+                        n.id,
+                        font.style.as_deref().unwrap_or_default()
+                    ),
+                });
+            }
+        }
+    });
+    for f in doc.fonts.iter().filter(|f| !known_style(&f.style)) {
+        warnings.push(Warning {
+            code: "unknown_font_style",
+            detail: format!(
+                "the {:?} declaration has style {:?}; it will be treated as upright",
+                f.family,
+                f.style.as_deref().unwrap_or_default()
+            ),
+        });
+    }
+
     if !timers.is_empty() {
         doc.root.walk(&mut |n| {
             let Some(Content::Text { binding, font, .. }) = &n.content else {

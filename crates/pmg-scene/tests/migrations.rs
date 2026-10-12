@@ -39,6 +39,7 @@ fn each_step_matches_its_frozen_fixture() {
     step_matches("1.2-to-1.3", migrate::v1_2_to_v1_3);
     step_matches("1.3-to-1.4", migrate::v1_3_to_v1_4);
     step_matches("1.4-to-1.5", migrate::v1_4_to_v1_5);
+    step_matches("1.5-to-1.6", migrate::v1_5_to_v1_6);
 }
 
 #[test]
@@ -52,7 +53,8 @@ fn the_chain_composes_to_current() {
             "1.1-to-1.2",
             "1.2-to-1.3",
             "1.3-to-1.4",
-            "1.4-to-1.5"
+            "1.4-to-1.5",
+            "1.5-to-1.6"
         ]
     );
     assert_eq!(doc.format_version, migrate::CURRENT);
@@ -60,7 +62,7 @@ fn the_chain_composes_to_current() {
 
 #[test]
 fn a_current_document_migrates_to_nothing() {
-    let mut doc = fixture("1.4-to-1.5", "expected.json");
+    let mut doc = fixture("1.5-to-1.6", "expected.json");
     let before = cbor::to_canonical(&doc).unwrap();
     let applied = migrate::migrate(&mut doc).expect("current is current");
     assert!(applied.is_empty(), "no steps to take");

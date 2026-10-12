@@ -86,6 +86,8 @@ export type NodeFacts = {
     expr: string
     family: string
     weight: number
+    /** Asks for a slanted face (format 1.6). */
+    italic: boolean
     size: number
     align: string
     /** Where the block sits vertically in its box (format 1.5, ADR 0005). */
@@ -176,13 +178,15 @@ export async function rethemeDoc(
 /** What one uploaded face is: its content hash, and the name and weight the
  *  file itself states. What a font picker offers must be the file's own name,
  *  not a string somebody typed near it. */
-export type FaceInfo = { hash: string; family: string; weight: number }
+export type FaceInfo = { hash: string; family: string; weight: number; italic: boolean }
 
 /** Read a font file's own family and weight, via the same parser that shapes
  *  with it. Null for bytes that are not a font. */
-export async function fontFacts(bytes: Uint8Array): Promise<{ family: string; weight: number } | null> {
+export async function fontFacts(
+  bytes: Uint8Array,
+): Promise<{ family: string; weight: number; italic: boolean } | null> {
   const wasm = await loadWasm()
-  return wasm.fontFacts(bytes) as { family: string; weight: number } | null
+  return wasm.fontFacts(bytes) as { family: string; weight: number; italic: boolean } | null
 }
 
 type Status = 'idle' | 'loading' | 'ready' | 'error'

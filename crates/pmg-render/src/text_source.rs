@@ -62,7 +62,10 @@ impl GlyphSource for TextEngineGlyphs<'_> {
         max_lines: usize,
         align: Align,
     ) -> Option<Run> {
-        let face = self.engine.db.select(&font.family, font.weight)?;
+        let face = self
+            .engine
+            .db
+            .select_style(&font.family, font.weight, font.italic())?;
         // The SAME call the solver measured with, so the wrap drawn is the wrap
         // the box was sized for.
         let lines = self.engine.shape_lines(

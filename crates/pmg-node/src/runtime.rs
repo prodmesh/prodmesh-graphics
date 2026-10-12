@@ -76,15 +76,20 @@ impl Library for Assigned {
         } else {
             self.font_bytes.clone()
         };
-        let mut families: Vec<(String, u16)> = self
-            .templates
-            .values()
-            .flat_map(|d| d.fonts.iter().map(|f| (f.family.clone(), f.weight)))
-            .collect();
-        families.sort();
-        families.dedup();
-        if families.is_empty() {
-            families.push(("Default".into(), 400));
+        let mut declared: Vec<pmg_scene::doc::FontRef> = Vec::new();
+        for f in self.templates.values().flat_map(|d| d.fonts.iter()) {
+            if !declared.contains(f) {
+                declared.push(f.clone());
+            }
+        }
+        if declared.is_empty() {
+            declared.push(pmg_scene::doc::FontRef {
+                family: "Default".into(),
+                weight: 400,
+                style: None,
+                asset: None,
+                system_fallback: false,
+            });
         }
         // Faces register under their OWN names, with the every-face-per-family
         // shim only for families no face answered to (which is also how the
@@ -92,7 +97,7 @@ impl Library for Assigned {
         // designer (pmg-text): registering every face under every family here
         // made two staged fonts collapse to one on air, while the preview
         // showed both — the disagreement ADR 0001 exists to prevent.
-        let db = pmg_text::build_font_db(&faces, &families)?;
+        let db = pmg_text::build_font_db(&faces, &declared)?;
         Ok(pmg_text::TextEngine::new(db))
     }
 }

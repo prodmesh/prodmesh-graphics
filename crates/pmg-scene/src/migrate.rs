@@ -16,7 +16,7 @@ use crate::doc::{FormatVersion, SceneDoc};
 use crate::SceneError;
 
 /// The version this writer emits.
-pub const CURRENT: FormatVersion = FormatVersion { major: 1, minor: 5 };
+pub const CURRENT: FormatVersion = FormatVersion { major: 1, minor: 6 };
 
 /// Walk `doc` forward to [`CURRENT`], returning the names of the steps taken
 /// — empty when it was already current.
@@ -51,6 +51,10 @@ pub fn migrate(doc: &mut SceneDoc) -> Result<Vec<&'static str>, SceneError> {
     if doc.format_version.minor == 4 {
         v1_4_to_v1_5(doc);
         applied.push("1.4-to-1.5");
+    }
+    if doc.format_version.minor == 5 {
+        v1_5_to_v1_6(doc);
+        applied.push("1.5-to-1.6");
     }
     Ok(applied)
 }
@@ -107,4 +111,16 @@ pub fn v1_3_to_v1_4(doc: &mut SceneDoc) {
 /// refusal a mask or a timer needs.
 pub fn v1_4_to_v1_5(doc: &mut SceneDoc) {
     doc.format_version = FormatVersion { major: 1, minor: 5 };
+}
+
+/// 1.5 → 1.6: `font.style` on a text node — italic text.
+///
+/// A stamp, and a mild one. A 1.5 reader ignores the field and draws the text
+/// upright in the same family and weight: the words are right and the slant is
+/// missing, which an older node survives. The declaration side (`fonts[].style`)
+/// was in the format from 1.0 and simply never read; from 1.6 it decides which
+/// face a family resolves to, so an italic declaration is what makes a node
+/// stage the italic file.
+pub fn v1_5_to_v1_6(doc: &mut SceneDoc) {
+    doc.format_version = FormatVersion { major: 1, minor: 6 };
 }
