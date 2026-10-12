@@ -9,6 +9,7 @@
 import assert from 'node:assert/strict'
 import test, { before, beforeEach } from 'node:test'
 import fs from 'node:fs'
+import { WebSocket } from 'ws'
 
 let store, db, app, port, server
 
@@ -21,6 +22,7 @@ before(async () => {
   server = app.listen(0)
   await new Promise((r) => server.once('listening', r))
   port = server.address().port
+  ;(await import('./cueSocket.js')).attach(server)
 })
 test.after(() => server?.close())
 
@@ -412,4 +414,49 @@ test('an output’s audio destination survives the server (ADR 0028)', async () 
   // thing that knows what is plugged into it, and it refuses by name.
   assert.equal(out.audio_device, 'Dante Virtual Soundcard')
   assert.equal(out.audio_host, 'CoreAudio')
+})
+
+// ---------------------------------------------------------------------------
+// The cue socket enforces the same boundary as POST /api/cue (ADR 0017)
+// ---------------------------------------------------------------------------
+
+/** Send one cue over the socket with the given hello; resolve its ack. */
+async function socketCue(hello, cue) {
+  const ws = new WebSocket(`ws://127.0.0.1:${port}/api/cue/socket`)
+  await new Promise((r, j) => { ws.once('open', r); ws.once('error', j) })
+  const ack = new Promise((r) => ws.on('message', (m) => {
+    const msg = JSON.parse(String(m))
+    if (msg.type === 'ack') r(msg)
+  }))
+  ws.send(JSON.stringify({ type: 'hello', ...hello }))
+  ws.send(JSON.stringify({ type: 'cue', ...cue }))
+  const a = await ack
+  ws.close()
+  return a
+}
+
+test('the cue socket refuses an anonymous cue once the server is secured', async () => {
+  admin()
+  const a = await socketCue({}, { cue_id: 's1', node: 'nope', output: 'out-0', layer: 'Lower Third', op: 'take_out' })
+  // A socket is not a way round the boundary: same status, same sentence.
+  assert.equal(a.http, 401)
+  assert.equal(a.error, 'permission_required')
+  assert.equal(a.cue_id, 's1')
+})
+
+test('the cue socket honours a signed-in user and a trusted station’s scope', async () => {
+  admin()
+  const login = await req('POST', '/api/auth/login', { username: 'jbeale', pin: '1234' })
+  const signedIn = await socketCue({ bearer: login.json.token },
+    { cue_id: 's2', node: 'nope', output: 'out-0', layer: 'Lower Third', op: 'take_out' })
+  assert.ok(![401, 403].includes(signedIn.http), 'past the boundary, then no such node')
+
+  const st = store.registerStation('booth-mac')
+  store.setStationTrust(st.id, { trusted: true, scope: { outputs: ['out-0'], layers: ['Lower Third'] } })
+  const inScope = await socketCue({ station: st.token },
+    { cue_id: 's3', node: 'nope', output: 'out-0', layer: 'Lower Third', op: 'take_out' })
+  assert.ok(![401, 403].includes(inScope.http))
+  const outOfScope = await socketCue({ station: st.token },
+    { cue_id: 's4', node: 'nope', output: 'out-0', layer: 'Bug', op: 'take_out' })
+  assert.equal(outOfScope.http, 401)
 })

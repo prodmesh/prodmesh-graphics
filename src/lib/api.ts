@@ -10,7 +10,7 @@
  * last step, so `ApiError` carries both and `message` IS the label.
  */
 
-import { authHeaders, requestSignIn } from './identity'
+import { authHeaders, requestSignIn, sessionToken, stationToken } from './identity'
 
 export class ApiError extends Error {
   readonly code: string
@@ -49,18 +49,24 @@ async function send<T>(method: string, url: string, body?: unknown): Promise<T> 
   if (res.status === 204) return undefined as T
   const text = await res.text()
   const json = text ? (JSON.parse(text) as Record<string, unknown>) : {}
-  if (!res.ok) {
-    // A refusal for want of authority is the one failure the operator can fix
-    // from here, so it opens the sign-in bar naming what was missing rather
-    // than landing as one more sentence to read and dismiss. 401 and 403 both
-    // arrive here and stay distinguishable: ApiError carries the status, and
-    // the bar says "sign in" or "sign in as someone else" accordingly.
-    if (json.error === 'permission_required' && (res.status === 401 || res.status === 403)) {
-      requestSignIn({ permission: String(json.permission ?? ''), label: String(json.label ?? '') })
-    }
-    throw new ApiError(res.status, json)
-  }
+  if (!res.ok) throw refused(res.status, json)
   return json as T
+}
+
+/**
+ * Turn a refusal into the error the caller throws — once, for every transport.
+ *
+ * A refusal for want of authority is the one failure the operator can fix
+ * from here, so it opens the sign-in bar naming what was missing rather than
+ * landing as one more sentence to read and dismiss. 401 and 403 both arrive
+ * here and stay distinguishable: ApiError carries the status, and the bar says
+ * "sign in" or "sign in as someone else" accordingly.
+ */
+function refused(status: number, json: Record<string, unknown>): ApiError {
+  if (json.error === 'permission_required' && (status === 401 || status === 403)) {
+    requestSignIn({ permission: String(json.permission ?? ''), label: String(json.label ?? '') })
+  }
+  return new ApiError(status, json)
 }
 
 /**
@@ -87,12 +93,7 @@ export async function postBytes<T>(url: string, bytes: Uint8Array): Promise<T> {
   }
   const text = await res.text()
   const json = text ? (JSON.parse(text) as Record<string, unknown>) : {}
-  if (!res.ok) {
-    if (json.error === 'permission_required' && (res.status === 401 || res.status === 403)) {
-      requestSignIn({ permission: String(json.permission ?? ''), label: String(json.label ?? '') })
-    }
-    throw new ApiError(res.status, json)
-  }
+  if (!res.ok) throw refused(res.status, json)
   return json as T
 }
 
@@ -116,9 +117,13 @@ export function newCueId(): string {
 }
 
 export type CueResult = {
-  result: 'applied' | 'deduped'
-  fired_at_frame: number | null
-  at_utc: number
+  /**
+   * `superseded` is a success: a newer take for the same layer replaced this
+   * one before it fired (ADR 0017). It has no frame, because nothing went on.
+   */
+  result: 'applied' | 'deduped' | 'superseded'
+  fired_at_frame?: number | null
+  at_utc?: number
   seq: number
 }
 
@@ -156,3 +161,136 @@ export type CueRequest = {
  */
 export const takeCue = (req: CueRequest) =>
   post<CueResult>('/api/cue', { surface: 'show_view', ...req })
+
+// ---------------------------------------------------------------------------
+// The cue socket — Follow mode (ADR 0017)
+//
+// Follow takes on every keypress, faster than a node acks. Over HTTP/1.1 each
+// un-acked POST holds one of the six connections the browser allows per
+// origin, and the SSE stream holds another, so a burst queued invisibly behind
+// its own first keypress. One socket carries any number of cues in flight.
+//
+// The socket is an optimisation, never a dependency. Anything it cannot
+// deliver — not open, dropped mid-cue, silent too long — goes by `POST
+// /api/cue` with the SAME cue_id, which is safe precisely because the node
+// dedupes on it: a cue that did fire answers `deduped`, one that did not
+// fires now. Nothing is lost and nothing fires twice.
+
+type InFlight = {
+  body: CueRequest & { surface: string }
+  resolve: (r: CueResult) => void
+  reject: (e: unknown) => void
+  sent: boolean
+  timer: ReturnType<typeof setTimeout> | null
+}
+
+/**
+ * How long to wait for an ack before asking again over HTTP. The server's own
+ * wait is the deadline plus 250 ms (half a second by default), so this only
+ * fires when the socket itself has gone quiet.
+ */
+const SOCKET_ACK_GIVE_UP_MS = 5000
+/** After a failed connect, Follow uses HTTP for a while rather than retrying per keypress. */
+const SOCKET_RETRY_MS = 2000
+
+let cueSock: WebSocket | null = null
+let cueSockHello: string | null = null
+let cueSockRetryAt = 0
+const inFlight = new Map<string, InFlight>()
+
+function cueSocketUrl() {
+  const { protocol, host } = window.location
+  return `${protocol === 'https:' ? 'wss' : 'ws'}://${host}/api/cue/socket`
+}
+
+/** By HTTP instead, keeping the cue_id. */
+function viaHttp(f: InFlight) {
+  if (f.timer) clearTimeout(f.timer)
+  inFlight.delete(f.body.cue_id)
+  post<CueResult>('/api/cue', f.body).then(f.resolve, f.reject)
+}
+
+function transmit(ws: WebSocket, f: InFlight) {
+  // Identity can change between keypresses — somebody signs in mid-service.
+  // The server resolves it per cue from the latest hello, so say it again
+  // whenever it has changed rather than reconnecting.
+  const bearer = sessionToken()
+  const station = stationToken()
+  const key = `${bearer ?? ''}|${station ?? ''}`
+  if (key !== cueSockHello) {
+    ws.send(JSON.stringify({ type: 'hello', bearer, station }))
+    cueSockHello = key
+  }
+  ws.send(JSON.stringify({ type: 'cue', ...f.body }))
+  f.sent = true
+  f.timer = setTimeout(() => viaHttp(f), SOCKET_ACK_GIVE_UP_MS)
+}
+
+function cueSocket(): WebSocket | null {
+  if (typeof WebSocket === 'undefined') return null
+  if (cueSock && (cueSock.readyState === WebSocket.OPEN || cueSock.readyState === WebSocket.CONNECTING)) {
+    return cueSock
+  }
+  if (Date.now() < cueSockRetryAt) return null
+
+  const ws = new WebSocket(cueSocketUrl())
+  cueSock = ws
+  cueSockHello = null
+  ws.onopen = () => {
+    for (const f of inFlight.values()) if (!f.sent) transmit(ws, f)
+  }
+  ws.onmessage = (e) => {
+    let msg: Record<string, unknown>
+    try {
+      msg = JSON.parse(String(e.data))
+    } catch {
+      return
+    }
+    if (msg.type !== 'ack') return
+    const f = inFlight.get(String(msg.cue_id))
+    if (!f) return
+    if (f.timer) clearTimeout(f.timer)
+    inFlight.delete(f.body.cue_id)
+    const { type: _t, http, ...payload } = msg
+    const status = Number(http)
+    if (status >= 200 && status < 300) f.resolve(payload as CueResult)
+    else f.reject(refused(status, payload))
+  }
+  const lost = () => {
+    if (cueSock !== ws) return
+    cueSock = null
+    cueSockRetryAt = Date.now() + SOCKET_RETRY_MS
+    for (const f of inFlight.values()) viaHttp(f)
+  }
+  ws.onclose = lost
+  ws.onerror = lost
+  return ws
+}
+
+/**
+ * Fire a Follow-mode cue without holding a connection per keypress.
+ *
+ * Resolves exactly what `takeCue` would — the same payload, the same
+ * `ApiError` on refusal — because the server answers the socket with the
+ * status and body `POST /api/cue` would have. Still no optimism: this resolves
+ * on the node's ack, and the caller sets nothing on air from it.
+ */
+export function followCue(req: CueRequest): Promise<CueResult> {
+  const body = { surface: 'show_view', ...req }
+  const ws = cueSocket()
+  if (!ws) return post<CueResult>('/api/cue', body)
+  return new Promise<CueResult>((resolve, reject) => {
+    const f: InFlight = { body, resolve, reject, sent: false, timer: null }
+    inFlight.set(req.cue_id, f)
+    if (ws.readyState === WebSocket.OPEN) transmit(ws, f)
+  })
+}
+
+/** Test seam: forget the cue socket and anything in flight. */
+export function _reset() {
+  for (const f of inFlight.values()) if (f.timer) clearTimeout(f.timer)
+  inFlight.clear()
+  cueSock = null
+  cueSockHello = null
+  cueSockRetryAt = 0
+}

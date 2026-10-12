@@ -18,3 +18,12 @@ class InertEventSource {
 if (typeof globalThis.EventSource === 'undefined') {
   globalThis.EventSource = InertEventSource as unknown as typeof EventSource
 }
+
+/**
+ * Follow mode prefers the cue socket and falls back to `POST /api/cue`. jsdom
+ * HAS a WebSocket, and would dial the test origin, fail asynchronously, and
+ * only then fall back — so every Follow test would race a connection error.
+ * Tests get the HTTP path unless they stub a socket to test the socket.
+ */
+// @ts-expect-error — deliberately absent, which is what the code checks for.
+delete globalThis.WebSocket

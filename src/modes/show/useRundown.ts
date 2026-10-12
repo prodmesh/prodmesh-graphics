@@ -19,7 +19,7 @@ import { useCallback, useEffect, useState } from 'react'
 import { useQuery, invalidate } from '../../lib/useQuery'
 import { useTopic } from '../../lib/stream'
 import { keys, topics } from '../../lib/keys'
-import { ApiError, newCueId, put, takeCue } from '../../lib/api'
+import { ApiError, followCue, newCueId, put, takeCue } from '../../lib/api'
 import type { Item, LayersSnapshot } from './types'
 
 export type Cursor = {
@@ -178,12 +178,16 @@ export function useRundown({
    * A cue the node supersedes resolves 200 and is deliberately silent — that is
    * the mechanism working, and a message per skipped slide during a chorus is
    * noise an operator would learn to ignore.
+   *
+   * It goes by the cue socket (`followCue`), not a POST per keypress: each
+   * un-acked POST holds one of the browser's six connections to the server,
+   * so at chorus speed the keypresses queued behind each other after all.
    */
   const fireAt = useCallback(
     (itemId: string | null) => {
       const item = itemId ? running.find((i) => i.id === itemId) : null
       if (!item) return
-      takeCue({
+      followCue({
         cue_id: newCueId(),
         node: nodeId,
         output: outputId,

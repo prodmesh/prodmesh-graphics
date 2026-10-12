@@ -15,7 +15,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { WebSocket } from 'ws'
 
-let app, link, wire, cueLog, db, server, port
+let app, link, wire, cueLog, db, server, port, cueSocket
 const PROTO_FIXTURES = path.join(import.meta.dirname, '..', 'testdata', 'proto')
 
 before(async () => {
@@ -32,6 +32,8 @@ before(async () => {
   await new Promise((r) => server.once('listening', r))
   port = server.address().port
   link.attach(server)
+  cueSocket = await import('./cueSocket.js')
+  cueSocket.attach(server)
 })
 
 afterAll(() => { link._reset(); server?.close() })
@@ -375,15 +377,19 @@ test('the same cue_id twice dedupes at the node', async () => {
 test('the take log records which surface fired the cue', async () => {
   seedItem()
   const n = await fakeNode({ nodeId: 'cue-log' })
+  const station = (await import('./authStore.js')).registerStation('booth-mac')
   await post('/api/cue', {
     cue_id: 'c-5', node: 'cue-log', output: 'out-0', layer: 'Lower Third',
     op: 'take', item: 'item-1', surface: 'gpi',
-  }, { 'x-prodmesh-station': 'booth-mac' })
+  }, { 'x-prodmesh-station': station.token, 'x-prodmesh-user': 'somebody-else' })
 
   const tail = cueLog.since('default', 0)
   const entry = tail.entries.at(-1)
   assert.equal(entry.surface, 'gpi', 'without this the log is confusing the first time a GPI is used')
+  // The station's NAME, resolved from its token — never the token itself,
+  // which is a credential, and never a header the caller simply wrote.
   assert.equal(entry.station, 'booth-mac')
+  assert.equal(entry.user, null, 'an x-prodmesh-user header is not an identity')
   assert.equal(entry.item_label, 'Pastor Dan')
   assert.equal(entry.fired_at_frame, 1_841_944)
   await n.close()
@@ -770,4 +776,133 @@ test('a node reports the outputs it is running, and the server learns them once'
     .get()
   assert.equal(JSON.parse(after.config).audio_device, 'BlackHole 2ch')
   await n.close()
+})
+
+// ---------------------------------------------------------------------------
+// Superseded, and the cue socket — Follow mode (ADR 0017)
+// ---------------------------------------------------------------------------
+
+test('a superseded take is 200 and says so, not a refusal', async () => {
+  seedItem()
+  const n = await fakeNode({ nodeId: 'sup-1', answer: () => ({ result: 'Superseded' }) })
+  const r = await post('/api/cue', {
+    cue_id: 'sup-c1', node: 'sup-1', output: 'out-0', layer: 'Lower Third', op: 'take', item: 'item-1',
+  })
+  // It fell through to "The node refused that cue." — 409, red, for the
+  // system doing exactly what an operator moving fast meant.
+  assert.equal(r.status, 200)
+  assert.equal(r.json.result, 'superseded')
+  assert.ok(Number.isInteger(r.json.seq))
+  await n.close()
+})
+
+test('a retry sent while the first attempt is in flight hears the same ack', async () => {
+  seedItem()
+  let release
+  const gate = new Promise((r) => { release = r })
+  const acks = []
+  const n = await fakeNode({ nodeId: 'retry-1', answer: () => null })
+  // Answer by hand, once, after both attempts are waiting.
+  n.ws.on('message', async (buf) => {
+    const [tag, body] = wire.tagOf(wire.decode(buf))
+    if (tag !== 'Cue') return
+    acks.push(body)
+    if (acks.length === 2) release()
+    await gate
+    if (acks[0] === body) {
+      n.ws.send(wire.encode({ CueAck: { seq: body.seq, cue_id: body.cue_id, result: 'Applied',
+        reason: null, fired_at_frame: 7, at_utc: Date.now() } }))
+    }
+  })
+  const cue = { cue_id: 'retry-c', node: 'retry-1', output: 'out-0', layer: 'Lower Third', op: 'take', item: 'item-1', deadline_ms: 400 }
+  const [a, b] = await Promise.all([post('/api/cue', cue), post('/api/cue', cue)])
+  // Keyed by id with one waiter, the retry replaced the original, which then
+  // timed out as "did not confirm" while the graphic was on air.
+  assert.equal(a.status, 200)
+  assert.equal(b.status, 200)
+  await n.close()
+})
+
+/** A browser's cue socket: hello, then cues, acks collected by cue_id. */
+async function cueSocketClient(hello = {}) {
+  const ws = new WebSocket(`ws://127.0.0.1:${port}${cueSocket.PATH}`)
+  await new Promise((r, j) => { ws.once('open', r); ws.once('error', j) })
+  const acks = new Map()
+  const waiters = new Map()
+  ws.on('message', (raw) => {
+    const m = JSON.parse(String(raw))
+    if (m.type !== 'ack') return
+    acks.set(m.cue_id, m)
+    waiters.get(m.cue_id)?.(m)
+  })
+  ws.send(JSON.stringify({ type: 'hello', ...hello }))
+  return {
+    ws,
+    send: (cue) => ws.send(JSON.stringify({ type: 'cue', ...cue })),
+    ack: (id) => acks.has(id) ? Promise.resolve(acks.get(id)) : new Promise((r) => waiters.set(id, r)),
+    close: () => new Promise((r) => { ws.once('close', r); ws.close() }),
+  }
+}
+
+test('the cue socket carries many cues in flight, and the node sees them in order', async () => {
+  seedItem()
+  const order = []
+  // Hold every ack until all eight have arrived: over HTTP/1.1 the browser
+  // could not even have sent the seventh.
+  let release
+  const gate = new Promise((r) => { release = r })
+  const n = await fakeNode({ nodeId: 'sock-1', answer: () => null })
+  n.ws.on('message', async (buf) => {
+    const [tag, body] = wire.tagOf(wire.decode(buf))
+    if (tag !== 'Cue') return
+    order.push([body.cue_id, body.seq])
+    if (order.length === 8) release()
+    await gate
+    const last = body.cue_id === 'k-7'
+    n.ws.send(wire.encode({ CueAck: { seq: body.seq, cue_id: body.cue_id,
+      result: last ? 'Applied' : 'Superseded', reason: null, fired_at_frame: last ? 99 : null, at_utc: Date.now() } }))
+  })
+
+  const c = await cueSocketClient()
+  for (let i = 0; i < 8; i++) {
+    c.send({ cue_id: `k-${i}`, node: 'sock-1', output: 'out-0', layer: 'Lower Third', op: 'take', item: 'item-1', deadline_ms: 2000 })
+  }
+  const acks = await Promise.all([...Array(8).keys()].map((i) => c.ack(`k-${i}`)))
+
+  assert.deepEqual(order.map(([id]) => id), [...Array(8).keys()].map((i) => `k-${i}`))
+  const seqs = order.map(([, seq]) => seq)
+  assert.deepEqual(seqs, seqs.toSorted((x, y) => x - y))
+  // Seven superseded, one on air — and every one of them a success.
+  assert.deepEqual(acks.map((a) => a.http), Array(8).fill(200))
+  assert.equal(acks.filter((a) => a.result === 'superseded').length, 7)
+  assert.equal(acks[7].result, 'applied')
+  assert.equal(acks[7].fired_at_frame, 99)
+  // The log can say "eight requests, seven superseded, one on air".
+  const logged = cueLog.since('default', 0).entries.filter((e) => e.cue_id.startsWith('k-'))
+  assert.equal(logged.length, 8)
+  assert.ok(logged.every((e) => e.surface === 'show_view'))
+  await c.close()
+  await n.close()
+})
+
+test('the cue socket answers exactly what POST /api/cue would', async () => {
+  seedItem()
+  const c = await cueSocketClient()
+  c.send({ cue_id: 'nobody-1', node: 'never-there', output: 'out-0', layer: 'L', op: 'take', item: 'item-1' })
+  const viaSocket = await c.ack('nobody-1')
+  const viaHttp = await post('/api/cue', { cue_id: 'nobody-2', node: 'never-there', output: 'out-0', layer: 'L', op: 'take', item: 'item-1' })
+  assert.equal(viaSocket.http, viaHttp.status)
+  assert.equal(viaSocket.error, viaHttp.json.error)
+  assert.equal(viaSocket.label, viaHttp.json.label)
+
+  c.send({ node: 'never-there', op: 'take', item: 'item-1' })
+  const noId = await c.ack(null)
+  assert.equal(noId.http, 422)
+  await c.close()
+})
+
+test('an unknown upgrade path is refused rather than hijacking a socket', async () => {
+  const ws = new WebSocket(`ws://127.0.0.1:${port}/nowhere`)
+  const err = await new Promise((r) => { ws.once('error', r); ws.once('unexpected-response', (_q, res) => r(res)) })
+  assert.ok(err)
 })

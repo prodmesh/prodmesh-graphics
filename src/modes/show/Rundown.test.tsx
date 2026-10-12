@@ -14,6 +14,7 @@ import { act, render, screen, waitFor, within } from '@testing-library/react'
 import { Show } from './Show'
 import { _reset as resetQuery } from '../../lib/useQuery'
 import { _reset as resetStream } from '../../lib/stream'
+import { _reset as resetApi } from '../../lib/api'
 
 const NODE = {
   node_id: 'booth-1',
@@ -245,6 +246,107 @@ describe('playout mode — ADR 0017', () => {
     })
     expect(calls.some((c) => c.url.includes('/api/cue'))).toBe(false)
     expect(calls.some((c) => c.url.includes('/cursor'))).toBe(false)
+  })
+})
+
+describe('follow mode over the cue socket — ADR 0017', () => {
+  /** A cue socket the test opens, acks and drops by hand. */
+  class FakeCueSocket {
+    static readonly CONNECTING = 0
+    static readonly OPEN = 1
+    static all: FakeCueSocket[] = []
+    readyState = 0
+    sent: Record<string, unknown>[] = []
+    onopen: (() => void) | null = null
+    onmessage: ((e: { data: string }) => void) | null = null
+    onclose: (() => void) | null = null
+    onerror: (() => void) | null = null
+    constructor(readonly url: string) { FakeCueSocket.all.push(this) }
+    send(raw: string) { this.sent.push(JSON.parse(raw)) }
+    close() {}
+    open() { this.readyState = 1; this.onopen?.() }
+    ack(m: Record<string, unknown>) { this.onmessage?.({ data: JSON.stringify({ type: 'ack', ...m }) }) }
+    drop() { this.readyState = 3; this.onclose?.() }
+    cues() { return this.sent.filter((m) => m.type === 'cue') }
+  }
+
+  beforeEach(() => {
+    resetApi()
+    FakeCueSocket.all = []
+    vi.stubGlobal('WebSocket', FakeCueSocket)
+    // Every keypress mints its own id; the file-wide fixed id would make two
+    // keypresses one cue.
+    let n = 0
+    vi.stubGlobal('crypto', { ...globalThis.crypto, randomUUID: () => `cue-${++n}` })
+  })
+
+  const press = async (key: string) => {
+    const panel = screen.getByRole('region', { name: 'Rundown' })
+    await act(async () => {
+      panel.dispatchEvent(new KeyboardEvent('keydown', { key, bubbles: true }))
+      await Promise.resolve()
+    })
+  }
+
+  test('a burst of keypresses rides one socket, and a superseded take stays silent', async () => {
+    setMode('follow')
+    const calls = serve()
+    await paint()
+
+    await press('ArrowUp')
+    await press('ArrowUp')
+    await press('ArrowUp')
+    expect(FakeCueSocket.all).toHaveLength(1)
+    const sock = FakeCueSocket.all[0]!
+    expect(sock.url).toMatch(/\/api\/cue\/socket$/)
+    // Sent the moment it opens, all three, without waiting on any ack — and
+    // the browser said who it is first, because a socket carries no headers.
+    await act(async () => { sock.open() })
+    expect(sock.sent[0]?.type).toBe('hello')
+    const cues = sock.cues()
+    expect(cues.map((c) => c.cue_id)).toEqual(['cue-1', 'cue-2', 'cue-3'])
+    expect(cues.every((c) => c.op === 'take' && c.item === 'i1')).toBe(true)
+    expect(calls.some((c) => c.url === '/api/cue')).toBe(false)
+
+    await act(async () => {
+      sock.ack({ cue_id: 'cue-1', http: 200, result: 'superseded', seq: 1 })
+      sock.ack({ cue_id: 'cue-2', http: 200, result: 'superseded', seq: 2 })
+      sock.ack({ cue_id: 'cue-3', http: 200, result: 'applied', fired_at_frame: 9, seq: 3 })
+    })
+    // Two slides passed through on the way are the mechanism working. A
+    // message per skipped slide is noise an operator learns to ignore.
+    expect(screen.queryByRole('alert')).toBeNull()
+  })
+
+  test('a refusal on the socket reads as the same sentence as over HTTP', async () => {
+    setMode('follow')
+    serve()
+    await paint()
+    await press('ArrowUp')
+    const sock = FakeCueSocket.all[0]!
+    await act(async () => { sock.open() })
+    await act(async () => {
+      sock.ack({ cue_id: 'cue-1', http: 503, error: 'node_offline',
+        label: 'booth-1 is offline. Anything already on air is still on air.' })
+    })
+    expect(await screen.findByText(/booth-1 is offline/)).toBeDefined()
+  })
+
+  test('a socket that drops mid-cue hands its cues to HTTP with the SAME ids', async () => {
+    setMode('follow')
+    const calls = serve()
+    await paint()
+    await press('ArrowUp')
+    await press('ArrowUp')
+    const sock = FakeCueSocket.all[0]!
+    await act(async () => { sock.open() })
+    await act(async () => { sock.drop() })
+
+    // Unknown whether they fired. The same cue_id makes asking again safe:
+    // the node answers `deduped` for one that did, and fires one that did not.
+    await waitFor(() => expect(calls.filter((c) => c.url === '/api/cue')).toHaveLength(2))
+    const ids = calls.filter((c) => c.url === '/api/cue').map((c) => (c.body as { cue_id: string }).cue_id)
+    expect(ids).toEqual(['cue-1', 'cue-2'])
   })
 })
 

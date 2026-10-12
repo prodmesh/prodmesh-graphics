@@ -10,6 +10,8 @@ export default defineConfig({
   server: {
     port: 5173,
     proxy: {
+      // Before /api, which would otherwise claim it without `ws`.
+      '/api/cue/socket': { target: 'ws://localhost:8519', ws: true },
       '/api': { target: 'http://localhost:8519', changeOrigin: true },
       '/cas': { target: 'http://localhost:8519', changeOrigin: true },
       '/link': { target: 'ws://localhost:8519', ws: true },

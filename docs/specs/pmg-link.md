@@ -150,7 +150,7 @@ Cue {
 // → ack
 CueAck {
   seq: 8813, cue_id: "01JA…",
-  result: "applied" | "deduped" | "rejected",
+  result: "applied" | "deduped" | "superseded" | "rejected",
   reason: null | "deadline_passed" | "not_ready" | "no_such_layer"
         | "unreadable_template" | "no_such_item",
   fired_at_frame: 1841944,

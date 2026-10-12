@@ -22,6 +22,7 @@
  */
 
 import { WebSocketServer } from 'ws'
+import * as upgrade from './upgrade.js'
 import { randomUUID } from 'node:crypto'
 import { publish, registerTopic } from './streamHub.js'
 import * as wire from './wire.js'
@@ -62,7 +63,7 @@ function session(nodeId) {
       // Cue sequencing, per epoch.
       seq: 0,
       ring: [],
-      pending: new Map(), // cue_id -> {resolve, timer}
+      pending: new Map(), // cue_id -> pendingCue()
       // Adopted verbatim from the node. Never written from our side.
       state: null,
       ready: null,
@@ -536,7 +537,8 @@ function onFrame(ws, buf, bound) {
 // ---------------------------------------------------------------------------
 
 export function attach(server) {
-  wss = new WebSocketServer({ server, path: '/link' })
+  wss = new WebSocketServer({ noServer: true })
+  upgrade.route(server, '/link', wss)
   wss.on('connection', (ws) => {
     let bound = null
     ws.on('message', (buf) => {
@@ -608,16 +610,6 @@ export function offerAssignment(nodeId, assignment) {
 }
 
 /**
- * Send a cue and **wait for the node to confirm it**.
- *
- * This is the synchronous edge, and it is the reason `POST /api/cue` blocks.
- * A fire-and-forget button on a broadcast system is worse than no button,
- * because it teaches an operator to trust something untrue.
- *
- * Resolves `{ result, reason, fired_at_frame, at_utc }`, where result is
- * `applied` | `deduped` | `superseded` | `rejected` | `not_acked` | `offline`.
- */
-/**
  * Ask a node to reconfigure its outputs (ADR 0024).
  *
  * The node persists before it acks and answers with what it ACTUALLY applied,
@@ -643,6 +635,22 @@ export function outputsAck(nodeId) {
   return find(nodeId)?.outputsAck ?? null
 }
 
+/** Everyone waiting on one cue_id, settled together by its ack. */
+function pendingCue() {
+  const waiters = new Set()
+  return { waiters, settle: (v) => { for (const w of waiters) w(v) } }
+}
+
+/**
+ * Send a cue and **wait for the node to confirm it**.
+ *
+ * This is the synchronous edge, and it is the reason `POST /api/cue` blocks.
+ * A fire-and-forget button on a broadcast system is worse than no button,
+ * because it teaches an operator to trust something untrue.
+ *
+ * Resolves `{ result, reason, fired_at_frame, at_utc }`, where result is
+ * `applied` | `deduped` | `superseded` | `rejected` | `not_acked` | `offline`.
+ */
 export function cue(nodeId, { cue_id, op, deadline_ms, at = null }) {
   const s = find(nodeId)
   if (!s) {
@@ -682,7 +690,8 @@ export function cue(nodeId, { cue_id, op, deadline_ms, at = null }) {
       if (done) return
       done = true
       clearTimeout(timer)
-      s.pending.delete(cue_id)
+      waiting.waiters.delete(settle)
+      if (!waiting.waiters.size && s.pending.get(cue_id) === waiting) s.pending.delete(cue_id)
       resolve(v)
     }
     // We stop waiting a little after the node's own deadline. The node is the
@@ -695,7 +704,13 @@ export function cue(nodeId, { cue_id, op, deadline_ms, at = null }) {
       (deadline ?? wire.DEFAULT_TAKE_DEADLINE_MS) + 250,
     )
     timer.unref?.()
-    s.pending.set(cue_id, { settle })
+    // Several callers may wait on one cue_id — a retry sent while the first
+    // attempt is still in flight is the mechanism working, not a mistake. Each
+    // gets the one ack. Keying a single waiter by id let the retry overwrite
+    // the original, which then heard nothing until its own timer ran out.
+    const waiting = s.pending.get(cue_id) ?? pendingCue()
+    waiting.waiters.add(settle)
+    s.pending.set(cue_id, waiting)
     send(s, { Cue: frame })
   })
 }

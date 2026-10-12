@@ -27,10 +27,10 @@ import { handle } from '../db.js'
 import * as screens from '../screens.js'
 import * as link from '../nodeLink.js'
 import { append } from '../cueLog.js'
-import { requirePermission } from '../auth.js'
+import { identify, requirePermission } from '../auth.js'
 
 /** A trusted station's scope is checked against the output and layer it names. */
-const cueScope = (req) => ({ output: req.body?.output, layer: req.body?.layer })
+export const cueScope = (body) => ({ output: body?.output, layer: body?.layer })
 
 export const router = express.Router()
 
@@ -126,15 +126,7 @@ function whyNot(a) {
   switch (a.result) {
     case 'offline':      return 'it is offline'
     case 'unknown_node': return 'there is no node by that name'
-    // Not an error and not a success: a newer take for the same layer replaced
-    // this one before it fired (ADR 0017). 200, because the system did exactly
-    // what it should have — the operator's intent is their latest position, not
-    // every slide they passed through on the way. The distinction from a
-    // rejected-as-late cue has to survive to here, because one is the system
-    // working and the other is the system refusing.
-    case 'superseded':
-      return { http: 200, payload: { result: 'superseded', seq: entry.seq,
-        label: 'Replaced by a newer take before it fired.' } }
+    case 'superseded':   return 'a newer take replaced it before it fired'
     case 'not_adopted':  return 'it has not been adopted yet'
     case 'not_acked':    return 'it did not confirm in time'
     // rejectLabel() would be tempting here and is wrong: it names the node
@@ -251,7 +243,7 @@ function toWireData(data) {
 
 const OPS_NEEDING_ITEM = new Set(['take_also', 'take', 'arm', 'preload'])
 
-async function dispatch(body, ctx) {
+export async function dispatch(body, ctx) {
   const db = handle()
 
   if (!body?.cue_id) {
@@ -327,7 +319,11 @@ async function dispatch(body, ctx) {
   // existing test still sees exactly what it saw.
   const ack = acks[0]
   const fired = acks.filter((a) => a.result === 'applied' || a.result === 'deduped')
-  const partial = acks.length > 1 && fired.length > 0 && fired.length < acks.length
+  // Superseded is the system working, not failing (ADR 0017): a node that
+  // replaced this take with a newer one did what the operator meant. It is not
+  // "fired", and it must not turn a fan-out into a partial delivery either.
+  const settled = acks.filter((a) => fired.includes(a) || a.result === 'superseded')
+  const partial = acks.length > 1 && fired.length > 0 && settled.length < acks.length
 
   // The log records what happened AND which surface did it — without that the
   // log is confusing the first time someone uses a GPI (ADR 0014).
@@ -389,6 +385,17 @@ async function dispatch(body, ctx) {
             : {}),
         },
       }
+    // Not an error and not a success: a newer take for the same layer replaced
+    // this one before it fired (ADR 0017). 200, because the system did exactly
+    // what it should have — the operator's intent is their latest position, not
+    // every slide they passed through on the way. The distinction from a
+    // rejected-as-late cue has to survive to here, because one is the system
+    // working and the other is the system refusing. It used to fall through to
+    // the default below, so every superseded Follow keypress read as "the node
+    // refused that cue".
+    case 'superseded':
+      return { http: 200, payload: { result: 'superseded', seq: entry.seq,
+        label: 'Replaced by a newer take before it fired.' } }
     case 'not_adopted':
       return { http: 409, payload: { error: 'not_adopted',
         label: `${body.node} hasn’t been adopted yet. Adopt it in Configure before taking to it.` } }
@@ -422,13 +429,19 @@ function rejectLabel(reason, body) {
   }
 }
 
-const context = (req) => ({
-  user: req.get('x-prodmesh-user') ?? null,
-  station: req.get('x-prodmesh-station') ?? null,
+/**
+ * Who to record in the log: the identity the server VERIFIED, never a header
+ * the caller wrote. This used to log `x-prodmesh-user` — which anyone can set —
+ * as the user, and the raw station TOKEN as the station, so the log was both
+ * forgeable and holding a credential.
+ */
+export const context = (who) => ({
+  user: who?.user?.username ?? null,
+  station: who?.station?.name ?? null,
 })
 
-router.post('/api/cue', requirePermission('graphics.operate', cueScope), async (req, res) => {
-  const { http, payload } = await dispatch(req.body ?? {}, context(req))
+router.post('/api/cue', requirePermission('graphics.operate', (req) => cueScope(req.body)), async (req, res) => {
+  const { http, payload } = await dispatch(req.body ?? {}, context(req.who ?? identify(req)))
   res.status(http).json(payload)
 })
 
@@ -443,7 +456,7 @@ router.post('/api/cue/batch', requirePermission('graphics.operate'), async (req,
   if (!cues.length) {
     return fail(res, 422, 'validation_failed', 'A batch needs at least one cue.')
   }
-  const ctx = context(req)
+  const ctx = context(req.who ?? identify(req))
   const results = []
   for (const c of cues) {
     const r = await dispatch({ ...c, show: req.body.show }, ctx)

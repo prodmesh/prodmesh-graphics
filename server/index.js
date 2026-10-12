@@ -39,6 +39,7 @@ import { attach as attachIdentity, requirePermission } from './auth.js'
 import * as authStore from './authStore.js'
 import * as rundown from './rundown.js'
 import * as nodeLink from './nodeLink.js'
+import * as cueSocket from './cueSocket.js'
 import { build as buildAssignment } from './assignment.js'
 import * as discovery from './discovery.js'
 import * as ingest from './ingest.js'
@@ -435,6 +436,9 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
   // it needs the server object rather than the app. Assets and preview stay
   // elsewhere on purpose (pmg-link.md §0).
   nodeLink.attach(server)
+  // Follow mode's cues, on the same listener (ADR 0017). Cue-only: snapshots
+  // stay on SSE (ADR 0008).
+  cueSocket.attach(server)
 
   // Advertised so a node with no stored pairing can find us. Manual entry
   // always works and is the path that must never depend on this.

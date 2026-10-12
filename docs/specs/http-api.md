@@ -47,6 +47,7 @@ POST /api/cue
 |---|---|
 | `200 { result: "applied", fired_at_frame, at_utc, seq }` | On air |
 | `200 { result: "deduped", … }` | Same `cue_id` already applied |
+| `200 { result: "superseded", seq, label }` | A newer take to the same layers replaced it before it fired (ADR 0017). The system working, not refusing — distinct from a late rejection |
 | `409 { result: "rejected", reason }` | `not_ready`, `no_such_layer`, `unreadable_template` |
 | **`503 { error: "cue_not_acked" }`** | **The node did not confirm within the deadline** |
 
@@ -65,6 +66,35 @@ the mechanism.
 
 `POST /api/cue/batch` takes an array and applies them in order, atomically per
 node. Used for multi-layer looks.
+
+### 2.2 The cue socket — `GET /api/cue/socket` (WebSocket)
+
+Follow mode's path (ADR 0017). It takes on every keypress, and an un-acked POST
+holds one of the six HTTP/1.1 connections a browser allows per origin — so a
+burst queued behind its own first keypress. The socket carries any number of
+cues in flight. **It carries cues and their acks and nothing else**; snapshots
+stay on SSE (ADR 0008).
+
+JSON text frames:
+
+```
+→ { "type": "hello", "station": "<station token>", "bearer": "<session token>" }
+→ { "type": "cue", …the POST /api/cue body… }          any number, unawaited
+← { "type": "ack", "cue_id": "01JA…", "http": 200, …the POST /api/cue body… }
+```
+
+- `hello` carries what headers would, because a browser socket cannot send
+  them. It may be repeated when identity changes; each cue is checked against
+  the latest one, **per cue** — signing out stops the next keypress, not the
+  next reconnect.
+- Every cue goes through the same dispatch and the same permission check as
+  `POST /api/cue`, and its ack carries the status and body that endpoint would
+  have returned. `surface` defaults to `show_view`.
+- Cues reach the node in the order they arrived on the socket. Acks return in
+  the order nodes answer, matched by `cue_id`.
+- The socket is an optimisation, never a dependency. A client re-sends anything
+  the socket could not deliver by `POST /api/cue` **with the same `cue_id`** —
+  safe because the node dedupes on it (§2.1).
 
 ## 3. Resources
 
